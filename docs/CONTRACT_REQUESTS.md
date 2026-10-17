@@ -86,3 +86,37 @@ The pattern `models/` matches every directory named `models`, so `valence/models
 committed: on a fresh checkout `tests/test_runtime.py`, `tests/test_api.py` and `valence/api/app.py` fail with
 `ModuleNotFoundError: valence.models`. Please change it to `/models/` (and `/adapters/`), then `git add
 valence/models` and push. (Same fix applied to the Mac's local exclude.)
+
+## Round 3 (edge -> core): real-capture measurements for the simulator — negative control fails
+
+`python -m valence.eval.negative_control data/real/capture_typing.jsonl` (served m2_lgbm@f69de179):
+**Frustrated_Masked 49%, Exhausted 35%, Collaborative 16%, Focused 0%** -> gate fails (stress 0.49 > 0.20).
+The detectors are *not* the cause: during 3 min of quiet typing there were 0 fist onsets, 0% slump, 0% head-in-hands.
+The cause is sim-vs-real **scale**. Top supporting drivers over the replay (count of ticks):
+`motion_mean_1m` (29 Frustrated + 23 Exhausted), `face_now` / `face_mean_5m` (25 + 20), `tod_*`, `lux_slope_1m`,
+`db_slope_*`. A mid-replay tick: "nearly still (motion 0.04)" -> Exhausted with SHAP **+1.67** (largest by far).
+
+Measured on the demo Mac (one person at a desk, `data/real/capture_*.jsonl`, `docs/BENCHMARKS.md`):
+
+| quantity | typing | fists (cued) | baseline (still, upright) | sim params today |
+|---|---|---|---|---|
+| motion sw/s p10 / p50 / p90 | 0.014 / **0.027** / 0.048 | 0.014 / 0.031 / 0.091 | 0.011 / 0.014 / 0.031 | Focused 0.08, Exhausted 0.04, Frustrated 0.20, Happy 0.18 |
+| face_valence p10 / p50 / p90 | 0.001 / **0.005** / 0.021 | -0.012 / 0.003 / 0.856 | -0.005 / 0.001 / 0.004 | Focused face_mu -0.15, Exhausted -0.10 |
+| lux (uncalibrated) p50, quality | 316, 0.12 | 268, 0.20 | 233, 0.15 | lux_range 120-600 |
+| dB SPL (offset +94, uncalibrated) p50 | 52 | 47 | 52 | Focused db_target 48 |
+| fist onsets / min | **0.0** | 15/15 cued, 0 false | 0 | — |
+| slump duty | **0%** | 0% | 0% | — |
+
+Asks:
+1. **Motion scale**: real motion is ~3x below the sim's per-state means. Either scale the sim (Focused ~0.03,
+   Exhausted ~0.01-0.02, agitated states ~0.08-0.15; keyboard gaze measured 0.07, deliberate slumping 0.08-0.4)
+   or drive the model from the per-session-relative feature (`motion_rel_sess`) rather than absolute motion.
+2. **Face valence is baseline-relative** (contract item 4): a neutral person reads ~0.00, not -0.15. Center the sim's
+   Focused/Exhausted face_mu near 0 (Focused "resting focus face" was measured at +0.005) and keep the forced-smile
+   +0.45 relative to neutral.
+3. **Lux/dB are uncalibrated until Step 7** (the user needs a phone lux/SPL app): lux noise from webcam auto-exposure
+   and the person moving makes `lux_slope_1m` swing 2-80 lux/min with no real change; dB offset is the +94 default.
+   Consider down-weighting `*_slope_1m`/`lux_std_1m` (or widening their "elevated" bands) and treating `lux_quality`
+   < 0.3 as low-confidence light.
+4. Re-run `make negative` after the retrain; the keyboard-gaze, slump and audio captures will follow (being re-recorded
+   with the fixed slump rule and the Vosk fix).
