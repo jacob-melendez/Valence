@@ -601,57 +601,57 @@
     ]
   },
   "temperatures": {
-    "m0": 0.9161710086046255,
-    "m0t": 0.9718613036111703,
-    "m1": 1.0026576809926582,
-    "m2_noface": 0.99411830053429,
-    "m2_noabsdb": 0.9739264462870529,
-    "m2_notime": 0.9874501348811895,
-    "m2": 0.9754781348957905
+    "m0": 0.8712909369150258,
+    "m0t": 1.031679130079168,
+    "m1": 1.0263303121733385,
+    "m2_noface": 0.9949268235966232,
+    "m2_noabsdb": 1.0229540798436578,
+    "m2_notime": 1.017420792967274,
+    "m2": 1.0120653791283152
   },
   "summary": {
     "m0": {
-      "test_macro_f1": 0.3707,
-      "rounds": 90,
+      "test_macro_f1": 0.3671,
+      "rounds": 96,
       "features": 2,
-      "temperature": 0.916
+      "temperature": 0.871
     },
     "m0t": {
-      "test_macro_f1": 0.4614,
-      "rounds": 111,
+      "test_macro_f1": 0.4457,
+      "rounds": 120,
       "features": 7,
-      "temperature": 0.972
+      "temperature": 1.032
     },
     "m1": {
-      "test_macro_f1": 0.5893,
-      "rounds": 120,
+      "test_macro_f1": 0.5807,
+      "rounds": 133,
       "features": 13,
-      "temperature": 1.003
+      "temperature": 1.026
     },
     "m2_noface": {
-      "test_macro_f1": 0.7772,
-      "rounds": 336,
+      "test_macro_f1": 0.7674,
+      "rounds": 365,
       "features": 107,
-      "temperature": 0.994
+      "temperature": 0.995
     },
     "m2_noabsdb": {
-      "test_macro_f1": 0.8173,
-      "rounds": 298,
+      "test_macro_f1": 0.8162,
+      "rounds": 477,
       "features": 105,
-      "temperature": 0.974
+      "temperature": 1.023
     },
     "m2_notime": {
-      "test_macro_f1": 0.8056,
-      "rounds": 381,
+      "test_macro_f1": 0.8029,
+      "rounds": 400,
       "features": 111,
-      "temperature": 0.987
+      "temperature": 1.017
     },
     "m2": {
-      "test_macro_f1": 0.8161,
-      "rounds": 320,
+      "test_macro_f1": 0.8163,
+      "rounds": 407,
       "features": 114,
-      "temperature": 0.975
+      "temperature": 1.012
     }
   },
-  "trained_at": "2026-10-17 22:51:51"
+  "trained_at": "2026-10-17 23:26:53"
 }

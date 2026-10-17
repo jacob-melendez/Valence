@@ -186,7 +186,7 @@ def main() -> None:
         headline = {
             "frustrated_masked_recall": {n: metrics["models"][n]["recall"].get("Frustrated_Masked") for n in ("m0", "m2")},
             "focused_misread_as_negative": {n: metrics["models"][n].get("focused_misread_as_negative") for n in ("m0", "m2")},
-            "macro_f1": {n: metrics["models"][n]["macro_f1"] for n in metrics["models"]},
+            "macro_f1": {n: e["macro_f1"] for n, e in metrics["models"].items() if "macro_f1" in e},
         }
         metrics["headline"] = headline
 
