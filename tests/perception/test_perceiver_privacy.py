@@ -106,3 +106,45 @@ def test_audio_purges_block_and_reports_scalars():
     assert obs.db_spl == pytest.approx(10 * math.log10(0.005) + 94.0, abs=1.0)
     assert obs.compliment_hits == 0 and obs.laughter_onsets == 0
     assert 0.0 <= obs.speech_prob <= 1.0
+
+
+@needs_audio
+def test_vosk_reads_the_real_block_before_it_is_purged():
+    """Regression: purging a view of the block (YAMNet's 0.975 s tail) zeroed the whole block
+    before Vosk read it, so live compliments were always 0."""
+    from valence.perception.audio import AudioPerceiver
+
+    seen: list[bool] = []
+
+    class FakeRecognizer:
+        def AcceptWaveform(self, view) -> bool:
+            from vosk import _ffi
+
+            seen.append(bool(np.frombuffer(_ffi.buffer(view), dtype=np.int16).any()))
+            return False
+
+    ap = AudioPerceiver(spl_offset_db=94.0)
+    ap.recognizer = FakeRecognizer()
+    try:
+        sr = 16000
+        block = (0.1 * np.sin(2 * np.pi * 440 * np.arange(sr) / sr)).astype(np.float32)
+        ap.process(block, 1.0, 0.0, 0)
+    finally:
+        ap.close()
+    assert seen == [True]
+    assert not block.any()  # and it is purged afterwards
+
+
+@needs_audio
+def test_db_spl_is_the_blocks_leq():
+    from valence.perception.audio import AudioPerceiver
+
+    ap = AudioPerceiver(spl_offset_db=94.0, compliments=False)
+    try:
+        loud = (0.1 * np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)).astype(np.float32)
+        ap.process(loud, 1.0, 0.0, 0)
+        quiet = np.full(16000, 1e-3, dtype=np.float32)
+        obs = ap.process(quiet, 2.0, 0.0, 1)
+    finally:
+        ap.close()
+    assert obs.db_spl == pytest.approx(10 * math.log10(1e-6) + 94.0, abs=0.1)  # no carry-over from the loud block

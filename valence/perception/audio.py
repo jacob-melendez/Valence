@@ -1,6 +1,7 @@
 """Audio perception: one ~1 s mono 16 kHz float32 block in, one ``AudioObs`` out.
 
-Loudness is smoothed in the power domain and converted to dB SPL with the calibrated offset.
+Loudness is the block's Leq: mean power -> dB SPL with the calibrated offset (the aggregator
+averages ``rms_power`` in the power domain; dB values are never averaged).
 YAMNet (AUDIO_CLIPS, allowlisted classes) runs synchronously on the block's last 0.975 s, so its
 laughter/speech scores belong to exactly this block; laughter onsets are debounced. Compliments come from Vosk with a restricted grammar (the phrases + "[unk]"), so
 no free transcript ever exists; recognized words never leave ``count_compliments``. Every
@@ -18,7 +19,7 @@ from mediapipe.tasks.python.components.containers.audio_data import AudioData
 from valence.contracts import AudioObs
 from valence.perception import calibration
 from valence.perception.audio_features import (
-    YAMNET_ALLOWLIST, LaughterTracker, PowerSmoother, count_compliments, mean_power, vosk_grammar)
+    YAMNET_ALLOWLIST, LaughterTracker, count_compliments, mean_power, power_to_db, vosk_grammar)
 from valence.perception.gate import note_transcript_purged, purge_derived
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,7 +32,6 @@ class AudioPerceiver:
     def __init__(self, models_dir: Path = MODELS, *, spl_offset_db: float | None = None,
                  compliments: bool = True) -> None:
         self.offset = calibration.spl_offset_db() if spl_offset_db is None else spl_offset_db
-        self.smoother = PowerSmoother()
         self.laughter = LaughterTracker()
         self.classifier = mp_audio.AudioClassifier.create_from_options(mp_audio.AudioClassifierOptions(
             base_options=BaseOptions(model_asset_path=str(models_dir / "yamnet.tflite")),
@@ -51,12 +51,10 @@ class AudioPerceiver:
 
     def process(self, block: np.ndarray, t: float, wall: float, seq: int) -> AudioObs:
         power = mean_power(block)
-        self.smoother.update(power)
 
-        clip = np.ascontiguousarray(block[-YAMNET_WINDOW:]) if len(block) >= YAMNET_WINDOW else block.copy()
-        results = self.classifier.classify(AudioData.create_from_array(clip, SR))
-        purge_derived(clip, "audio")
-        del clip
+        # A tail slice is a view: AudioData copies it, and purging the view would zero the whole block
+        # before Vosk reads it, so the block itself is purged once, at the end.
+        results = self.classifier.classify(AudioData.create_from_array(block[-YAMNET_WINDOW:], SR))
         scores: dict[str, float] = {}
         for res in results:
             for cl in res.classifications:
@@ -80,5 +78,5 @@ class AudioPerceiver:
         purge_derived(block, "audio")
         del block
 
-        return AudioObs(t=t, wall=wall, block_seq=seq, db_spl=self.smoother.db(self.offset), rms_power=power,
+        return AudioObs(t=t, wall=wall, block_seq=seq, db_spl=power_to_db(power, self.offset), rms_power=power,
                         speech_prob=speech, laughter_onsets=self.laughter.take_onsets(), compliment_hits=hits)
