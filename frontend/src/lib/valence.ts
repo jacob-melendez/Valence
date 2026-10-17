@@ -1,0 +1,433 @@
+/**
+ * Valence Console data layer: message types, store, mock engine, live transport, commands.
+ * Every component reads through useValence() and writes through sendCommand(); switching
+ * mock <-> live changes nothing outside this module.
+ * Camera frames never pass through here: the webcam is preview-only in the UI.
+ */
+import { useSyncExternalStore } from "react";
+
+// ---------- Types ----------
+export type StateKey = "Focused" | "Frustrated_Masked" | "Exhausted" | "Collaborative_Happy";
+export const STATES: StateKey[] = ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"];
+export const STATE_DISPLAY: Record<StateKey, string> = {
+  Focused: "Focused",
+  Frustrated_Masked: "Frustrated / Masked Stress",
+  Exhausted: "Exhausted",
+  Collaborative_Happy: "Collaborative / Happy",
+};
+export const LAYERS = ["Ambient Physics", "Time Dynamics", "Somatic & Social", "Facial Surface"] as const;
+
+export interface TrackPerson { id: number; label: string; bbox: [number, number, number, number] }
+export interface TracksMsg { type: "tracks"; t: number; persons: TrackPerson[] }
+export interface GovernanceMsg {
+  type: "governance"; t: number; tick: number; message: string;
+  frames_purged: number; audio_blocks_purged: number; transcripts_purged: number;
+  violations: number; live_raw_buffers: number;
+}
+export interface StateVectorMsg {
+  type: "state_vector"; t: number; person_id: number; ambient_db: number; light_lux: number;
+  hours_since_break: number; time_of_day: string; clenched_fists_5m: number; compliments_15m: number;
+  laughter_15m: number; posture_slump: number; social_withdrawal: number; face_visible: boolean;
+  facial_valence: number; window_fill_min: number;
+}
+export interface Driver { feature: string; display: string; value: number; unit: string; shap: number }
+export interface Layer { name: string; contribution: number; drivers: Driver[] }
+export type ExplanationSource = "llm" | "llm_retry" | "template";
+export interface PredictionMsg {
+  type: "prediction"; event_id: string; t: number; person_id: number; label: StateKey;
+  label_display: string; confidence: number; probabilities: Record<StateKey, number>;
+  face_only: { label: StateKey; confidence: number }; mask_override: boolean; warming_up: boolean;
+  layers: Layer[]; explanation: { text: string; source: ExplanationSource; latency_ms?: number };
+}
+export interface ExplanationMsg {
+  type: "explanation"; event_id: string; person_id: number; text: string;
+  source: ExplanationSource; latency_ms: number;
+}
+export interface StatusMsg {
+  type: "status"; mode: "live" | "replay"; camera: boolean; mic: boolean; fps: number;
+  loop_latency_ms: number; narrator: string; offline: boolean; uptime_s: number;
+}
+export type ServerMessage = TracksMsg | GovernanceMsg | StateVectorMsg | PredictionMsg | ExplanationMsg | StatusMsg;
+
+export interface HistoryPoint {
+  t: number; person_id: number; label?: StateKey; confidence?: number;
+  ambient_db?: number; light_lux?: number; hours_since_break?: number;
+  posture_slump?: number; facial_valence?: number; window_fill_min?: number;
+}
+export interface EvalSummary {
+  accuracy_vs_history?: { minutes: number; context: number; face_only: number }[];
+  robustness?: { condition: string; context: number; face_only: number }[];
+  confusion?: { name: string; labels: StateKey[]; matrix: number[][] }[];
+  calibration?: { predicted: number; observed: number }[];
+  metrics?: { model: string; accuracy: number; macro_f1: number; ece: number }[];
+  figures?: string[];
+  [k: string]: unknown;
+}
+export type Scenario = "focused" | "frustrated_masked" | "exhausted" | "collaborative_happy" | "full_demo";
+export type Command =
+  | { kind: "control"; action: "start" | "stop" | "pause" }
+  | { kind: "break" }
+  | { kind: "replay"; scenario: Scenario }
+  | { kind: "sim"; which: "face_occlusion" | "low_light"; enabled: boolean };
+
+export type ConnState = "mock" | "connecting" | "open" | "closed";
+export interface ValenceState {
+  source: "mock" | "live";
+  conn: ConnState;
+  baseUrl: string;
+  persons: TrackPerson[];
+  govLog: GovernanceMsg[];
+  gov: GovernanceMsg | null;
+  vectors: Record<number, StateVectorMsg>;
+  predictions: Record<number, PredictionMsg>;
+  history: HistoryPoint[];
+  status: StatusMsg | null;
+  retention: Record<string, unknown> | null;
+  evalSummary: EvalSummary | null;
+  sim: { face_occlusion: boolean; low_light: boolean };
+  running: "running" | "paused" | "stopped";
+  lastCommand: { text: string; ok: boolean } | null;
+  lastMessageAt: number;
+}
+
+// ---------- Store ----------
+let state: ValenceState = {
+  source: "mock", conn: "mock", baseUrl: "http://localhost:8000",
+  persons: [], govLog: [], gov: null, vectors: {}, predictions: {}, history: [],
+  status: null, retention: null, evalSummary: null,
+  sim: { face_occlusion: false, low_light: false }, running: "running",
+  lastCommand: null, lastMessageAt: 0,
+};
+const listeners = new Set<() => void>();
+function set(patch: Partial<ValenceState>) {
+  state = { ...state, ...patch };
+  listeners.forEach((l) => l());
+}
+export function useValence(): ValenceState {
+  return useSyncExternalStore(
+    (l) => { listeners.add(l); return () => listeners.delete(l); },
+    () => state,
+    () => state,
+  );
+}
+
+const HISTORY_WINDOW_S = 15 * 60;
+function pushHistory(p: HistoryPoint) {
+  const h = state.history.filter((x) => x.t >= p.t - HISTORY_WINDOW_S);
+  const last = [...h].reverse().find((x) => x.person_id === p.person_id && Math.abs(x.t - p.t) < 0.01);
+  if (last) Object.assign(last, p); else h.push(p);
+  return h;
+}
+
+export function handleMessage(msg: ServerMessage) {
+  const now = Date.now();
+  switch (msg.type) {
+    case "tracks": return set({ persons: msg.persons, lastMessageAt: now });
+    case "governance":
+      return set({ gov: msg, govLog: [...state.govLog, msg].slice(-200), lastMessageAt: now });
+    case "state_vector":
+      return set({
+        vectors: { ...state.vectors, [msg.person_id]: msg },
+        history: pushHistory({
+          t: msg.t, person_id: msg.person_id, ambient_db: msg.ambient_db, light_lux: msg.light_lux,
+          hours_since_break: msg.hours_since_break, posture_slump: msg.posture_slump,
+          facial_valence: msg.facial_valence, window_fill_min: msg.window_fill_min,
+        }),
+        lastMessageAt: now,
+      });
+    case "prediction":
+      return set({
+        predictions: { ...state.predictions, [msg.person_id]: msg },
+        history: pushHistory({ t: msg.t, person_id: msg.person_id, label: msg.label, confidence: msg.confidence }),
+        lastMessageAt: now,
+      });
+    case "explanation": {
+      const p = state.predictions[msg.person_id];
+      if (!p || p.event_id !== msg.event_id) return;
+      return set({
+        predictions: {
+          ...state.predictions,
+          [msg.person_id]: { ...p, explanation: { text: msg.text, source: msg.source, latency_ms: msg.latency_ms } },
+        },
+        lastMessageAt: now,
+      });
+    }
+    case "status": return set({ status: msg, lastMessageAt: now });
+  }
+}
+
+function resetData() {
+  set({ persons: [], govLog: [], gov: null, vectors: {}, predictions: {}, history: [], status: null, retention: null, evalSummary: null });
+}
+
+// ---------- Mock engine ----------
+const CYCLE_S = 120;
+const PHASE: StateKey[] = ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"];
+const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
+const mock = {
+  timer: null as ReturnType<typeof setInterval> | null,
+  t: 1000,
+  tick: 0,
+  counters: { frames: 17000, audio: 3400, transcripts: 200 },
+  scenario: "full_demo" as Scenario,
+  lastBreakT: 1000 - 3.6 * 3600,
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.step(), 1000);
+  },
+  stop() { if (this.timer) clearInterval(this.timer); this.timer = null; },
+  stateAt(t: number, pid: number): StateKey {
+    const sc = this.scenario;
+    if (sc !== "full_demo") return PHASE[["focused", "frustrated_masked", "exhausted", "collaborative_happy"].indexOf(sc)];
+    const offset = pid === 2 ? 3 : 0; // person 2 lags slightly
+    const idx = Math.floor((((t - offset) % CYCLE_S) + CYCLE_S) % CYCLE_S / (CYCLE_S / 4));
+    if (pid === 2 && PHASE[idx] === "Frustrated_Masked") return "Focused";
+    return PHASE[idx];
+  },
+  vector(t: number, pid: number, s: StateKey, fill: number): StateVectorMsg {
+    const base = {
+      Focused: { db: 48, lux: 480, slump: 0.12, fists: 0, comp: 0, laugh: 0, wd: 0, val: 0.1 },
+      Frustrated_Masked: { db: 72, lux: 220, slump: 0.35, fists: 3, comp: 0, laugh: 0, wd: 0.2, val: 0.62 },
+      Exhausted: { db: 55, lux: 140, slump: 0.78, fists: 0, comp: 0, laugh: 0, wd: 0.6, val: -0.2 },
+      Collaborative_Happy: { db: 63, lux: 450, slump: 0.1, fists: 0, comp: 3, laugh: 4, wd: 0, val: 0.7 },
+    }[s];
+    const low = state.sim.low_light, hidden = state.sim.face_occlusion;
+    const hrs = Math.max(0, (t - this.lastBreakT) / 3600) + (s === "Exhausted" ? 2 : 0);
+    const d = new Date(Date.now() - (this.t - t) * 1000);
+    return {
+      type: "state_vector", t, person_id: pid,
+      ambient_db: +(base.db + rnd(-2, 2)).toFixed(1),
+      light_lux: Math.round(low ? rnd(8, 20) : base.lux + rnd(-20, 20)),
+      hours_since_break: +hrs.toFixed(1),
+      time_of_day: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+      clenched_fists_5m: base.fists + (base.fists ? Math.round(rnd(-1, 1)) : 0),
+      compliments_15m: base.comp, laughter_15m: base.laugh,
+      posture_slump: +clamp(base.slump + rnd(-0.05, 0.05), 0, 1).toFixed(2),
+      social_withdrawal: +clamp(base.wd + rnd(-0.05, 0.05), 0, 1).toFixed(2),
+      face_visible: !hidden,
+      facial_valence: hidden ? 0 : +(base.val + rnd(-0.05, 0.05)).toFixed(2),
+      window_fill_min: +fill.toFixed(1),
+    };
+  },
+  prediction(v: StateVectorMsg, s: StateKey): PredictionMsg {
+    const conf = rnd(0.78, 0.92);
+    const probs = {} as Record<StateKey, number>;
+    const others = STATES.filter((x) => x !== s);
+    const w = others.map(() => rnd(0.2, 1));
+    const ws = w.reduce((a, b) => a + b, 0);
+    probs[s] = conf;
+    others.forEach((o, i) => (probs[o] = ((1 - conf) * w[i]) / ws));
+    const faceLabel: StateKey = !v.face_visible ? "Focused"
+      : v.facial_valence > 0.4 ? "Collaborative_Happy" : v.facial_valence < -0.1 ? "Exhausted" : "Focused";
+    const faceConf = v.face_visible ? rnd(0.6, 0.78) : 0.31;
+    const mask = faceLabel !== s && v.face_visible && s === "Frustrated_Masked";
+    const L = (name: string, drivers: Driver[]): Layer => ({ name, contribution: +drivers.reduce((a, d) => a + d.shap, 0).toFixed(2), drivers });
+    const sign = (good: boolean, m: number) => +((good ? 1 : -1) * m * rnd(0.85, 1.15)).toFixed(2);
+    const layers: Layer[] = [
+      L("Somatic & Social", [
+        { feature: "clenched_fists_count_5m", display: `${v.clenched_fists_5m} clenched-fist events in the last 5 minutes`, value: v.clenched_fists_5m, unit: "events", shap: sign(s === "Frustrated_Masked" ? true : v.clenched_fists_5m === 0, s === "Frustrated_Masked" ? 0.38 : 0.06) },
+        { feature: "posture_slump", display: `posture slump ${Math.round(v.posture_slump * 100)}%`, value: v.posture_slump, unit: "", shap: sign(s === "Exhausted", s === "Exhausted" ? 0.34 : 0.05) },
+        { feature: "laughter_15m", display: `${v.laughter_15m} laughs and ${v.compliments_15m} compliments in 15 min`, value: v.laughter_15m, unit: "events", shap: sign(s === "Collaborative_Happy", s === "Collaborative_Happy" ? 0.36 : 0.04) },
+      ]),
+      L("Ambient Physics", [
+        { feature: "ambient_db_mean_15m", display: `average noise of ${Math.round(v.ambient_db)} dB over 15 minutes`, value: v.ambient_db, unit: "dB", shap: sign(s !== "Focused" || v.ambient_db < 55, s === "Frustrated_Masked" ? 0.22 : 0.1) },
+        { feature: "light_lux_mean_15m", display: `room light ${v.light_lux} lux`, value: v.light_lux, unit: "lux", shap: sign(s === "Exhausted" ? v.light_lux < 200 : v.light_lux > 300, 0.07) },
+      ]),
+      L("Time Dynamics", [
+        { feature: "hours_since_break", display: `${v.hours_since_break} hours since the last break`, value: v.hours_since_break, unit: "h", shap: sign(s === "Exhausted" || s === "Frustrated_Masked", s === "Exhausted" ? 0.28 : 0.15) },
+      ]),
+      L("Facial Surface", [
+        v.face_visible
+          ? { feature: "face_last", display: `${v.facial_valence > 0.3 ? "smiling" : v.facial_valence < -0.1 ? "drooping" : "neutral"} expression (valence ${v.facial_valence >= 0 ? "+" : ""}${v.facial_valence.toFixed(2)})`, value: v.facial_valence, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
+          : { feature: "face_visible", display: "face not visible — facial layer ignored", value: 0, unit: "", shap: 0 },
+      ]),
+    ];
+    const disp = STATE_DISPLAY[s];
+    const pid = v.person_id;
+    const tpl = mask
+      ? `Model predicted ${disp} (${Math.round(conf * 100)}%). Person #${pid} appears to smile, but ${v.clenched_fists_5m} clenched-fist events, ${Math.round(v.ambient_db)} dB of sustained noise and ${v.hours_since_break} hours without a break point to masked stress.`
+      : `Model predicted ${disp} (${Math.round(conf * 100)}%) for Person #${pid} based on ${layers.slice().sort((a, b) => b.contribution - a.contribution)[0].name.toLowerCase()} signals.`;
+    return {
+      type: "prediction", event_id: `p${pid}-${String(this.tick).padStart(6, "0")}`, t: v.t, person_id: pid,
+      label: s, label_display: disp, confidence: +conf.toFixed(2), probabilities: probs,
+      face_only: { label: faceLabel, confidence: +faceConf.toFixed(2) }, mask_override: mask,
+      warming_up: v.window_fill_min < 5, layers, explanation: { text: tpl, source: "template" },
+    };
+  },
+  llmText(p: PredictionMsg): string {
+    const top = p.layers.flatMap((l) => l.drivers).sort((a, b) => b.shap - a.shap).slice(0, 2).map((d) => d.display);
+    if (p.mask_override)
+      return `Although Person #${p.person_id}'s face reads as ${STATE_DISPLAY[p.face_only.label].toLowerCase()}, the surrounding context tells a different story: ${top.join(" and ")}. Taken together, Valence judges the smile to be a mask over stress and suggests checking in or offering a short break.`;
+    return `Person #${p.person_id} most likely feels ${p.label_display.toLowerCase()} (${Math.round(p.confidence * 100)}%). The strongest evidence is ${top.join(", plus ")}. No facial imagery was retained to reach this conclusion.`;
+  },
+  step() {
+    this.t += 1; this.tick += 1;
+    const t = this.t;
+    const ids = [1, 2];
+    const persons: TrackPerson[] = ids.map((id) => {
+      const cx = (id === 1 ? 0.3 : 0.7) + Math.sin(t / 6 + id) * 0.02;
+      return { id, label: `Person #${id}`, bbox: [+(cx - 0.14).toFixed(3), 0.2, +(cx + 0.14).toFixed(3), 0.95] };
+    });
+    handleMessage({ type: "tracks", t, persons });
+    const fill = Math.min(15, 5 + (t - 1000) / 60);
+    for (const id of ids) {
+      const s = this.stateAt(t, id);
+      const v = this.vector(t, id, s, fill);
+      handleMessage(v);
+      if (this.tick % 2 === 0) {
+        const p = this.prediction(v, s);
+        handleMessage(p);
+        const lat = Math.round(rnd(900, 1900));
+        setTimeout(() => handleMessage({ type: "explanation", event_id: p.event_id, person_id: id, text: this.llmText(p), source: Math.random() < 0.1 ? "llm_retry" : "llm", latency_ms: lat }), lat);
+      }
+    }
+    this.counters.frames += 10; this.counters.audio += 2;
+    if (this.tick % 7 === 0) this.counters.transcripts += 1;
+    if (this.tick % 5 === 0) {
+      handleMessage({
+        type: "governance", t, tick: this.tick,
+        message: ["[GOVERNANCE] Raw biometric frame purged successfully. Appended state vector to timeline.",
+          "[GOVERNANCE] Audio block reduced to dB level and purged. 0 raw samples retained.",
+          "[GOVERNANCE] Transcript tokenized for compliment/laughter counts and purged."][Math.floor(this.tick / 5) % 3],
+        frames_purged: this.counters.frames, audio_blocks_purged: this.counters.audio,
+        transcripts_purged: this.counters.transcripts, violations: 0, live_raw_buffers: 0,
+      });
+    }
+    handleMessage({
+      type: "status", mode: this.scenario === "full_demo" ? "live" : "replay", camera: true, mic: true,
+      fps: +rnd(9.2, 10).toFixed(1), loop_latency_ms: Math.round(rnd(70, 95)), narrator: "ready",
+      offline: true, uptime_s: t - 1000 + 1820,
+    });
+  },
+  backfill() {
+    const start = this.t - HISTORY_WINDOW_S;
+    const h: HistoryPoint[] = [];
+    for (let t = start; t <= this.t; t += 10) {
+      for (const id of [1, 2]) {
+        const s = this.stateAt(t, id);
+        const v = this.vector(t, id, s, Math.min(15, (t - start) / 60));
+        h.push({ t, person_id: id, label: s, confidence: rnd(0.75, 0.9), ambient_db: v.ambient_db, light_lux: v.light_lux, hours_since_break: v.hours_since_break, posture_slump: v.posture_slump, facial_valence: v.facial_valence, window_fill_min: v.window_fill_min });
+      }
+    }
+    set({ history: h });
+  },
+  command(c: Command) {
+    if (c.kind === "control") {
+      if (c.action === "start") { this.start(); set({ running: "running" }); }
+      else { this.stop(); set({ running: c.action === "pause" ? "paused" : "stopped" }); }
+    } else if (c.kind === "break") this.lastBreakT = this.t;
+    else if (c.kind === "replay") { this.scenario = c.scenario; this.start(); set({ running: "running" }); }
+    else set({ sim: { ...state.sim, [c.which]: c.enabled } });
+  },
+};
+
+export const MOCK_EVAL: EvalSummary = {
+  accuracy_vs_history: [0, 1, 3, 5, 10, 15].map((m) => ({ minutes: m, context: +(0.52 + 0.36 * (1 - Math.exp(-m / 4))).toFixed(2), face_only: 0.49 })),
+  robustness: [
+    { condition: "Normal", context: 0.87, face_only: 0.61 },
+    { condition: "Face hidden", context: 0.81, face_only: 0.25 },
+    { condition: "Low light", context: 0.83, face_only: 0.34 },
+  ],
+  confusion: [
+    { name: "Context model", labels: STATES, matrix: [[46, 2, 1, 1], [3, 41, 4, 2], [1, 3, 44, 2], [1, 2, 1, 46]] },
+    { name: "Face-only baseline", labels: STATES, matrix: [[30, 5, 9, 6], [4, 12, 6, 28], [8, 4, 31, 7], [4, 3, 2, 41]] },
+  ],
+  calibration: [0.1, 0.3, 0.5, 0.7, 0.9].map((p) => ({ predicted: p, observed: +clamp(p + rnd(-0.05, 0.05), 0, 1).toFixed(2) })),
+  metrics: [
+    { model: "Valence context", accuracy: 0.87, macro_f1: 0.86, ece: 0.04 },
+    { model: "Face-only baseline", accuracy: 0.57, macro_f1: 0.51, ece: 0.14 },
+  ],
+};
+const MOCK_RETENTION = {
+  raw_video_frames_retained: 0, raw_audio_retained: 0, transcripts_retained: 0,
+  state_vector_retention: "15 minutes rolling", predictions_retention: "session only",
+  storage_location: "local RAM only", network_egress: "none (offline)",
+};
+
+// ---------- Live transport ----------
+let ws: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let backoff = 1000;
+let liveActive = false;
+
+const wsUrl = (base: string) => base.replace(/^http/, "ws").replace(/\/$/, "") + "/ws/events";
+const api = (path: string) => state.baseUrl.replace(/\/$/, "") + path;
+export const figureUrl = (name: string) => api(`/api/eval/figures/${name}.png`);
+
+async function loadRest() {
+  try {
+    const r = await fetch(api("/api/history?minutes=15"));
+    const j = await r.json();
+    const pts: HistoryPoint[] = Array.isArray(j) ? j : j.points ?? j.history ?? [];
+    set({ history: [...pts, ...state.history].sort((a, b) => a.t - b.t) });
+  } catch { /* backend may not be up yet */ }
+  try { set({ retention: await (await fetch(api("/api/retention"))).json() }); } catch { /* ignore */ }
+  try { set({ evalSummary: await (await fetch(api("/api/eval/summary"))).json() }); } catch { /* ignore */ }
+}
+
+function connectWs() {
+  if (!liveActive) return;
+  set({ conn: "connecting" });
+  try { ws = new WebSocket(wsUrl(state.baseUrl)); } catch { return scheduleReconnect(); }
+  ws.onopen = () => { backoff = 1000; set({ conn: "open" }); loadRest(); };
+  ws.onmessage = (e) => { try { handleMessage(JSON.parse(e.data) as ServerMessage); } catch { /* bad frame */ } };
+  ws.onclose = () => { set({ conn: "closed" }); scheduleReconnect(); };
+  ws.onerror = () => ws?.close();
+}
+function scheduleReconnect() {
+  if (!liveActive) return;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connectWs, backoff);
+  backoff = Math.min(backoff * 2, 10000);
+}
+function stopLive() {
+  liveActive = false;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+}
+
+// ---------- Public API ----------
+export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
+  stopLive(); mock.stop(); resetData();
+  set({ source, baseUrl, running: "running" });
+  if (source === "mock") {
+    set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL });
+    mock.backfill(); mock.start();
+  } else {
+    liveActive = true; backoff = 1000; connectWs();
+  }
+}
+
+let booted = false;
+export function boot() { if (!booted) { booted = true; setSource("mock"); } }
+
+function describe(c: Command) {
+  switch (c.kind) {
+    case "control": return [`/api/control/${c.action}`, undefined] as const;
+    case "break": return ["/api/events/break", undefined] as const;
+    case "replay": return [`/api/replay/${c.scenario}`, undefined] as const;
+    case "sim": return [`/api/sim/${c.which}`, { enabled: c.enabled }] as const;
+  }
+}
+
+export async function sendCommand(c: Command) {
+  const [path, body] = describe(c);
+  if (state.source === "mock") {
+    mock.command(c);
+    return set({ lastCommand: { text: `POST ${path} (mock)`, ok: true } });
+  }
+  try {
+    const r = await fetch(api(path), {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (c.kind === "sim") set({ sim: { ...state.sim, [c.which]: c.enabled } });
+    if (c.kind === "control") set({ running: c.action === "start" ? "running" : c.action === "pause" ? "paused" : "stopped" });
+    set({ lastCommand: { text: `POST ${path} → ${r.status}`, ok: r.ok } });
+  } catch {
+    set({ lastCommand: { text: `POST ${path} failed (backend unreachable)`, ok: false } });
+  }
+}
