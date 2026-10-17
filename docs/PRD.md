@@ -13,13 +13,16 @@ that reads only a face is context-blind and depends on harvesting biometric data
 the behavior over time (noise, light, time since a break, clenched fists, slumping, laughter) as well as the
 face, keeps none of the raw media, and explains every prediction.
 
-**How to read this document.** Valence is being built during the hackathon. At the first push
-(2026-10-17) the repo contains the shared contract, the configuration, the governance modules (purge gate,
-audit log, log filter, persistence scan) with their tests, the perception benchmark spikes and the model
-download script. Everything else here is the design the code will implement. No accuracy result exists
-yet: every metric below is a **target**, and its result is "TBD — produced by `<script>`". The only measured
-numbers are hardware timings from `docs/BENCHMARKS.md` (Apple M3 Max, 36 GB). Build status is tracked in
-`docs/DELIVERABLES.md`; measured results will go to `docs/RESULTS.md`.
+**How to read this document.** Valence is being built during the hackathon. At this update (Saturday
+evening, 2026-10-17) the repo contains the shared contract, configuration and governance modules with their
+tests; the runtime, REST/WebSocket API and console; simulator v2 and the 8 replay scenarios; the feature
+code; a first trained model ladder (core 4 states, untuned `noise_scale` 1.0) with M2 served; the explainer,
+template text and counterfactual; the evaluation and negative-control scripts; the Mac perception and edge
+runner; and a draft narrator service. Per-item status is in `docs/DELIVERABLES.md`. A file existing does not
+mean its tests pass. Where the implementation already differs from `docs/PLAN.md`, the difference is stated in
+place. **No accuracy result is reported here:** every metric below is a **target**, and its result is
+"TBD — produced by `<script>`". The only measured numbers are hardware timings from `docs/BENCHMARKS.md`
+(Apple M3 Max, 36 GB). Measured results will go to `docs/RESULTS.md`.
 
 ---
 
@@ -42,7 +45,8 @@ Valence is a hybrid individual-and-environment system that runs entirely on one 
    events, posture slump, head in hands, motion, a face valence score, laughter events and compliment
    phrases.
 2. **Biometric purge gate.** Every raw frame and audio block is zero-filled in place right after feature
-   extraction, and a weak-reference check at the end of every 5 s tick proves nothing kept a reference.
+   extraction, and a weak-reference check at the end of every 5 s tick counts any buffer something still
+   references as a violation.
 3. **Rolling state vector.** A 15-minute window of 5 s ticks, with one **room slot** (shared signals) and up
    to three **person slots** (body signals), grouped into the three context layers plus a Facial Surface.
 4. **Context model vs face model.** A LightGBM classifier on the full window (M2) is served live next to a
@@ -141,10 +145,10 @@ process in its own virtual environment. Each modality can be switched independen
 | Camera, people | YOLO26n-pose + ByteTrack (desk region, box height ≥ 25% of frame, ≤ 3 largest tracks) | `PersonObs.track_id`, normalized `bbox` |
 | Camera, hands | MediaPipe GestureRecognizer; fist score ≥ 0.7 held ≥ 0.5 s; hands with the wrist in the bottom 20% of the frame (keyboard zone) ignored | `fist_onsets` (debounced rising edges), `fist_active` |
 | Camera, posture | Pose keypoints, per-person normalized | `slump`, `head_in_hands`, `motion` (shoulder-widths/s; NaN when undefined) |
-| Camera, face | FaceLandmarker blendshapes on a per-person head crop | `face_visible`, `face_valence` in [−1, 1] or NaN (§2.6) |
+| Camera, face | FaceLandmarker blendshapes: one full-frame pass matched to people by the YOLO nose keypoint, then a per-person head-crop retry for anyone unmatched | `face_visible`, `face_valence` in [−1, 1] or NaN (§2.6) |
 | Camera, light | Brightness-based lux estimate, 10 s median at 1 Hz | `VideoObs.lux`, `lux_quality` |
 | Mic, level | Calibrated Leq | `AudioObs.db_spl`, `rms_power` |
-| Mic, laughter | YAMNet audio classifier: laughter is an **audio event**, debounced into onsets | `laughter_onsets` |
+| Mic, laughter | YAMNet audio classifier (AUDIO_CLIPS mode on each step's last 0.975 s): laughter is an **audio event**, debounced into onsets | `laughter_onsets` |
 | Mic, compliments | Vosk with a **restricted grammar** (a fixed phrase list plus `[unk]`) | `compliment_hits` |
 | Mic, speech activity | Speech probability per step | `speech_prob` |
 | Capture bookkeeping | | `frame_seq`, `frames_decoded`, `frame_w`, `frame_h`, `mirrored`; audio `block_seq` |
@@ -154,7 +158,7 @@ Laughter and compliments count only when the audio step is at least 6 dB above t
 
 Measured on the demo Mac (`docs/BENCHMARKS.md`, 1280×720 sample images, not yet the live camera): video
 perception end to end ~45 ms p50 for 2 people against a 100 ms budget at 10 Hz; Vosk restricted grammar p50
-0.84 ms per 100 ms block; YAMNet ~6 ms per 1 s result.
+0.84 ms per 100 ms block; YAMNet ~6 ms per 1 s result (measured in AUDIO_STREAM mode).
 
 ### 2.4 Biometric purge gate
 
@@ -163,9 +167,9 @@ perception end to end ~45 ms p50 for 2 people against a 100 ms budget at 10 Hz; 
 | Step | Mechanism |
 |---|---|
 | Extract | Perception computes scalars from the buffer. Detector outputs are copied (`.cpu().numpy().copy()`) and the detector's result objects deleted first, because they hold references to the input frame. |
-| Purge | `gate.purge(buf, "video" \| "audio")` zero-fills the buffer in place (or the array that owns it, if it is a view), then registers a `weakref` callback. The caller then `del`s its own name. |
+| Purge | `gate.purge(buf, kind)` zero-fills the buffer in place (or the array that owns it, if it is a view), then registers a `weakref` callback. The caller then `del`s its own name. `kind` is `"video"` / `"audio"` for raw capture buffers and `"video_derived"` / `"audio_derived"` for copies made inside perception (RGB conversion, head crops, PCM for Vosk, the YAMNet clip). |
 | Verify | At the end of every tick, `end_tick()` runs one garbage collection if needed; any purged buffer still alive is a `PURGE_VIOLATION`. |
-| Count | `frames_decoded` (from capture) must equal `frames_purged`. Capture decodes only at 10 Hz (`grab()` every frame, `retrieve()` at 10 Hz) and purges any frame displaced from the hand-off slot. Recognizer text cannot be zeroed (Python strings are immutable), so it is counted with `note_transcript_purged()`. |
+| Count | `frames_decoded` (from capture) must equal `frames_purged` (the `"video"` count), compared with a tolerance of ≤ 2 in-flight frames or at stop. Capture decodes only at 10 Hz (`grab()` every frame, `retrieve()` at 10 Hz) and purges any frame displaced from the hand-off slot. Recognizer text cannot be zeroed (Python strings are immutable), so it is counted with `note_transcript_purged()`. |
 | Enforce | `valence/governance/persistence_scan.py` (AST scan; `tests/test_no_persistence_ast.py`) bans file writes in `valence/perception/` and binary writes in `valence/edge/`. `valence/governance/logfilter.py` drops any log record that carries an array or bytes. |
 
 **Honest limits** (also in `docs/GOVERNANCE.md`). `del` removes a name, not memory. Zero-filling first means the bytes are gone even if
@@ -182,15 +186,17 @@ for room signals.
 |---|---|---|
 | Room | `ambient_db`, `db_p90`, `light_lux`, `lux_quality` | Ambient Physics |
 | Room | `laughter_count`, `compliments_count` (near-field gated) | Somatic & Social |
-| Room | `tod_h`; break clock | Time Dynamics |
-| Person | `hours_since_break` | Time Dynamics |
+| Room | `tod_h` | Time Dynamics |
+| Person | `hours_since_break` (per-person, presence-based break clock) | Time Dynamics |
 | Person | `clenched_fists_count`, `posture_slump`, `head_in_hands_frac`, `social_withdrawal_flag`, `motion_energy` | Somatic & Social |
 | Person | `face_valence` (median over the tick, NaN if never visible), `face_visible` (fraction of the tick) | Facial Surface |
 | Both | `tick`, `ts`, `t_mono`, `session_id`, `person_id`, `display_id`, `n_people`, `source`, `simulated_fields` | — |
 
-The break clock resets on `POST /api/events/break` or when a person is absent for at least
-`break_absent_min` (default 10 min; shortened for demos). An operator-logged break is marked in
-`simulated_fields`.
+Each person's break clock resets on `POST /api/events/break` or when that person is absent for at least
+`break_absent_min` (default 10 min; shortened for demos). A logged break is a real event entered by the
+operator: it is written to the audit log but not tagged in `simulated_fields`. An operator-set clock value
+(`POST /api/demo/seed` with `hours_since_break`) is tagged. (`docs/PLAN.md` lists the break clock under the
+room slot; the implementation and `docs/DATASET.md` keep one clock per person.)
 
 **The three context layers plus the Facial Surface** (`contracts.LAYERS`):
 
@@ -201,20 +207,22 @@ The break clock resets on `POST /api/events/break` or when a person is absent fo
 | Somatic & Social | fists, laughter, compliments, slump, head in hands, motion, withdrawal, number of people | Behaviors that reveal inner state or social interaction |
 | Facial Surface | face valence history and visibility | The face, as one input among several, so its weight is visible in every explanation |
 
-**Window features** (~110, order frozen in `artifacts/feature_spec.json`): for noise, light, motion, slump
-and head in hands — current value, mean/std/slope/max over 1, 5 and 15 min, two EWMs, a 1-vs-15-minute
-difference and a value relative to the session; for fists, laughter and compliments — counts over 1, 5 and
-15 min and time since the last event; withdrawal now and over 5 min; number of people; hours since break;
-time of day (sine/cosine); window fill ratio; face now, face mean over 1/5/15 min, face std over 5 min and
-face-visible fraction over 5 min. NaN is native (no imputation). Features are clipped to the training
-1st–99th percentiles; clipped feature names are reported in `data_quality.ood_features`, and more than three
-clipped features lowers the confidence band and is narrated.
+**Window features** (~110 in the plan; 114 as implemented in `valence/features/compute.py`; order frozen as
+`feature_names` in `artifacts/model_meta.json`): for noise, light, motion, slump and head in hands — current
+value, mean/std/slope/max over 1, 5 and 15 min, two EWMs, a 1-vs-15-minute difference and the current value
+relative to its 15-minute median; for fists, laughter and compliments — counts in the current tick and over
+1, 5 and 15 min, and time since the last event; withdrawal now and over 5 min; number of people; hours since
+break; time of day (sine/cosine); window fill ratio; face now, face visible now, face mean over 1/5/15 min,
+face std over 5 min and face-visible fraction over 5 min. NaN is native (no imputation). Features are clipped
+to the training 1st–99th percentiles; clipped feature names are reported in `data_quality.ood_features`, and
+more than three clipped features lowers the confidence (probabilities are pulled toward uniform) and is
+narrated.
 
 ### 2.6 Facial Surface: face valence without identity
 
 | Rule | Design |
 |---|---|
-| Input | FaceLandmarker blendshape scores from a per-person head crop (benchmarks showed the full-frame detector misses small faces; a crop also belongs to exactly one person). |
+| Input | FaceLandmarker blendshape scores: one full-frame pass, each face matched to a person by the YOLO nose keypoint; anyone left unmatched gets a second try on a per-person head crop (benchmarks showed the full-frame detector misses small faces; a crop belongs to exactly one person). |
 | Output | One scalar `face_valence` in [−1, 1], **relative to that person's neutral baseline** (median of their first 20 s of visible face), so ~0 means "their neutral". NaN whenever `face_visible` is false. |
 | No identity | No face embeddings, no recognition, no matching against anything stored. Landmarks and blendshapes never leave perception. |
 | Ephemeral IDs | `track_id` 1..N by first appearance, shown as "Person #N". Reused only if the person reappears within 3 s and 0.25 frame-widths; otherwise the ID is released and the person's baselines are forgotten. |
@@ -271,12 +279,20 @@ so the no-face model will confuse that pair; we report it as "the face is inform
 - Displayed `confidence` is a temperature-scaled softmax, **unsmoothed**, labeled "sim-calibrated" because
   the calibration data is simulated. The displayed label is smoothed (EMA plus a 2-tick hysteresis).
   `warming_up` is true for the first 60 s.
-- **Mask override.** `mask_override` is true only when: M0's label differs from M2's; M0 confidence ≥ 0.55;
-  M2 confidence ≥ 0.70; the Facial Surface SHAP for M0's class inside M2 is positive (M2 sees the smile too);
-  all of this for 3 consecutive ticks; never in the first 2 minutes.
-- **Counterfactual.** `GET /api/explain/{event_id}/counterfactual?feature=value` re-runs M2 with exactly one
-  feature changed (for example `hours_since_break=0.5`). It answers "is this label just the number the
-  operator typed?" by showing which other drivers hold the decision.
+- **Mask override (plan rule).** `mask_override` is true only when: M0's label differs from M2's; M0
+  confidence ≥ 0.55; M2 confidence ≥ 0.70; the Facial Surface SHAP for M0's class inside M2 is positive (M2
+  sees the smile too); all of this for 3 consecutive ticks; never in the first 2 minutes.
+- **Mask override (as implemented, v1).** `valence/models/served.py` and `valence/models/predictor.py`
+  differ from the plan rule: M0 confidence ≥ 0.45; M0's label must be `Collaborative_Happy` (a positive face)
+  while M2's is not; M2 confidence ≥ 0.70 and the face-SHAP check as above; the flag turns on when the
+  condition held on ≥ 3 of the last 6 face-visible ticks and off at ≤ 1; never in the first 2 minutes. The
+  positive-face requirement keeps a furrowed Focused face from counting as a "mask". Which rule is final is
+  an open item (§4.7).
+- **Counterfactual.** `GET /api/explain/{event_id}/counterfactual?feature=<name>&value=<number>` re-runs M2
+  with exactly one feature changed (for example `feature=hours_since_break&value=0.5`). It answers "is this
+  label just the number the operator typed?" by showing whether the label holds without that driver.
+  Implemented in `valence/models/served.py`; it currently re-runs on the person's current window, not on the
+  stored feature vector of that `event_id`.
 
 ### 2.9 Explanation and narrator
 
@@ -305,7 +321,7 @@ so the no-face model will confuse that pair; we report it as "the face is inform
 | Qualifiers | An adjective within 6 tokens of a feature must match that driver's `level` / `effect` |
 | Scope | Room-scope drivers are phrased as "the room" |
 | Mask | Mask language only when `mask_override` is true |
-| People | No pronouns; never mentions gender, age, race, appearance or diagnoses |
+| People | "Person #N" only; no pronouns; never mentions demographic attributes, appearance or diagnoses |
 | Length | 20–90 words |
 | Cache | Cached text is re-validated against the current FactSheet |
 
@@ -330,10 +346,10 @@ running: TBD — produced by the narrator A/B run (local session, `docs/NARRATOR
 | Observations | Perception output | Aggregated into ticks | Released after aggregation | RAM, main process | Until the next 5 s tick |
 | `TickRecord` / rolling window | Aggregator | ~110 features per tick for the models; `state_vector` messages | Evicted after 15 min; a person's rows dropped after `person_drop_min` (15 min) absence; cleared by `POST /api/demo/reset` | RAM, main process (not written to disk) | ≤ 15 min |
 | Predictions, SHAP, FactSheets, explanation text | Models, explainer, narrator | `prediction`, `explanation` messages on loopback | Not persisted (except the audit summary below) | RAM; loopback HTTP / WebSocket | Latest per person |
-| **Audit log** | Decisions | Labels, confidences, SHAP layer summaries, purge counters, operator actions (seed, simulated inputs, calibration). Strings > 200 chars, NaN and deep nesting are refused, so free text cannot be logged | Hash-chained (`scripts/audit_verify.py`, `GET /api/governance/verify`); file **deleted at session close**; files older than `audit_ttl_s` (86 400 s) deleted at startup | `var/audit/<session_id>.jsonl` — the only file the live pipeline writes by default | Session; at most 24 h after a crash |
+| **Audit log** | Decisions | Labels, confidences, SHAP layer summaries, operator actions (seed, simulated inputs, calibration); periodic purge-counter entries are planned. Strings > 200 chars, NaN and deep nesting are refused, so free text cannot be logged | Hash-chained (`GET /api/governance/verify`; offline `scripts/audit_verify.py` planned); file **deleted at session close**; files older than `audit_ttl_s` (86 400 s) deleted at startup | `var/audit/<session_id>.jsonl` — the only file the live pipeline writes by default | Session; at most 24 h after a crash |
 | Application logs | Code | Text only | `RawMediaFilter` drops records carrying arrays or bytes | stderr | Process lifetime |
 | Features-only recordings (opt-in) | `valence.edge.run --jsonl` | `VideoObs` / `AudioObs` as JSONL, no media | — | `data/real/` (builder's calibration capture and acted set) | Kept as evaluation data |
-| Self-report labels (P1) | `POST /api/label` | State label + time, marked as operator input | — | Evaluation data (builder only) | Kept as evaluation data |
+| Self-report labels (P1) | `POST /api/label` | State label + time + that person's latest numeric `TickRecord` (no media); audited as `self_report` | — (not deleted at session close; not yet listed by `GET /api/retention`) | `var/labels/<session_id>.jsonl` (gitignored; builder only) | Kept as evaluation data |
 | Frontend camera preview | Browser `getUserMedia` | Nothing | Never recorded, stored or uploaded | Browser | Display only |
 
 `GET /api/retention` returns this policy at runtime; the `governance` message carries `retention_s`.
@@ -370,7 +386,7 @@ and `contracts.json_schemas()`.
 | State list | `GET /api/states`, `hello.states` | `{id, display, tier}` |
 | Retention summary | `GET /api/retention` | |
 | Evaluation results | `GET /api/eval/summary`, `GET /api/eval/figures/{name}.png` | TBD — produced by `valence/eval/evaluate.py` |
-| Counterfactual | `GET /api/explain/{event_id}/counterfactual?feature=value` | |
+| Counterfactual | `GET /api/explain/{event_id}/counterfactual?feature=<name>&value=<number>` | original and counterfactual label and confidence, `label_changed` |
 
 ### 3.2 Inputs
 
@@ -380,28 +396,35 @@ and `contracts.json_schemas()`.
 | Log a break | `POST /api/events/break` |
 | Reset people between visitors | `POST /api/demo/reset` |
 | Replay a scenario | `GET /api/scenarios`, `POST /api/replay/{scenario}` |
+| Replay a features-only recording (camera/mic fallback) | `GET /api/recordings`, `POST /api/replay_recording/{name}` |
+| Return to live sensors | `POST /api/live` |
 | Simulate face hidden / low light | `POST /api/sim/face_occlusion`, `POST /api/sim/low_light` `{"enabled": bool}` |
 | Room-only mode | `POST /api/mode {"room_only": bool}` |
 | Venue calibration | `POST /api/calibrate/room` (SPL offset, 2-point lux, noise floor) |
 | Seed an empty window | `POST /api/demo/seed` (context only, tagged `sim_seed`) |
 | Self-report label (P1) | `POST /api/label {state}` |
 
-Every simulated or operator-set input (`sim/*`, seed, logged break, calibration) is written to the audit log
-and appears in `simulated_fields`.
+Every control call is written to the audit log. Inputs that inject data that was not sensed (`sim/*`,
+`demo/seed`, including a seeded `hours_since_break`) are also tagged in `source` / `simulated_fields`. A
+logged break and venue calibration are real events or measurements, so they are audited but not tagged
+(`docs/API.md` §6 and §8).
 
 ### 3.3 Example audit explanation (illustrative format, not a result)
 
-The v1 example is kept, in v2 form. The numbers are placeholders from the frontend mock data.
+The v1 example is kept, in v2 form. The numbers are placeholders (the same ones as the frontend mock data and
+the `prediction` example in `docs/API.md` §3.7); the sentence shape is the one `valence/explain/template.py`
+produces.
 
 > **Person #1: Frustrated / Masked Stress — 88%** (face-only: Collaborative / Happy; context corrected the
 > facial mask)
 >
-> *Template:* "Model predicted Frustrated / Masked Stress (88%). Person #1 appears to smile, but 3
-> clenched-fist events, 72 dB of sustained noise in the room and 4.2 hours without a break point to masked
-> stress."
+> *Template:* "Model predicted Frustrated / Masked Stress (88%) for Person #1. The face alone suggests
+> Collaborative / Happy, but 3 clenched-fist events in the last 5 minutes, average noise of 72 dB over 15
+> minutes and 4.2 hours since the last break point the other way. Context corrected the facial mask."
 
 The label reads "Frustrated / Masked Stress" here only because `mask_override` is true (§2.7). The noise
-driver says "in the room" because its `scope` is `room`.
+driver has `scope: room`, so an LLM narration must phrase it as "the room" (see the `explanation` example in
+`docs/API.md` §3.8).
 
 ---
 
@@ -411,18 +434,19 @@ driver says "in the room" because its `scope` is `room`.
 
 | Set | What it is | Used for | Status |
 |---|---|---|---|
-| Simulator v2 | ~300 sessions × 1–3 people × 60–120 min at 5 s (~500k person-ticks), seeded. Per-person semi-Markov hidden state (dwell 4–10 min, minimum 2 min), fatigue tilt after ~3 h, Poisson breaks, room dB that lags occupants' states, ±12–15 dB per-session mic offset, face missing on 5–40% of ticks, 2% per-modality dropout | Training, calibration, main evaluation | Design; TBD — produced by `valence/sim/generator.py` |
-| Legacy | The original mock generator: one random state per 5 s row (nothing for a window to learn) and context ranges that barely overlap | "Why we rebuilt the data" slide | TBD — `valence/sim/legacy.py` |
+| Simulator v2 | ~300 sessions × 1–3 people × 60–120 min at 5 s (~500k person-ticks), seeded. Per-person semi-Markov hidden state (dwell 4–10 min, minimum 2 min), fatigue tilt after ~3 h, Poisson breaks, room dB that lags occupants' states, ±12 dB per-session mic offset (plan range 12–15 dB), face missing on 5–40% of ticks, 2% per-modality dropout | Training, calibration, main evaluation | Generator in the repo (`valence/sim/generator.py`, `params.py`). The v1 models were trained on 300 sessions at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`); corpus statistics TBD |
+| Legacy | The original mock generator: one random state per 5 s row (nothing for a window to learn) and context ranges that barely overlap | "Why we rebuilt the data" slide | Generator in the repo (`valence/sim/legacy.py`); slide result TBD — `valence/eval/evaluate.py` |
 | Live feature capture | Builder, 3 min each: quiet typing, looking at the keyboard, clenching fists, slumping (features only) | Sets the simulator's false-positive rates and motion/slump scales from measurements instead of guesses; negative control | TBD — `data/real/capture_*.jsonl` |
-| Acted set | 6 scenarios × 3 min, plus face-detection rate at 3 light levels (features only) | Sanity check (majority-label agreement) | TBD — `valence/eval/score_acted.py` |
-| Self-report | Builder's own label every 10 min during live runs | Sanity check | P1; TBD |
-| Scenarios | Replay YAML: one per state, `context_blindness`, `full_demo` | Demo, end-to-end tests, override validation | TBD — `scenarios/*.yaml` |
+| Acted set | 6 scenarios × 3 min, plus face-detection rate at 3 light levels (features only) | Sanity check (majority-label agreement) | TBD — scored by `valence/eval/negative_control.py --expect <state>` (the plan's `score_acted.py` is folded into it) |
+| Self-report | Builder's own label every 10 min during live runs | Sanity check | P1; endpoint exists (`POST /api/label`); labels TBD |
+| Scenarios | Replay YAML: one per state, `context_blindness`, `full_demo` | Demo, end-to-end tests, override validation | 8 files in `scenarios/` |
 
 **Anti-circularity.** Simulator difficulty is one `noise_scale`, tuned against a single criterion that is not
 the headline result: M2 macro-F1 ≤ 0.92 (no ceiling effect) and a match between live and simulated feature
 variance. It is then frozen. M0 and M1 are reported wherever they land, with a ×0.5 / ×1 / ×1.5 sensitivity
 table and the legacy slide as evidence that the ordering is structural. The full parameter table is
-published in `docs/DATASET.md` and `docs/MODEL_CARD.md`.
+published in `docs/DATASET.md` and `docs/MODEL_CARD.md`. Not done yet: the tuning script
+(`valence/sim/tune_difficulty.py`) does not exist, so the v1 models use the untuned `noise_scale` 1.0.
 
 ### 4.2 The proofs
 
@@ -469,14 +493,14 @@ compliance-oriented configuration; TTL and session deletion because pseudonymous
 | Model | Face dependence (core 4) | M2-noface ≥ M2 − 0.05 | `evaluate.py` (TBD) |
 | Model | Headline: `Frustrated_Masked` recall, Focused-paradox confusion | M2 better than M0 on both; values reported as measured | `evaluate.py` (TBD) |
 | Model | Calibration | ECE lower after temperature scaling | `evaluate.py` (TBD) |
-| Explainer | SHAP additivity | Within 1e-6 | `tests/test_shap_additivity` (TBD) |
-| Explainer | Mask override | Fires within 6 ticks on `frustrated_masked`; never on `collaborative_happy` or `focused` | scenario tests (TBD) |
-| Explainer | Counterfactual | Changes only the named feature | tests (TBD) |
+| Explainer | SHAP additivity | Within 1e-6 | `tests/test_served.py::test_shap_additivity` (test exists) |
+| Explainer | Mask override | Fires within 6 ticks on `frustrated_masked`; never on `collaborative_happy` or `focused` | `tests/test_served.py::test_mask_override_fires_on_masked_and_not_elsewhere` (test exists) |
+| Explainer | Counterfactual | Changes only the named feature | `tests/test_served.py::test_counterfactual_changes_only_the_named_feature` (test exists) |
 | Sim-to-real | Negative control: replay of typing capture | ≤ 20% of ticks predicted `Frustrated_Masked`/`Tense` | `valence/eval/negative_control.py` (TBD) |
 | Sim-to-real | Live features inside clip bounds | ≥ 90% | `data_quality.ood_features` logs (TBD) |
-| Sim-to-real | Acted set | Majority-label agreement table (reported, no threshold) | `score_acted.py` (TBD) |
+| Sim-to-real | Acted set | Majority-label agreement table (reported, no threshold) | `negative_control.py --expect` (TBD) |
 | Governance | Purge | 0 violations, 0 live raw buffers, `frames_decoded == frames_purged` over 60 min | `scripts/mem_soak.py`, `/api/governance/stats` (TBD) |
-| Governance | Audit chain | Verifies; tampering detected | `scripts/audit_verify.py`, `tests/test_audit.py` |
+| Governance | Audit chain | Verifies; tampering detected | `tests/test_audit.py` (exists), `GET /api/governance/verify`, `scripts/audit_verify.py` (TBD) |
 | Governance | Persistence | Only the audit log is written; works with Wi-Fi off | `lsof`, rehearsal (TBD) |
 | Runtime | End-to-end replay | Correct label on ≥ 80% of ticks; override fires; tick < 200 ms | `tests/test_e2e_replay`, `scripts/e2e_check.py` (TBD) |
 | Runtime | Live loop | ≥ 8 Hz for 60 min, flat memory | 60-min soak (TBD) |
@@ -492,8 +516,9 @@ compliance-oriented configuration; TTL and session deletion because pseudonymous
 2. **Governance first:** counters with `frames_decoded == frames_purged`, 0 violations, 0 live raw buffers,
    `offline: true`; the purge gate code and its tests.
 3. **Live:** the masked flip (face-only says happy, context and `mask_override` say otherwise) and
-   obscure-face (label holds, narration switches). Any operator-set input, such as a logged break, shows in
-   `simulated_fields`.
+   obscure-face (label holds, narration switches). Any simulated input, such as a sim overlay or a seeded
+   break clock, shows in `simulated_fields`; every operator action, including a logged break, is in the audit
+   log.
 4. **Replay** for the other states and `context_blindness`, with `source=replay` visible.
 5. **Counterfactual** on the current event.
 6. **Evidence:** figures from `reports/figs/` (§4.2).
@@ -526,12 +551,18 @@ screen recording of a full replay run is made before judging, for the case where
 
 ### 4.7 Known gaps and open items
 
-- Model results, figures and the narrator A/B do not exist yet; all are TBD as listed in §4.3.
+- No model result is reported. First (v1) evaluation figures exist in `reports/figs/` (uncommitted; core 4
+  states, untuned `noise_scale` 1.0); `reports/metrics.json` and the narrator A/B are TBD, as listed in §4.3.
+- Difficulty tuning (`valence/sim/tune_difficulty.py`) and the capture-based simulator update are not done;
+  the v1 models will be retrained after both.
+- Mask-override rule: the implementation (§2.8, "as implemented") differs from the plan rule. Pick one and
+  align `docs/PLAN.md`, this document and the code.
 - Live-camera perception timings are pending camera permission (`docs/BENCHMARKS.md`).
-- YAMNet mode: the plan specifies AUDIO_CLIPS on 0.975 s buffers; the benchmark ran AUDIO_STREAM, which the
-  contract response allows if results are attributed to the audio step that produced them.
-- Room-only mode should also switch off per-person face analysis, not only per-person labels; to be confirmed
-  in `docs/API.md` and the implementation.
+- YAMNet mode (resolved): the edge runs AUDIO_CLIPS on each step's last 0.975 s, as planned; the only YAMNet
+  timing in `docs/BENCHMARKS.md` was measured in AUDIO_STREAM mode.
+- Room-only mode switches off per-person labels, but perception still runs per person (boxes, face valence)
+  and the room record uses the median face. Switching off per-person face analysis in room-only mode, and
+  which model should serve the room label, are open (`docs/API.md` §4.4, `docs/ARCHITECTURE.md` §16).
 - No demographic validation and no in-the-wild data; both are future work.
 
 ---
@@ -548,7 +579,7 @@ screen recording of a full replay run is made before judging, for the case where
 | States | 4 | 4 core (P0) + `Overwhelmed`, `Tense` (P1), cap 6, config-driven | Unmasked frustration and distress needed their own classes |
 | Display labels | "Frustrated" in the text, "Frustrated / Masked Stress" in the label | `display_label` rules: "Frustrated" unless the override fires (core set); "Upbeat" for one person | The label must not claim masking without evidence, or collaboration with one person |
 | Layers | 3 context layers | 3 context layers + Facial Surface | The face is an M2 input; its weight must be visible to explain an override |
-| Face | "Facial valence snapshot" | Blendshape valence relative to a personal neutral baseline; per-person head crops; no identity embeddings; ephemeral IDs; keypoints stay in perception | Resting faces differ between people; minimize identity data |
+| Face | "Facial valence snapshot" | Blendshape valence relative to a personal neutral baseline; full-frame pass with a per-person head-crop retry; no identity embeddings; ephemeral IDs; keypoints stay in perception | Resting faces differ between people; minimize identity data |
 | Explanation | Template pseudocode over raw rows | TreeSHAP drivers by layer → template → local LLM → faithfulness validator → template fallback | An explanation must reflect the model's actual reasons, and an LLM must not invent any |
 | Confidence | "88% confidence" | Temperature-scaled, unsmoothed, labeled "sim-calibrated" | Calibration was fit on simulated data |
 | Audit log | "Natural language audit log" | Hash-chained decision log: labels + SHAP summaries only; deleted at session end; TTL | Pseudonymous behavioral data is personal data; tamper evidence |

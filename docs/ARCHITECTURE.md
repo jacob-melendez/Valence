@@ -12,8 +12,11 @@ Sources of truth:
 - `docs/CONTRACT_RESPONSES.md`: confirmed perception-to-runtime semantics.
 - `docs/BENCHMARKS.md`: the only source of measured numbers here. Machine: MacBook Pro, Apple M3 Max, 36 GB.
 
-Status legend used in tables: **exists** = the file is on the branch now; **planned** = this is the design
-the code will implement. No evaluation results exist yet. Anything not measured is written as a target or as
+Status legend used in tables: **exists** = the file is in the repo now (that alone does not mean its tests
+pass); **planned** = this is the design the code will implement. Statuses are as of Saturday evening,
+2026-10-17; `docs/DELIVERABLES.md` is the live checklist. Where the implementation already differs from
+`docs/PLAN.md`, both are given and the difference is listed in section 16. No evaluation numbers are reported
+here (v1 figures exist in `reports/figs/`, uncommitted). Anything not measured is written as a target or as
 "TBD — produced by `<script>`".
 
 ---
@@ -66,7 +69,7 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
  webcam ─► capture thread ─► 1-slot buffer ─► perception thread (VideoPerceiver, 10 Hz)
            grab() every frame  displaced       YOLO26n-pose + ByteTrack (MPS, 640) ─► boxes, ids, keypoints*
            retrieve() @10 Hz   frame → purge   GestureRecognizer ┐ alternate frames ─► fist scores
-                                               FaceLandmarker    ┘ head crops       ─► blendshapes*
+                                               FaceLandmarker    ┘ frame + crops    ─► blendshapes*
                                                lux (10 s median, 1 Hz) · posture · motion · debouncers
  mic ────► sounddevice callback ─► audio worker (16 kHz mono, 100 ms blocks → ~1 s analysis step)
            (pinned by name)        Leq + rms_power · YAMNet laughter · Vosk restricted grammar ─► text*
@@ -82,15 +85,16 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
                                         ▼
  RUNTIME (CLOUD: valence/runtime)
  Aggregator ─ ROOM slot:    Leq dB, p90, lux, laughter / compliments (near-field gated), n_people,
-            │               time of day, break clock
-            └ PERSON slots: fists, slump, head-in-hands, motion, withdrawal, face valence / visibility
+            │               time of day
+            └ PERSON slots: fists, slump, head-in-hands, motion, withdrawal, face valence / visibility,
+                            break clock (presence-based, one per person)
                     │ every 5 s (ticker thread)
                     ▼
  TickRecord per person (source, simulated_fields) ◄── scenario YAML / POST /api/demo/seed (valence/sim)
                     ▼
  RollingWindow: 180 ticks = 15 min per person; a new person inherits room history
                     ▼
- compute_features (~110, order frozen in artifacts/feature_spec.json) ─► clip to train p1–p99 (+ ood_features)
+ features_from_window (114; order in artifacts/model_meta.json) ─► clip to train p1–p99 (+ ood_features)
                     ▼
  M2 LightGBM (served)  +  M0 face-only shadow
                     ▼
@@ -123,7 +127,7 @@ recognizer text for the duration of one processing call. Below it, the system ho
 | Capture thread | daemon thread | LOCAL | `cap.grab()` on every frame; `cap.retrieve()` only at 10 Hz into a 1-slot buffer; a frame displaced from the slot is purged | slot |
 | Perception thread | daemon thread | LOCAL | `VideoPerceiver.process(frame)` → `VideoObs`; `gate.purge(frame, "video")`; `del frame` | `sink(obs)` |
 | Audio callback + worker | sounddevice callback + daemon thread | LOCAL | 100 ms blocks → ~1 s `AudioObs`; each block purged once consumed | `sink(obs)` |
-| Replay thread | daemon thread | CLOUD | Paces recorded observations or scenario ticks by timestamp (speed factor) | `sink(obs)` or window |
+| Replay thread | daemon thread | CLOUD | Paces scenario ticks (`engine.py`) or recorded features-only observations (`recording.py`, `JsonlFeeder`) by timestamp (speed factor) | `sink(obs)` or window |
 | Ticker thread | daemon thread | CLOUD | Every `tick_s`: close the tick, build TickRecords, window, features, inference, explanation, audit append, `gate.end_tick()` | `loop.call_soon_threadsafe` → EventBus |
 | Narrator | separate process, own venv `valence/narrator/.venv`, port 8081 | LOCAL | MLX inference + validator + template fallback | HTTP |
 
@@ -133,14 +137,16 @@ Rules:
   `test_window` (planned) covers 4 concurrent writer threads.
 - Worker threads never touch asyncio objects directly. They schedule onto the loop with
   `call_soon_threadsafe`.
-- Lifespan startup (planned `valence/api/app.py`) installs the log filter, opens the session `AuditLog`
-  (which deletes expired files), loads the model artifacts, and starts sources per mode plus the ticker.
-  Shutdown calls the edge `stop()` (releases camera and mic), stops the ticker, and closes the audit log with
-  `delete=True`.
+- Lifespan startup (`valence/api/app.py`, exists) installs the log filter, opens the session `AuditLog`
+  (which deletes expired files), loads the model artifacts (served M2 if `artifacts/model_meta.json` matches
+  `state_set`, otherwise the rule stub), and starts sources per mode plus the ticker. Shutdown calls the edge
+  `stop()` (releases camera and mic), stops the ticker, and closes the audit log with `delete=True`.
 - Never run uvicorn with `--reload` while live sensors are on. The reloader starts a second process, and
   camera/mic permission belongs to the launching app and fails silently.
-- YOLO (torch, MPS) and LightGBM share the main process. The libomp clash is checked by a same-process smoke
-  test. The fallback is in section 13.
+- YOLO (torch, MPS) and LightGBM share the main process. Measured on the demo Mac
+  (`docs/CONTRACT_REQUESTS.md` round 2): importing LightGBM before torch, or setting `OMP_NUM_THREADS=2`,
+  segfaults. So in live mode `app.py` imports `valence.edge.run` (which imports torch) before anything imports
+  LightGBM, and the served model predicts with `num_threads=1`. The fallback is in section 13.
 - The narrator runs in its own process and venv (mlx-lm 0.31.3). Its dependencies cannot conflict with
   perception, and its GPU work is separate from YOLO's. Contention is managed by narrating only on triggers
   (section 9.6). If YOLO frame rate drops by more than 30%, YOLO moves to CPU at imgsz 480.
@@ -157,40 +163,41 @@ through `docs/CONTRACT_REQUESTS.md`.
 | Path | Owner | Responsibility | Status |
 |---|---|---|---|
 | `valence/contracts.py` | C | States, display rules, `PersonObs`/`VideoObs`/`AudioObs`, `TickRecord`, `FactSheet`, WS messages, JSON Schema export | exists |
-| `valence/config.py` | C | `Settings` (section 1); `.env.example` with offline vars | exists (`.env.example` planned) |
-| `valence/governance/purge.py` | C | `PurgeGate`, module-level `gate` | exists |
+| `valence/config.py`, `.env.example` | C | `Settings` (section 1); offline env vars and `VALENCE_*` defaults | exist |
+| `valence/governance/purge.py` | C | `PurgeGate`, module-level `gate`; kinds `video`, `audio`, `video_derived`, `audio_derived` | exists |
 | `valence/governance/audit.py` | C | `AuditLog`: hash chain, payload checks, TTL, session deletion | exists |
 | `valence/governance/logfilter.py` | C | `RawMediaFilter`, `install()` | exists |
-| `valence/governance/persistence_scan.py` | C | AST scan for disk writes in raw-media paths | exists |
-| `valence/governance/` retention | C | Retention summary for `GET /api/retention` and `retention_s` | planned |
-| `valence/runtime/bus.py` | C | EventBus with bounded per-client queues (drop-oldest) | planned |
-| `valence/runtime/aggregator.py` | C | Room and person slots, near-field gate, break clock, TickRecord assembly | planned |
-| `valence/runtime/ticker.py` | C | 5 s loop: window, features, predictor, explainer, audit, `end_tick()` | planned |
-| `valence/runtime/replay.py` | C | ReplaySource: scenario YAML, features JSONL, seed | planned |
-| `valence/sim/` | C | `generator.py` (v2), `scenarios.py`, `legacy.py`, `tune_difficulty.py` | planned |
-| `valence/features/spec.py` | C | `SENSOR_SPEC` (with units), `CHANNELS`, `FEATURE_NAMES`, `FACE_FEATURES`, `LAYER_MAP` | planned |
-| `valence/features/window.py` | C | `RollingWindow`, `compute_features(window)` | planned |
-| `valence/features/build_dataset.py` | C | Training windows from simulated sessions | planned |
-| `valence/models/train_ladder.py` | C | M0 to M2 variants, calibration, clip bounds | planned |
-| `valence/models/temporal.py` | C | M3 GRU benchmark | planned |
-| `valence/models/predictor.py` | C | Clip, temperature, EMA, hysteresis | planned |
-| `valence/models/counterfactual.py` | C | One-feature what-if re-runs of M2 | planned |
-| `valence/explain/explainer.py` | C | Layers, MaskOverrideDetector, `build_fact_sheet` | planned |
-| `valence/explain/template.py` | C | Instant template explanation | planned |
-| `valence/explain/narrator_client.py` | C | Async latest-only narration client | planned |
-| `valence/eval/` | C | `evaluate.py`, `score_acted.py`, `negative_control.py` → `reports/` | planned |
-| `valence/api/app.py` | C | Lifespan, REST, `/ws/events` | planned |
-| `valence/perception/gate.py` | L | Single import point for the purge gate (zero-fill fallback if governance is missing) | exists |
-| `valence/perception/debounce.py` | L | `HysteresisDebouncer`, `fist_debouncer()`, `laughter_debouncer()` | exists |
-| `valence/perception/` `video.py tracking.py face.py fist.py posture.py lux.py audio.py` | L | `VideoPerceiver` and audio perception | planned on the branch (benchmarked locally) |
-| `valence/edge/run.py` | L | `start(sink, *, video, audio, obscure_face) -> stop`; CLI `--print` / `--jsonl` | planned (`edge/__init__.py` exists) |
-| `valence/narrator/` | L | `service.py` (:8081), `prompts.py`, `validator.py`, `grammar.py`, `build_data.py`, `lora.yaml`; own `.venv` | planned (`__init__.py` exists) |
-| `scripts/` | C | `console.py`, `e2e_check.py`, `mem_soak.py`, `audit_verify.py`, `export_fact_sheets.py` | planned |
-| `scripts/` | L | `spikes/` and `download_models.sh` (exist); `calibrate_*.py`, `overnight.sh` (planned) | mixed |
-| `scenarios/*.yaml` | C | focused, frustrated_masked, exhausted, collaborative_happy, overwhelmed, tense, context_blindness, full_demo | planned |
-| `tests/` | C (L: `tests/perception`, `tests/narrator`) | Existing: `test_purge.py`, `test_audit.py`, `test_logfilter.py`, `test_no_persistence_ast.py`, `test_contracts.py` | partly exists |
+| `valence/governance/persistence_scan.py` | C | AST scan for disk writes in raw-media paths, with documented `# persistence-ok:` exceptions | exists |
+| Retention summary | C | `GET /api/retention` and `retention_s` | exists (static summary in `valence/api/app.py`; no separate module) |
+| `valence/runtime/bus.py` | C | EventBus with bounded per-client queues (drop-oldest) | exists |
+| `valence/runtime/aggregator.py` | C | Room and person slots, near-field gate, per-person break clocks, calibration, simulated injections, TickRecord assembly, `room_record` | exists |
+| `valence/runtime/engine.py` | C | Ticker (window, features, predictor, explainer, audit, `end_tick()`), scenario replay, live source, overlays, seeding, room-only. The plan's `ticker.py` and `replay.py` are both in this file. | exists |
+| `valence/runtime/recording.py` | C | Features-only JSONL replay: live feeder (camera/mic fallback) and deterministic offline replay (negative control) | exists |
+| `valence/sim/` | C | `generator.py` (v2), `params.py` (parameter table), `scenarios.py`, `legacy.py`; `tune_difficulty.py` | exist; `tune_difficulty.py` planned |
+| `valence/features/spec.py` | C | `SENSOR_SPEC` (units), channel tuples, `withdrawal_flag()`, `layer_of()` / `scope_of()` (the plan's `LAYER_MAP`) | exists |
+| `valence/features/compute.py` | C | `FEATURE_NAMES`, `FACE_FEATURES`, `FEATURE_SETS` (ladder), `features_from_window()` (the plan's `compute_features`) | exists |
+| `valence/features/window.py` | C | `RollingWindow` (per-person windows + room slot) | exists |
+| `valence/features/build_dataset.py` | C | Training windows from simulated sessions | exists |
+| `valence/models/train_ladder.py` | C | M0 to M2 variants, calibration, clip bounds | exists |
+| `valence/models/predictor.py` | C | Predictor interface, EMA + hysteresis, mask-override hysteresis, warm-up, rule stub | exists |
+| `valence/models/served.py` | C | Served M2 with M0 shadow, clipping + `ood_features`, `pred_contrib` layers, override condition, counterfactual (the plan's `counterfactual.py`) | exists |
+| `valence/models/temporal.py` | C | M3 GRU benchmark | file present, uncommitted at the time of writing; results TBD |
+| `valence/explain/describe.py` | C | Feature name + value → display text, unit, `level`, `scope`, layer | exists |
+| `valence/explain/explainer.py` | C | `build_layers`, `top_drivers`, `build_fact_sheet` | exists |
+| `valence/explain/template.py` | C | Instant template explanation | exists |
+| `valence/explain/narrator_client.py` | C | Latest-only narration client with triggers and cache | exists |
+| `valence/eval/` | C | `evaluate.py` → `reports/`, `negative_control.py` (also scores acted recordings with `--expect`; the plan's `score_acted.py`), `style.py` | exists |
+| `valence/api/app.py` | C | Lifespan, REST, `/ws/events` | exists |
+| `valence/perception/` | L | `gate.py` (purge import point), `debounce.py`, `video.py` (`VideoPerceiver`), `ids.py`, `hands.py`, `posture.py`, `face_valence.py`, `lux.py`, `regions.py`, `audio.py`, `audio_features.py`, `calibration.py`. The plan named `tracking.py face.py fist.py`; the code uses the names listed here. | exists |
+| `valence/edge/` | L | `run.py`: `start(sink, *, video, audio, obscure_face) -> stop`, CLI `--print` / `--jsonl`; `capture.py`; `calibration_store.py` | exists |
+| `valence/narrator/` | L | `service.py` (:8081), `engine.py`, `prompt.py`, `schema.py`, `lexicon.py`, `validator.py`, `templates.py`, `fake_fact_sheets.py`, `evaluate.py`; own `.venv`. Planned: `grammar.py`, `build_data.py`, `lora.yaml` | Stage A drafts exist; LoRA pieces planned |
+| `scripts/` | C | `console.py`, `export_fact_sheets.py` (exist); `e2e_check.py`, `mem_soak.py`, `audit_verify.py` (planned) | mixed |
+| `scripts/` | L | `spikes/`, `download_models.sh`, `calibrate_spl.py`, `calibrate_lux.py` (exist); `overnight.sh` (planned) | mixed |
+| `scenarios/*.yaml` | C | focused, frustrated_masked, exhausted, collaborative_happy, overwhelmed, tense, context_blindness, full_demo | exist |
+| `tests/` | C (L: `tests/perception`, `tests/narrator`) | Existing CLOUD tests: `test_purge.py`, `test_audit.py`, `test_logfilter.py`, `test_no_persistence_ast.py`, `test_contracts.py`, `test_api.py`, `test_runtime.py`, `test_feature_parity.py`, `test_served.py`. Planned: `test_window.py`, `test_e2e_replay.py` | partly exists |
 | `data/` | C: `sim/`, `narrator/fact_sheets_sim.jsonl` · L: `real/`, `narrator/{train,valid,test}.jsonl` | Features-only data | planned |
-| `artifacts/`, `reports/` | C | Models, calibrators, `feature_spec.json`, clip bounds; metrics and figures | planned |
+| `artifacts/` | C | v1 models `m0.txt`, `m2.txt` (committed) and the other ladder models (local only), `model_meta.json` (temperatures, feature names and sets, states, seed), `clip_bounds.json`. The plan's `feature_spec.json` is not written; the feature order lives in `model_meta.json`. | exists (v1) |
+| `reports/` | C | `figs/*.png` (v1, uncommitted); `metrics.json` | figures exist; metrics TBD |
 
 ---
 
@@ -211,7 +218,7 @@ blendshapes or text.
 | `fist_active` | bool | Debounced fist currently held. |
 | `slump` | bool | Debounced posture slump, judged against the person's own baseline posture. |
 | `head_in_hands` | bool | Hands at the head, from pose keypoints. |
-| `motion` | float | EMA (α 0.3) of mean keypoint displacement in shoulder-widths per second, in raw units. **NaN when undefined** (no keypoints). 0.0 means "still". Per-person normalization happens in the feature layer (`*_rel_sess`), not here. |
+| `motion` | float | EMA (α 0.3) of mean keypoint displacement in shoulder-widths per second, in raw units. **NaN when undefined** (no keypoints). 0.0 means "still". Per-person normalization happens in the feature layer (`*_rel_15m`, value minus its 15-minute median; the plan called it `*_rel_sess`), not here. |
 | `face_visible` | bool | A face was read for this person in this frame. |
 | `face_valence` | float | [-1, 1], relative to the person's neutral baseline (median of their first 20 s of visible face). NaN whenever `face_visible` is false. |
 
@@ -250,14 +257,14 @@ so recordings round-trip exactly.
 |---|---|---|
 | Capture | `grab()` every frame, `retrieve()` at 10 Hz; a displaced slot frame is purged; `frames_decoded` counts retrievals | — |
 | Person tracking | YOLO26n-pose + ByteTrack on MPS, imgsz 640, `classes=[0]`, `conf=0.4`, `track_buffer` 60. Boxes, ids and keypoints are copied with `.cpu().numpy().copy()`, then `del results` before the purge. The predictor's cached input image (`batch`, `results`, `dataset.im0`) is cleared after each call, and a weakref check confirms no frame survives `process()`. | 18.4 / 21.0 ms |
-| Fists | GestureRecognizer (VIDEO mode). Hands whose wrist is in the bottom 20% of the frame (keyboard zone) are ignored. | 16.4 / 16.8 ms (full frame) |
-| Face | FaceLandmarker in IMAGE mode on a **per-person head crop**: box from YOLO nose/eye/ear keypoints, scale 2.2, resized to 256 px. Blendshapes → valence. On the full 720p frame the detector found 0 faces in a 2-person shot; the crop found them. A crop belongs to exactly one person, so face-to-person matching is exact. `obscure_face=True` disables face reading for the live occlusion demo. | ~11 ms per person |
+| Fists | GestureRecognizer (VIDEO mode). Hands whose wrist is in the bottom 20% of the frame (keyboard zone) are ignored. `fist_debouncer()`: enter at score ≥ 0.7 held ≥ 0.5 s, exit below 0.4 for 1 s, 3 s refractory. | 16.4 / 16.8 ms (full frame) |
+| Face | FaceLandmarker (IMAGE mode): one **full-frame** pass, each face matched to a person by the YOLO nose keypoint; anyone left unmatched gets a second try on a **per-person head crop** (box from YOLO nose/eye/ear keypoints, scale 2.2, resized to 256 px). Blendshapes → valence. In the benchmark the full-frame detector found 0 faces in a 2-person 720p shot and the crop found them; a crop belongs to exactly one person, so its match is exact. `obscure_face=True` blacks out faces before MediaPipe for the live occlusion demo. | full frame 5.5 / 9.3 ms (VIDEO mode); crop ~11 ms per person |
 | Gesture/face schedule | GestureRecognizer and FaceLandmarker alternate frames (about 5 Hz each) | — |
 | Posture, motion | Slump and head-in-hands from keypoints; motion EMA as in 5.1 | — |
 | Lux | Brightness regression → 10 s median at 1 Hz | — |
 | **`VideoPerceiver.process` end to end** | YOLO + alternating gesture/face crops + lux, 2 people, 1280×720 sample images | **45 ms / ~51 ms** |
 | Audio input | sounddevice, 16 kHz mono float32, blocksize 1600 (100 ms), device pinned by name ("MacBook Pro Microphone") | — |
-| Laughter | YAMNet AudioClassifier, 6-class allowlist, `laughter_debouncer()` (on at ≥ 0.30 for 2 results, off below 0.15, 3 s refractory) | callback ~6 ms, 1 result/s |
+| Laughter | YAMNet AudioClassifier in `AUDIO_CLIPS` mode, run synchronously on each step's last 0.975 s, 6-class allowlist, `laughter_debouncer()` (on at ≥ 0.30 for 2 results, off below 0.15, 3 s refractory) | callback ~6 ms, 1 result/s (measured in `AUDIO_STREAM` mode) |
 | Compliments | Vosk small-en-us 0.15, restricted grammar (8 phrases + `[unk]`) | p50 0.84 ms, max 29 ms per 100 ms block |
 
 The loop budget is 100 ms at 10 Hz, so the measured ~45 ms leaves headroom. Live-camera numbers are still
@@ -265,19 +272,20 @@ pending camera permission (see `BENCHMARKS.md`).
 
 Decisions that refine the plan:
 
-- **YAMNet mode.** The plan specified `AUDIO_CLIPS` on 0.975 s buffers. `AUDIO_STREAM` was measured to work
-  (1 result/s). It is kept, provided each result is attributed to the audio step whose samples produced it
-  (classifier-callback timestamp, not arrival time). `AUDIO_CLIPS` is the fallback if that attribution gets
-  messy.
+- **YAMNet mode.** The plan specified `AUDIO_CLIPS` on 0.975 s buffers. The spike measured `AUDIO_STREAM`
+  (1 result/s), and `CONTRACT_RESPONSES.md` allowed either. The edge adopted `AUDIO_CLIPS`, run synchronously
+  on each step's last 0.975 s (`CONTRACT_REQUESTS.md` round 2), so each result belongs to the step that
+  produced it. The only timing in `BENCHMARKS.md` is from the `AUDIO_STREAM` spike.
 - **Motion units.** The plan described `motion` as per-person normalized. The confirmed contract emits the raw
-  unit (NaN when undefined) and normalizes in features (`motion_rel_sess`).
-- **Fist rule.** The plan's rule is score ≥ 0.7 held ≥ 0.5 s plus the keyboard-zone exclusion. The current
-  `fist_debouncer()` in `debounce.py` still uses the earlier values (on at ≥ 0.6 for 3 samples, off below 0.4
-  for 1 s, 3 s refractory). `CONTRACT_RESPONSES.md` lists this as open on the edge side.
+  unit (NaN when undefined) and normalizes in features (`motion_rel_15m`).
+- **Fist rule.** Implemented as planned: score ≥ 0.7 held ≥ 0.5 s plus the keyboard-zone exclusion
+  (`fist_debouncer()` in `debounce.py`; raised from 0.6 × 3 samples after live typing produced false fists).
+- **Faces.** The plan read faces per person; the edge first tries the full frame (cheaper) and falls back to
+  head crops only for people the full-frame pass missed.
 
 ---
 
-## 6. Aggregator (`valence/runtime/aggregator.py`, planned)
+## 6. Aggregator (`valence/runtime/aggregator.py`, exists)
 
 The aggregator keeps one **room slot** and up to `max_tracks` **person slots**. It closes a tick every
 `tick_s` and emits one `TickRecord` per person. Room fields are copied into every person's row.
@@ -290,17 +298,20 @@ The aggregator keeps one **room slot** and up to `max_tracks` **person slots**. 
 | `db_p90` | 90th percentile of the tick's step levels. Carried for display and QA; not in the frozen `CHANNELS`. |
 | `light_lux`, `lux_quality` | Latest non-NaN `VideoObs.lux` / `lux_quality` in the tick |
 | `laughter_count`, `compliments_count` | Sum of `laughter_onsets` / `compliment_hits` from steps that pass the **near-field gate** |
-| `n_people` | Number of active person slots |
+| `n_people` | Most people seen in one frame during the tick (≤ `max_tracks`) |
 | `tod_h` | Local time of day in hours [0, 24) |
-| `hours_since_break` | Room break clock (below) |
 
 **Near-field gate.** An audio step's laughter and compliment counts are kept only if that step's `db_spl` is
-at least the room's running median plus `near_field_db` (6 dB). This counts laughter and praise at the desk,
+at least the room's 15-minute median plus `near_field_db` (6 dB). This counts laughter and praise at the desk,
 not from the next table in a loud hall. Perception emits raw counts; gating happens only here.
 
-**Break clock.** One communal clock, as in the original PRD's "last communal room break". It starts at
-session start and resets on `POST /api/events/break`, or when no person has been tracked for
-`break_absent_min` (10 min by default; about 0.5 min for demos).
+**Break clock.** One presence-based clock per person (implemented in `aggregator.py`, and the same rule the
+simulator uses, `docs/DATASET.md` 6.4). It starts when the person is first seen and resets when that person
+was absent for at least `break_absent_min` (10 min by default; about 0.5 min for demos), or on
+`POST /api/events/break` (one `person_id`, or everyone when `null`, which is the original PRD's "last communal
+room break"). `POST /api/demo/seed` can set it, and that value is tagged `hours_since_break` in
+`simulated_fields`. `docs/PLAN.md` lists the break clock under the room slot; the per-person clock is the
+implemented design, so the time channel is person-scope (section 7.2).
 
 ### 6.2 Person slots
 
@@ -314,7 +325,8 @@ Keyed by `track_id`.
 | `motion_energy` | NaN-aware mean of `motion` over the tick |
 | `face_valence` | Median over the tick of visible-face frames; NaN when never visible |
 | `face_visible` | Fraction of the tick with a visible face |
-| `social_withdrawal_flag` | Derived from person-slot signals. The original dataset defined it as "slumped over / isolated". Exact rule TBD in `aggregator.py`; P1 and early in the drop order. |
+| `hours_since_break` | The person's break clock (above) |
+| `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if slumped ≥ 60% of the tick and motion ≤ 0.06 shoulder-widths/s, else 0 (0 when either is NaN). The simulator calls the same function. The original dataset defined it as "slumped over / isolated". P1 and early in the drop order. |
 | `person_id`, `display_id` | `track_id` and "Person #N" |
 | `tick`, `ts`, `t_mono`, `session_id` | Tick bookkeeping |
 | `source`, `simulated_fields` | Provenance (section 12) |
@@ -328,25 +340,31 @@ When a new person appears mid-session, their window is pre-filled with the room'
 channels (dB, lux, laughter, compliments, `n_people`, time). Their person channels start empty (NaN). A late
 arrival in a room that has been loud for 12 minutes is therefore judged in that context, but nothing about any
 other person is copied. `fill_ratio` and `window_fill_min` still reflect how much of the window is filled.
-`test_window` (planned) covers this inheritance along with 900 s eviction.
+`tests/test_runtime.py::test_window_room_slot_survives_person_reset` covers part of this; `test_window`
+(planned) adds 900 s eviction and 4 concurrent writers.
 
 ### 6.4 Room-only mode
 
-With `--room-only` or `POST /api/mode {"room_only": true}`, the aggregator emits one aggregate room record. The
-API publishes one room label: no per-person predictions, per-person drivers or face results. This is the
-compliance-oriented configuration (section 11.3).
+With `room_only` (`VALENCE_ROOM_ONLY`) or `POST /api/mode {"room_only": true}`, the runtime predicts only on
+the aggregate room record (`aggregator.room_record`: room channels plus the mean or median of the person
+channels), with `person_id` 0 and `person: "Room"`. The API publishes one room label: no per-person
+predictions, per-person drivers or face results. Perception still runs per person (boxes in `tracks`, face
+valence feeding the room median). This is the compliance-oriented configuration (section 11.3); the room
+model is an open item (section 16).
 
 ---
 
-## 7. Rolling window and features (`valence/features/`, planned)
+## 7. Rolling window and features (`valence/features/`, exists)
 
 ### 7.1 RollingWindow
 
-There is one thread-safe deque of `TickRecord`s per person, capped at `window_ticks` = 180 (15 min). Records
-older than 900 s are evicted. The window lives in RAM only. One plain-numpy function,
-`compute_features(window)`, is used both offline (training) and live (serving). `test_feature_parity`
-(NaN-aware, atol 1e-9) and `test_no_lookahead` (both planned) guard this. Training windows are cut every 6
-ticks with random length 1–180 ticks, so the model also learns to handle partly filled windows.
+`RollingWindow` keeps one deque of `TickRecord`s per person plus the room slot (`person_id` 0), behind one
+lock, each capped at `window_ticks` = 180 ticks (15 min at 5 s per tick); the oldest tick drops out as a new
+one arrives. The window lives in RAM only. One
+plain-numpy function (`features_from_window` in `compute.py`; the plan's `compute_features`) is used both
+offline (training) and live (serving). `tests/test_feature_parity.py` (live window vs offline builder,
+no-lookahead, short and missing windows) guards this. Training windows are cut every 6 ticks with random
+length 1–180 ticks, so the model also learns to handle partly filled windows.
 
 ### 7.2 CHANNELS (frozen)
 
@@ -362,7 +380,7 @@ ticks with random length 1–180 ticks, so the model also learns to handle partl
 | `compl` | `compliments_count` | room | Somatic & Social |
 | `withdraw` | `social_withdrawal_flag` | person | Somatic & Social |
 | `n_people` | `n_people` | room | Somatic & Social |
-| `hours_since_break` | `hours_since_break` | room | Time Dynamics |
+| `hours_since_break` | `hours_since_break` | person | Time Dynamics |
 | `tod_sin`, `tod_cos` | `tod_h` | room | Time Dynamics |
 | face (separate) | `face_valence`, `face_visible` | person | Facial Surface |
 
@@ -370,18 +388,23 @@ ticks with random length 1–180 ticks, so the model also learns to handle partl
 channel's slot. That is what lets the narrator say "the room was loud" rather than attributing room noise to
 a person.
 
-### 7.3 Feature families (~110; order frozen in `artifacts/feature_spec.json`)
+### 7.3 Feature families (114 as implemented; order stored as `feature_names` in `artifacts/model_meta.json`)
 
 | Family | Features | Count |
 |---|---|---|
-| Continuous S ∈ {db, lux, motion, slump, hih} | `S_now`; `S_{mean,std,slope,max}_{1m,5m,15m}`; `S_ewm_{1m,5m}`; `S_d1m15m` (short vs long trend); `S_rel_sess` (relative to the person's own session baseline; removes per-session mic offset and per-person motion scale) | 17 × 5 = 85 |
-| Events E ∈ {fist, laugh, compl} | `E_cnt_{1m,5m,15m}`, `E_since_s` | 4 × 3 = 12 |
+| Continuous S ∈ {db, lux, motion, slump, hih} | `S_now`; `S_{mean,std,slope,max}_{1m,5m,15m}`; `S_ewm_{1m,5m}`; `S_d1m15m` (short vs long trend); `S_rel_15m` (current value minus its 15-minute median; removes per-session mic offset and per-person motion scale) | 17 × 5 = 85 |
+| Events E ∈ {fist, laugh, compl} | `E_cnt_now`, `E_cnt_{1m,5m,15m}`, `E_since_s` | 5 × 3 = 15 |
 | Social | `withdraw_now`, `withdraw_frac_5m`, `n_people` | 3 |
 | Time and window | `hours_since_break`, `tod_sin`, `tod_cos`, `fill_ratio` | 4 |
-| Face (`FACE_FEATURES`) | `face_now`, `face_mean_{1m,5m,15m}`, `face_std_5m`, `face_visible_frac_5m` | 6 |
-| **Total** | | **110** |
+| Face (`FACE_FEATURES`) | `face_now`, `face_visible_now`, `face_mean_{1m,5m,15m}`, `face_std_5m`, `face_visible_frac_5m` | 7 |
+| **Total** | | **114** |
 
 Missing values stay NaN; LightGBM handles NaN natively. Face features are NaN when no face was visible.
+
+Difference from `docs/PLAN.md` (which specified ~110: 12 event and 6 face features, `S_rel_sess`, order frozen
+in `artifacts/feature_spec.json`): the code adds `E_cnt_now` and `face_visible_now` (needed by the M1 and M0
+snapshots), makes the relative feature window-based (`S_rel_15m`), and stores the order in `model_meta.json`.
+`artifacts/feature_spec.json` has not been written.
 
 ### 7.4 LAYER_MAP
 
@@ -392,19 +415,25 @@ Missing values stay NaN; LightGBM handles NaN natively. Face features are NaN wh
 | Somatic & Social | `fist_*`, `laugh_*`, `compl_*`, `slump_*`, `hih_*`, `motion_*`, `withdraw_*`, `n_people` |
 | Facial Surface | `face_*` |
 
+Implemented as `layer_of()` in `spec.py`. `fill_ratio` has no description (`describe()` returns none), so it
+is never narrated and is left out of layer sums and drivers.
+
 ### 7.5 Clipping and out-of-distribution reporting
 
 Before inference, every feature is clipped to the training p1–p99 range stored with the model artifacts. The
-names of clipped features go to `data_quality.ood_features`. If more than 3 features are clipped, the
-confidence is shown in a lower band and the narration says so. The sim-to-real target is that at least 90% of
+names of clipped features go to `data_quality.ood_features` (`fill_ratio` excluded). If more than 3 features
+are clipped, the served model pulls the probabilities 30% toward uniform, which lowers the confidence, and the
+template text says some readings are outside the training range. The sim-to-real target is that at least 90% of
 live features fall inside the clip bounds (TBD — measured on live captures).
 
 ---
 
-## 8. Model ladder (`valence/models/`, planned)
+## 8. Model ladder (`valence/models/`, v1 exists)
 
 All models are trained on simulator v2 data (see `docs/DATASET.md`), split by session 70/15/15. No session
-appears in two splits. The validation split is halved: one half for early stopping, one half for calibration
+should appear in two splits (a planned test checks this). The v1 artifacts were trained on the core 4 states,
+300 sessions, seed 7, at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`); they will be retrained
+after difficulty tuning and the capture-based simulator update. The validation split is halved: one half for early stopping, one half for calibration
 (temperature scaling).
 
 LightGBM settings: 31 leaves, learning rate 0.05, up to 800 rounds, early stop 50, `min_data_in_leaf` 100,
@@ -412,21 +441,24 @@ feature and bagging fractions 0.8, balanced class weights.
 
 | Model | Inputs | Algorithm | Purpose | Served? |
 |---|---|---|---|---|
-| M0 | Face snapshot (`face_now`) | LightGBM | Context-blind face baseline | Yes, as the live shadow behind `face_only`; null when no face is visible |
-| M0t | Face history (the 6 `FACE_FEATURES`) | LightGBM | Does face history alone close the gap? | No (eval) |
-| M1 | Context snapshot: current value of each `CHANNELS` entry, no history | LightGBM | Context without time | No (eval) |
+| M0 | Face snapshot (`face_now`, `face_visible_now`) | LightGBM | Context-blind face baseline | Yes, as the live shadow behind `face_only`; null when no face is visible |
+| M0t | Face history (the 7 `FACE_FEATURES`) | LightGBM | Does face history alone close the gap? | No (eval) |
+| M1 | Context snapshot: current value of each `CHANNELS` entry (`*_now`, `*_cnt_now`, time), no history | LightGBM | Context without time | No (eval) |
 | M2-noface | All non-face features | LightGBM | "Face is informative but not sufficient"; stability when the face is missing | No (eval) |
-| M2-noabsdB | M2 without absolute dB levels (relative and trend dB kept) | LightGBM | Robustness to mic calibration (the simulator applies a ±12–15 dB per-session mic offset) | No (eval, P1) |
+| M2-noabsdB | M2 without absolute dB levels (`db_now`, `db_mean_*`, `db_max_*`, `db_ewm_*`; slope, std, trend and relative dB kept) | LightGBM | Robustness to mic calibration (the simulator applies a ±12 dB per-session mic offset; plan range 12–15 dB) | No (eval, P1) |
 | M2-notime | M2 without `hours_since_break`, `tod_sin`, `tod_cos` | LightGBM | Is time a shortcut? | No (eval, P1) |
-| **M2** | All ~110 features (context + face history) | LightGBM | The served model | **Yes** |
-| M3 | Tick sequence | PyTorch GRU(64) + attention | Temporal benchmark (cloud CPU) | No (P1) |
+| **M2** | All 114 features (context + face history) | LightGBM | The served model | **Yes** |
+| M3 | Tick sequence | PyTorch GRU(64) + attention | Temporal benchmark (cloud CPU) | No (P1; `temporal.py` in progress) |
 
 Acceptance targets from the plan (not results): M2 macro-F1 between 0.85 and 0.92 (the 0.92 ceiling is the
 anti-circularity criterion used to tune `noise_scale`); M2-noface ≥ M2 − 0.05 on the core 4 states; ECE drops
 after calibration; at 15 min of history, M2 > M1 > M0 with non-overlapping session-bootstrap 95% CIs.
 Results: TBD — produced by `valence/eval/evaluate.py` → `reports/metrics.json`, `reports/figs/*.png`.
 
-Artifacts per model in `artifacts/`: booster, temperature `T`, clip bounds, `feature_spec.json`.
+Artifacts in `artifacts/`: one booster per model (`m0.txt`, `m2.txt`, ...); `model_meta.json` with the
+temperatures, feature names, feature sets, states and seed; `clip_bounds.json` (train p1–p99). `served.py`
+loads M2 and M0 only when `model_meta.json`'s `state_set` matches `settings.state_set`; otherwise the rule stub
+(`stub-rules`) is served and `status.degraded` lists `predictor:stub`.
 
 ---
 
@@ -455,27 +487,30 @@ The ticker runs this for each person on every completed tick. Target: features t
 ### 9.3 SHAP layers and drivers
 
 7. LightGBM `pred_contrib` (TreeSHAP; target < 5 ms) on M2. Take the predicted class's slice, sum
-   contributions by `LAYER_MAP` into `Layer.contribution`, and pick the top drivers. Each `Driver` carries
+   contributions by layer (`layer_of`) into `Layer.contribution`, and keep up to 3 drivers per layer (one per
+   sensor channel, strongest by absolute SHAP). Each `Driver` carries
    `feature`, `display` (pre-formatted, e.g. "average noise of 72 dB over 15 minutes"), `value`, `unit`,
    `shap`, `level` (`high|elevated|normal|low`), `effect` (`supports` if `shap` > 0, else `opposes`) and
-   `scope` (`room|person`). `test_shap_additivity` (planned) checks contributions sum to the margin within
-   1e-6.
+   `scope` (`room|person`). `tests/test_served.py::test_shap_additivity` (exists) checks that contributions
+   sum to the margin within 1e-6.
 
 ### 9.4 MaskOverrideDetector
 
-8. `mask_override` turns true only when **all** of these hold:
+8. `mask_override` turns true only when **all** of these hold. The plan's rule and the v1 implementation
+   (`served.py` for the per-tick condition, `predictor.py` for the hysteresis) differ:
 
-| Condition | Threshold |
-|---|---|
-| M0's argmax differs from M2's label | — |
-| M0 confidence | ≥ 0.55 |
-| M2 confidence | ≥ 0.70 |
-| Inside M2, the Facial Surface layer's SHAP toward M0's class | > 0 (the face really does look like M0's class; context outweighs it) |
-| Consecutive ticks meeting the above | 3 |
-| Time since the person's window started | ≥ `override_block_s` (120 s) |
+| Condition | Plan (`docs/PLAN.md`) | As implemented (v1) |
+|---|---|---|
+| M0's argmax differs from M2's label | required | required, and narrower: M0's label is `Collaborative_Happy` (a positive face) and M2's is not |
+| M0 confidence | ≥ 0.55 | ≥ 0.45 |
+| M2 confidence | ≥ 0.70 | ≥ 0.70 |
+| Inside M2, the Facial Surface layer's SHAP toward M0's class | > 0 (the face really does look like M0's class; context outweighs it) | > 0 |
+| Persistence | 3 consecutive ticks | on when the condition held on ≥ 3 of the last 6 face-visible ticks (with the smoothed label equal to M2's); off at ≤ 1 |
+| Time since the person's window started | ≥ `override_block_s` (120 s) | ≥ `override_block_s` (120 s) |
 
 Verification target: fires within 6 ticks on the `frustrated_masked` scenario and never on
-`collaborative_happy` or `focused`. It is validated on scenarios as soon as M2 exists.
+`collaborative_happy` or `focused`. `tests/test_served.py::test_mask_override_fires_on_masked_and_not_elsewhere`
+exists. Which rule is final is open (section 16).
 
 ### 9.5 Display label, FactSheet, template text
 
@@ -493,8 +528,9 @@ Verification target: fires within 6 ticks on the `frustrated_masked` scenario an
     `confidence_display`, the top drivers' `display` strings (room-scope drivers phrased as "the room"), a face
     clause (agrees / disagrees / "no face visible"), and mask language only when `mask_override` is true. The
     `prediction` message goes out with `explanation{text, source: "template"}`.
-12. The audit log receives a features-free entry: label, confidence, layer sums, `mask_override`, purge
-    counters.
+12. The audit log receives a features-free `prediction` entry when `label_display` changes, and otherwise at
+    most every 30 s: person, label, confidence, `mask_override`, `source`, layer sums, `simulated_fields`.
+    Periodic purge-counter entries are planned.
 
 ### 9.6 Async narration
 
