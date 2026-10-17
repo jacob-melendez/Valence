@@ -110,3 +110,21 @@ def test_break_clock_and_seed():
     assert agg.hours_since_break(1, 1_000_000) == pytest.approx(4.2)
     agg.push(VideoObs(t=200, wall=1_000_200, frame_seq=2, frames_decoded=2, persons=(p,)))  # back after 200 s
     assert agg.hours_since_break(1, 1_000_200) == pytest.approx(0.0)
+
+
+def test_recording_replay_offline(tmp_path, runtime):
+    from valence.contracts import obs_to_dict
+    from valence.runtime.recording import replay_offline
+
+    path = tmp_path / "capture_typing.jsonl"
+    with path.open("w") as f:
+        for i in range(600):  # 60 s of video at 10 Hz plus 1 Hz audio
+            p = PersonObs(track_id=1, bbox=(0.2, 0.1, 0.6, 0.95), motion=0.07, face_visible=True, face_valence=-0.1)
+            f.write(json.dumps(obs_to_dict(_video(i * 0.1, [p], i + 1))) + "\n")
+            if i % 10 == 0:
+                f.write(json.dumps(obs_to_dict(AudioObs(t=i * 0.1, wall=1_000_000 + i * 0.1, block_seq=i, db_spl=47.0,
+                                                        rms_power=1e-5))) + "\n")
+    runtime.use_live()
+    preds = [m for m in replay_offline(runtime, path) if m["type"] == "prediction"]
+    assert 11 <= len(preds) <= 13  # one per 5 s tick
+    assert all(m["person_id"] == 1 for m in preds)

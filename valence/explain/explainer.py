@@ -45,9 +45,21 @@ def build_layers(
     for name in LAYERS:
         if name not in per_layer:
             continue
-        drivers = sorted(per_layer[name], key=lambda d: abs(d.shap), reverse=True)[:drivers_per_layer]
+        # One driver per sensor channel (motion_now and motion_ewm_1m would read as the same sentence).
+        best: dict[str, Driver] = {}
+        for drv in sorted(per_layer[name], key=lambda d: abs(d.shap), reverse=True):
+            best.setdefault(channel_of(drv.feature), drv)
+        drivers = list(best.values())[:drivers_per_layer]
         layers.append(Layer(name=name, contribution=round(totals[name], 4), drivers=drivers))
     return sorted(layers, key=lambda layer: layer.contribution, reverse=True)
+
+
+def channel_of(feature: str) -> str:
+    if feature.startswith("tod_"):
+        return "tod"
+    if feature.startswith("face_visible"):
+        return "face_visible"
+    return feature.split("_")[0]
 
 
 def top_drivers(layers: list[Layer], k: int = 5, effect: str | None = "supports") -> list[Driver]:

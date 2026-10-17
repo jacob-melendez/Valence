@@ -352,6 +352,30 @@ def replay(scenario: str, body: dict[str, Any] = Body(default={})) -> dict[str, 
     return {"ok": True, "scenario": scenario, "speed": speed}
 
 
+@app.get("/api/recordings")
+def get_recordings() -> list[dict[str, Any]]:
+    from valence.runtime.recording import list_recordings
+
+    return list_recordings()
+
+
+@app.post("/api/replay_recording/{name}")
+def replay_recording(name: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Replay a features-only recording from data/real/ through the live pipeline (camera/mic fallback)."""
+    from valence.runtime.recording import RECORDINGS
+
+    a = state()
+    path = (RECORDINGS / f"{name}.jsonl").resolve()
+    if path.parent != RECORDINGS.resolve() or not path.exists():
+        raise HTTPException(404, f"unknown recording {name}")
+    a.stop_edge()
+    a.runtime.use_recording(path, speed=float(body.get("speed", 1.0)), loop=bool(body.get("loop", True)))
+    a.runtime.paused = False
+    a.runtime.stop()
+    a.runtime.start()
+    return {"ok": True, "recording": name}
+
+
 @app.post("/api/live")
 def go_live() -> dict[str, Any]:
     a = state()
