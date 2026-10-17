@@ -1,0 +1,30 @@
+# Valence edge/perception/narrator deps for Apple Silicon (arm64, Python 3.12).
+# Install:
+#   uv venv --python 3.12 .venv && source .venv/bin/activate
+#   uv pip install -r requirements-mac.txt
+#   # ultralytics pulls opencv-python, which shadows contrib; swap it back:
+#   uv pip uninstall opencv-python opencv-python-headless
+#   uv pip install --no-deps --reinstall opencv-contrib-python==4.14.0.94
+# MediaPipe ships no x86_64 macOS wheel: a Rosetta Python will fail to resolve it.
+
+# perception
+mediapipe==1.1.1
+ultralytics==8.4.171
+torch==2.14.1
+lap>=0.5.12          # ByteTrack linear assignment (ultralytics would try to pip-install it at runtime)
+opencv-contrib-python==4.14.0.94
+numpy
+scipy
+
+# audio
+sounddevice==0.5.6
+vosk==0.3.44
+
+# narrator (0.32.x skipped: released days ago)
+mlx-lm==0.31.3
+
+# services + tests
+fastapi
+uvicorn[standard]
+httpx
+pytest

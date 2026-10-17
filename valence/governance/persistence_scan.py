@@ -1,0 +1,120 @@
+"""Static check that raw-media code paths never persist anything.
+
+Scans Python sources with ``ast`` and reports calls that could write pixels, audio or transcripts
+to disk:
+
+* ``valence/perception/``: no file writes at all, plus the banned media/serialization calls.
+* ``valence/edge/``: may write features-only JSONL in text mode, but no binary writes and none of
+  the banned calls.
+
+Run ``python -m valence.governance.persistence_scan`` to print violations (exit code 1 if any).
+"""
+
+from __future__ import annotations
+
+import ast
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+BANNED_ATTRS = {
+    "imwrite",  # cv2
+    "VideoWriter",  # cv2
+    "VideoWriter_fourcc",
+    "save",  # np.save / PIL Image.save / torch.save
+    "savez",
+    "savez_compressed",
+    "savetxt",
+    "tofile",
+    "dump",  # pickle / joblib / json.dump of raw data
+    "to_pickle",
+}
+BANNED_MODULE_CALLS = {
+    ("wave", "open"),
+    ("soundfile", "write"),
+    ("sf", "write"),
+    ("scipy.io.wavfile", "write"),
+    ("wavfile", "write"),
+}
+STRICT_DIRS = ("valence/perception",)
+TEXT_WRITES_OK_DIRS = ("valence/edge",)
+
+
+@dataclass(frozen=True)
+class Violation:
+    path: str
+    line: int
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.path}:{self.line}: {self.reason}"
+
+
+def _dotted(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_dotted(node.value)}.{node.attr}"
+    return ""
+
+
+def _open_mode(call: ast.Call) -> str | None:
+    mode_node = call.args[1] if len(call.args) > 1 else None
+    for kw in call.keywords:
+        if kw.arg == "mode":
+            mode_node = kw.value
+    if mode_node is None:
+        return "r"
+    if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
+        return mode_node.value
+    return None  # dynamic mode: treat as a write
+
+
+def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violation]:
+    out: list[Violation] = []
+    for node in ast.walk(ast.parse(source, filename=path)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = _dotted(func)
+        if isinstance(func, ast.Attribute):
+            if func.attr in BANNED_ATTRS:
+                out.append(Violation(path, node.lineno, f"banned call {name or func.attr}()"))
+                continue
+            owner = _dotted(func.value)
+            if (owner, func.attr) in BANNED_MODULE_CALLS:
+                out.append(Violation(path, node.lineno, f"banned call {name}()"))
+                continue
+            if func.attr == "write_bytes" or (func.attr == "write_text" and not allow_text_writes):
+                out.append(Violation(path, node.lineno, f"file write {name}()"))
+                continue
+        if name in ("open", "io.open") or (isinstance(func, ast.Attribute) and func.attr == "open" and name != "wave.open"):
+            mode = _open_mode(node)
+            writes = mode is None or any(c in mode for c in "wax+")
+            if not writes:
+                continue
+            if mode is None or "b" in mode or not allow_text_writes:
+                out.append(Violation(path, node.lineno, f"file opened for writing ({mode!r})"))
+    return out
+
+
+def scan_repo(root: str | Path = ".") -> list[Violation]:
+    root = Path(root)
+    found: list[Violation] = []
+    for rel_dir, allow_text in [(d, False) for d in STRICT_DIRS] + [(d, True) for d in TEXT_WRITES_OK_DIRS]:
+        base = root / rel_dir
+        if not base.exists():
+            continue
+        for py in sorted(base.rglob("*.py")):
+            if ".venv" in py.parts:
+                continue
+            found.extend(scan_source(py.read_text(encoding="utf-8"), str(py.relative_to(root)), allow_text))
+    return found
+
+
+if __name__ == "__main__":
+    violations = scan_repo(sys.argv[1] if len(sys.argv) > 1 else ".")
+    for v in violations:
+        print(v)
+    print(f"{len(violations)} violation(s)")
+    sys.exit(1 if violations else 0)
