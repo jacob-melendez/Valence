@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Valence ---
+.env
+models/
+adapters/
+var/
+data/sim/
+valence/narrator/.venv/
+reports/tmp/
