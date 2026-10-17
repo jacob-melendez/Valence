@@ -32,7 +32,8 @@ def ratios(kxy: np.ndarray, kc: np.ndarray, w: int, h: int) -> dict:
     ok = kc >= 0.5
     if not (ok[5] and ok[6]):
         return {}
-    mid_y = (kxy[5, 1] + kxy[6, 1]) / 2
+    kxy, kc = kxy.astype(np.float64), kc.astype(np.float64)  # YOLO gives float32; json needs Python floats
+    mid_y = float((kxy[5, 1] + kxy[6, 1]) / 2)
     sw = float(np.linalg.norm(kxy[5] - kxy[6]))
     out = {"sh_y": mid_y / h, "sh_w": sw / w, "c_nose": float(kc[0]), "c_eyes": float(kc[1:3].min()),
            "c_ears": float(kc[3:5].min()), "c_ear_max": float(kc[3:5].max())}

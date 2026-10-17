@@ -14,8 +14,11 @@ HIDDEN = 0.0
 
 def pose(head_drop: float = 0.7, shift: tuple[float, float] = (0.0, 0.0),
          wrists: tuple[tuple[float, float], tuple[float, float]] | None = None,
-         hidden: tuple[int, ...] = ()) -> tuple[np.ndarray, np.ndarray]:
-    """Seated, camera-facing COCO-17 skeleton in pixels; shoulders 200 px wide at y=400."""
+         hidden: tuple[int, ...] = (), ear_drop: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Seated, camera-facing COCO-17 skeleton in pixels; shoulders 200 px wide at y=400.
+
+    The whole head moves with ``head_drop`` (a slump) unless ``ear_drop`` pins the ears
+    (a head pitched down: nose low, ears in place)."""
     nose_y = SHOULDER_Y - head_drop * SHOULDER_W
     xy = np.array([
         (600, nose_y),
@@ -27,6 +30,8 @@ def pose(head_drop: float = 0.7, shift: tuple[float, float] = (0.0, 0.0),
         (660, 650), (540, 650),
         (660, 800), (540, 800), (660, 950), (540, 950),
     ], dtype=float)
+    if ear_drop is not None:
+        xy[3, 1] = xy[4, 1] = SHOULDER_Y - ear_drop * SHOULDER_W
     if wrists is not None:
         xy[9], xy[10] = wrists
     xy += np.asarray(shift, dtype=float)
@@ -301,3 +306,30 @@ class TestTimingEdges:
         assert not tracker.update(*pose(head_drop=0.1), 1.1).slump
         assert not tracker.update(*pose(head_drop=0.1), 2.6).slump
         assert tracker.update(*pose(head_drop=0.1), 4.1).slump
+
+
+class TestSlumpVsKeyboardGaze:
+    """Looking down pitches the head (nose drops, ears stay); a slump sinks the whole head."""
+
+    def test_keyboard_gaze_is_not_a_slump(self) -> None:
+        tracker = calibrated()
+        states = run(tracker, 20.1, 30.1, head_drop=0.45, ear_drop=0.7)  # nose 0.64x, ears ~0.97x
+        assert first(states, "slump") is None
+
+    def test_whole_head_sinking_is_a_slump(self) -> None:
+        tracker = calibrated()
+        states = run(tracker, 20.1, 30.1, head_drop=0.45)  # nose 0.64x, ears 0.65x
+        t = first(states, "slump")
+        assert t is not None and t >= 23.0
+
+    def test_ears_never_visible_falls_back_to_a_stricter_nose_rule(self) -> None:
+        tracker = PostureTracker()
+        run(tracker, 0.0, 20.1, hidden=(3, 4))
+        assert tracker.ear_baseline is None
+        assert first(run(tracker, 20.1, 30.1, head_drop=0.45, hidden=(3, 4)), "slump") is None  # 0.64x
+        assert first(run(tracker, 30.1, 40.1, head_drop=0.35, hidden=(3, 4)), "slump") is not None  # 0.5x
+
+    def test_ears_hidden_mid_slump_uses_the_nose_fallback(self) -> None:
+        tracker = calibrated()
+        assert tracker.ear_baseline is not None
+        assert first(run(tracker, 20.1, 30.1, head_drop=0.35, hidden=(3, 4)), "slump") is not None

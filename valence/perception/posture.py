@@ -63,30 +63,46 @@ class PostureTracker:
     """Slump / head-in-hands / motion for one display id.
 
     ``head_drop`` is the nose height above the shoulder midpoint in shoulder widths
-    (EMA). Its baseline is the median of the raw valid samples seen during the first
-    ``baseline_s`` after the first update (at least 10 samples; calibration continues
-    past the window until it has them, and restarts if the median is not positive).
+    (EMA); ``ear_drop`` is the same for the mean of the visible ears. Baselines are the
+    medians of the raw valid samples seen during the first ``baseline_s`` after the first
+    update (at least 10 samples; calibration continues past the window until the nose has
+    them, and restarts if its median is not positive).
+
+    A slump needs the whole head to sink, not just tip forward: looking down at a keyboard
+    pitches the head, which swings the nose down but leaves the ears (near the pitch axis)
+    in place. Measured live (docs/BENCHMARKS.md): keyboard gaze nose 0.84x / ears 0.96x of
+    baseline, slump nose 0.42x / ears 0.86x; the nose-only rule flagged 93% of a 3-minute
+    typing-while-looking-down capture as slumped. So slump = nose < ``slump_ratio`` x
+    baseline AND ears < ``ear_ratio`` x baseline, held ``slump_hold_s``; when the ears were
+    never calibrated or aren't visible, the nose alone must fall below
+    ``nose_only_ratio`` x baseline.
     ``motion`` is the mean keypoint displacement in shoulder widths per second (EMA),
     so it does not depend on the sampling rate.
     """
 
-    __slots__ = ("baseline_s", "slump_ratio", "slump_hold_s", "hih_hold_s", "hih_radius",
-                 "ema_alpha", "min_conf", "_t0", "_samples", "_baseline", "_shoulder_w",
-                 "_head_drop", "_motion", "_slump_since", "_hih_since", "_prev_xy", "_prev_t")
+    __slots__ = ("baseline_s", "slump_ratio", "ear_ratio", "nose_only_ratio", "slump_hold_s", "hih_hold_s",
+                 "hih_radius", "ema_alpha", "min_conf", "_t0", "_samples", "_ear_samples", "_baseline",
+                 "_ear_baseline", "_shoulder_w", "_head_drop", "_ear_drop", "_motion", "_slump_since",
+                 "_hih_since", "_prev_xy", "_prev_t")
 
     def __init__(self, baseline_s: float = 20.0, slump_ratio: float = 0.7,
                  slump_hold_s: float = 3.0, hih_hold_s: float = 2.0, hih_radius: float = 0.5,
-                 ema_alpha: float = 0.3, min_conf: float = 0.5) -> None:
+                 ema_alpha: float = 0.3, min_conf: float = 0.5, ear_ratio: float = 0.93,
+                 nose_only_ratio: float = 0.6) -> None:
         if not 0.0 < ema_alpha <= 1.0:
             raise ValueError("ema_alpha must be in (0, 1]")
         self.baseline_s, self.slump_ratio = baseline_s, slump_ratio
+        self.ear_ratio, self.nose_only_ratio = ear_ratio, nose_only_ratio
         self.slump_hold_s, self.hih_hold_s, self.hih_radius = slump_hold_s, hih_hold_s, hih_radius
         self.ema_alpha, self.min_conf = ema_alpha, min_conf
         self._t0: float | None = None
         self._samples: list[float] = []
+        self._ear_samples: list[float] = []
         self._baseline: float | None = None
+        self._ear_baseline: float | None = None
         self._shoulder_w = math.nan
         self._head_drop = math.nan
+        self._ear_drop = math.nan
         self._motion = math.nan
         self._slump_since: float | None = None
         self._hih_since: float | None = None
@@ -96,6 +112,10 @@ class PostureTracker:
     @property
     def baseline(self) -> float | None:
         return self._baseline
+
+    @property
+    def ear_baseline(self) -> float | None:
+        return self._ear_baseline
 
     @property
     def shoulder_width(self) -> float:
@@ -108,8 +128,10 @@ class PostureTracker:
 
         self._update_shoulder_width(xy)
         raw_drop = self._raw_head_drop(xy)
+        raw_ear = self._raw_ear_drop(xy)
         self._head_drop = _ema(self._head_drop, raw_drop, self.ema_alpha)
-        self._calibrate(raw_drop, t, t0)
+        self._ear_drop = raw_ear if math.isnan(raw_ear) else _ema(self._ear_drop, raw_ear, self.ema_alpha)
+        self._calibrate(raw_drop, raw_ear, t, t0)
 
         self._slump_since, slump = _held(self._slump_since, self._below_baseline(), t,
                                          self.slump_hold_s)
@@ -145,25 +167,41 @@ class PostureTracker:
             return math.nan
         return float((mid_y - xy[NOSE, 1]) / self._shoulder_w)
 
-    def _calibrate(self, raw_drop: float, t: float, t0: float) -> None:
+    def _raw_ear_drop(self, xy: np.ndarray) -> float:
+        ears = xy[[L_EAR, R_EAR]]
+        ears = ears[np.isfinite(ears).all(axis=1)]
+        mid_y = (xy[L_SHOULDER, 1] + xy[R_SHOULDER, 1]) / 2.0
+        if ears.size == 0 or math.isnan(self._shoulder_w) or math.isnan(mid_y):
+            return math.nan
+        return float((mid_y - ears[:, 1].mean()) / self._shoulder_w)
+
+    def _calibrate(self, raw_drop: float, raw_ear: float, t: float, t0: float) -> None:
         if self._baseline is not None:
             return
         in_window = t - t0 < self.baseline_s - TIME_EPS
-        if math.isfinite(raw_drop) and (in_window or len(self._samples) < MIN_BASELINE_SAMPLES):
-            self._samples.append(raw_drop)
+        if in_window or len(self._samples) < MIN_BASELINE_SAMPLES:
+            if math.isfinite(raw_drop):
+                self._samples.append(raw_drop)
+            if math.isfinite(raw_ear):
+                self._ear_samples.append(raw_ear)
         if in_window or len(self._samples) < MIN_BASELINE_SAMPLES:
             return
         baseline = float(np.median(self._samples))
-        self._samples = []
+        ear = float(np.median(self._ear_samples)) if len(self._ear_samples) >= MIN_BASELINE_SAMPLES else None
+        self._samples, self._ear_samples = [], []
         if baseline > 0.0:
             self._baseline = baseline
+            self._ear_baseline = ear if ear is not None and ear > 0.0 else None
         else:
             self._t0 = t
 
     def _below_baseline(self) -> bool:
         if self._baseline is None or math.isnan(self._head_drop):
             return False
-        return self._head_drop < self.slump_ratio * self._baseline
+        if self._ear_baseline is not None and not math.isnan(self._ear_drop):
+            return (self._head_drop < self.slump_ratio * self._baseline
+                    and self._ear_drop < self.ear_ratio * self._ear_baseline)
+        return self._head_drop < self.nose_only_ratio * self._baseline
 
     def _hands_on_head(self, xy: np.ndarray) -> bool:
         if math.isnan(self._shoulder_w):
