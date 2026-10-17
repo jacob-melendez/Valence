@@ -36,3 +36,4 @@ exclude = ["valence.narrator.venv*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

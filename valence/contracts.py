@@ -106,9 +106,9 @@ class PersonObs:
     fist_active: bool = False
     slump: bool = False  # debounced posture slump
     head_in_hands: bool = False
-    motion: float = NAN  # keypoint motion, z-scored against this person's own baseline
+    motion: float = NAN  # EMA of mean keypoint displacement, shoulder-widths/s; NaN when undefined
     face_visible: bool = False
-    face_valence: float = NAN  # [-1, 1]; NaN when the face is not visible
+    face_valence: float = NAN  # [-1, 1] relative to the person's neutral baseline; NaN when not visible
 
     def __post_init__(self) -> None:
         if len(self.bbox) != 4:
@@ -170,21 +170,18 @@ def _none_to_nan(v: Any) -> Any:
 
 
 def obs_to_dict(obs: Obs) -> dict[str, Any]:
-    """JSON-safe dict for features-only JSONL recordings (NaN -> null)."""
+    """JSON-safe dict for features-only JSONL recordings: ``{"type": "video"|"audio", ...}``, NaN -> null."""
     if isinstance(obs, VideoObs):
         d = {f.name: _nan_to_none(getattr(obs, f.name)) for f in fields(obs) if f.name != "persons"}
         d["persons"] = [{k: _nan_to_none(v) for k, v in asdict(p).items()} for p in obs.persons]
-        d["kind"] = "video"
-        return d
-    d = {k: _nan_to_none(v) for k, v in asdict(obs).items()}
-    d["kind"] = "audio"
-    return d
+        return {"type": "video", **d}
+    return {"type": "audio", **{k: _nan_to_none(v) for k, v in asdict(obs).items()}}
 
 
 def obs_from_dict(d: dict[str, Any]) -> Obs:
-    """Inverse of ``obs_to_dict``."""
+    """Inverse of ``obs_to_dict``. Also accepts the older ``"kind"`` key."""
     d = dict(d)
-    kind = d.pop("kind")
+    kind = d.pop("type", None) or d.pop("kind")
     if kind == "video":
         persons = tuple(
             PersonObs(
@@ -273,8 +270,10 @@ class Layer(_Model):
 
 
 class FaceOnly(_Model):
-    label: str
-    confidence: float
+    """Face-only baseline (M0). ``label``/``confidence`` are null when no face was visible."""
+
+    label: str | None
+    confidence: float | None
     face_valence: float | None = None
 
 
@@ -394,8 +393,8 @@ class InlineExplanation(_Model):
 
 
 class FaceOnlyBrief(_Model):
-    label: str
-    confidence: float
+    label: str | None  # null when no face was visible
+    confidence: float | None
 
 
 class Prediction(_Model):
