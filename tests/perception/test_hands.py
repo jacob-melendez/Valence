@@ -133,11 +133,11 @@ class TestFistTracker:
         assert ft.person_state(1) == (1, True)
         assert ft.person_state(1) == (0, True)
 
-    def test_both_hands_sum_and_any_active(self) -> None:
+    def test_both_hands_together_are_one_onset(self) -> None:
         ft = FistTracker(factory=legacy_fist)
         clench(ft, 1, "L", 0.0)
         clench(ft, 1, "R", 0.0)
-        assert ft.person_state(1) == (2, True)
+        assert ft.person_state(1) == (1, True)
         for i in range(1, 8):
             ft.update(1, "L", 0.0, 0.4 + i * 0.2)
         assert ft.person_state(1) == (0, True)
@@ -151,16 +151,25 @@ class TestFistTracker:
         assert ft.person_state(2) == (0, False)
         assert ft.person_state(1) == (1, True)
 
-    def test_refractory_is_per_hand(self) -> None:
+    def test_refractory_is_per_person(self) -> None:
         ft = FistTracker(factory=legacy_fist)
-        clench(ft, 1, "L", 0.0)
+        clench(ft, 1, "L", 0.0)  # onset at 0.4
         for i in range(1, 8):
             ft.update(1, "L", 0.0, 0.4 + i * 0.2)
         assert ft.person_state(1) == (1, False)
-        assert clench(ft, 1, "L", 2.0)[-1] is False
+        assert clench(ft, 1, "R", 2.0)[-1] is False  # other hand, but within 3 s of the person's onset
         assert ft.person_state(1) == (0, True)
-        assert clench(ft, 1, "R", 2.0)[-1] is True
+        for i in range(1, 8):
+            ft.update(1, "R", 0.0, 2.4 + i * 0.2)
+        assert clench(ft, 1, "L", 5.0)[-1] is True  # after the refractory
         assert ft.person_state(1) == (1, True)
+
+    def test_second_hand_while_first_clenched_adds_nothing(self) -> None:
+        ft = FistTracker(factory=legacy_fist)
+        clench(ft, 1, "L", 0.0)
+        ft.person_state(1)
+        assert clench(ft, 1, "R", 4.0)[-1] is False  # L still clenched (no low samples fed)
+        assert ft.person_state(1) == (0, True)
 
     def test_mark_unobserved_ends_unseen_fists(self) -> None:
         ft = FistTracker(factory=legacy_fist)

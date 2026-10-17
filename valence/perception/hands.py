@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
 
-from valence.perception.debounce import HysteresisDebouncer, fist_debouncer
+from valence.perception.debounce import TIME_EPS, HysteresisDebouncer, fist_debouncer
 
 SIDES = ("L", "R")
 WRIST = 0
@@ -81,30 +81,39 @@ def is_curl_fist(landmarks: np.ndarray, aspect: float = 9 / 16, min_curled: int 
 class FistTracker:
     """One hysteresis debouncer per (display id, side), reported per person.
 
-    ``person_state`` returns the onsets counted since the previous call for that
-    person (a delta, so callers can sum it into a rolling window) and whether any of
-    their hands is currently clenched.
+    A person's fist onset is a rising edge of "any hand clenched": clenching both fists
+    together is one event (live capture counted 28 onsets for 15 cued two-handed
+    clenches when hands were counted separately), and a second hand closing while the
+    first is still clenched, or within the refractory, adds nothing. ``person_state``
+    returns the onsets since the previous call for that person (a delta, so callers can
+    sum it into a rolling window) and whether any of their hands is clenched.
     """
 
-    __slots__ = ("_factory", "_debouncers", "_pending")
+    __slots__ = ("_factory", "_debouncers", "_pending", "_last_onset")
 
     def __init__(self, factory: Callable[[], HysteresisDebouncer] = fist_debouncer) -> None:
         self._factory = factory
         self._debouncers: dict[HandKey, HysteresisDebouncer] = {}
         self._pending: dict[int, int] = {}
+        self._last_onset: dict[int, float] = {}
 
     def update(self, display_id: int, side: str, score: float, t: float) -> bool:
-        """Feed one ``Closed_Fist`` score for a hand; True iff an onset was counted."""
+        """Feed one ``Closed_Fist`` score for a hand; True iff a person-level onset was counted."""
         if side not in SIDES:
             raise ValueError(f"side must be one of {SIDES}, got {side!r}")
         key = (display_id, side)
         deb = self._debouncers.get(key)
         if deb is None:
             deb = self._debouncers[key] = self._factory()
-        onset = deb.update(score, t)
-        if onset:
-            self._pending[display_id] = self._pending.get(display_id, 0) + 1
-        return onset
+        other = self._debouncers.get((display_id, SIDES[1 - SIDES.index(side)]))
+        other_active = other is not None and other.active
+        if not deb.update(score, t) or other_active:
+            return False
+        if t - self._last_onset.get(display_id, -math.inf) < deb.refractory_s - TIME_EPS:
+            return False
+        self._last_onset[display_id] = t
+        self._pending[display_id] = self._pending.get(display_id, 0) + 1
+        return True
 
     def mark_unobserved(self, t: float, seen: set[HandKey]) -> None:
         """Feed NaN ("not observed") to every known hand not in ``seen`` this tick."""
@@ -124,6 +133,7 @@ class FistTracker:
         for side in SIDES:
             self._debouncers.pop((display_id, side), None)
         self._pending.pop(display_id, None)
+        self._last_onset.pop(display_id, None)
 
     def known(self) -> frozenset[HandKey]:
         """Hands currently being tracked."""
