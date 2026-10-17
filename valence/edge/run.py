@@ -38,9 +38,14 @@ for _k, _v in (("YOLO_OFFLINE", "1"), ("YOLO_AUTOINSTALL", "false"), ("HF_HUB_OF
                ("TRANSFORMERS_OFFLINE", "1")):
     os.environ.setdefault(_k, _v)  # fully offline after the one-time model downloads
 
-# libomp: torch and LightGBM each bring an OpenMP runtime. If LightGBM's loads first, torch's CPU
-# ops segfault (seen in YOLO's conv/bn fusion). Importing torch here, before anything imports
-# lightgbm, plus LightGBM num_threads=1, is stable (docs/BENCHMARKS.md). Import this module first.
+# libomp: torch and LightGBM (Homebrew libomp) each bring an OpenMP runtime. Two runtimes in one
+# process segfault as soon as either runs a multi-threaded region (YOLO's conv/bn fusion, LightGBM
+# parsing a model file). Measured on the demo Mac (docs/BENCHMARKS.md): torch imported first plus
+# OMP_NUM_THREADS=1 is stable; DYLD_LIBRARY_PATH=<torch>/lib at launch is better still (LightGBM then
+# shares torch's runtime). Set before torch/LightGBM initialize OpenMP, i.e. import this module first.
+_omp = os.environ.setdefault("OMP_NUM_THREADS", "1")
+if _omp != "1" and "torch/lib" not in os.environ.get("DYLD_LIBRARY_PATH", ""):
+    logging.getLogger("valence.edge").warning("OMP_NUM_THREADS=%s with torch + LightGBM: expect a segfault", _omp)
 if "lightgbm" in sys.modules and "torch" not in sys.modules:
     logging.getLogger("valence.edge").warning(
         "lightgbm was imported before torch: expect a segfault; import valence.edge.run first")

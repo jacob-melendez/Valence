@@ -9,6 +9,7 @@ Both fail loudly on the symptoms of a denied macOS permission (black frames, exa
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -20,6 +21,7 @@ import sounddevice as sd
 from valence.perception.audio_features import resample_48k_to_16k
 from valence.perception.gate import purge, purge_derived
 
+log = logging.getLogger("valence.edge")
 SR = 16000
 PERMISSION_HINT = ("System Settings -> Privacy & Security -> {what}: enable the app that launched Python "
                    "(Claude / Terminal / iTerm / VS Code), then retry.")
@@ -38,26 +40,48 @@ class CameraCapture:
         self._thread = threading.Thread(target=self._run, name="valence-camera", daemon=True)
 
     def _open(self, index: int | None, width: int, height: int) -> cv2.VideoCapture:
+        tried = []
         for i in [index] if index is not None else [0, 1, 2]:
             cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
             if not cap.isOpened():
+                tried.append(f"{i}: not opened")
                 continue
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            for _ in range(10):  # auto-exposure warm-up: grab only, nothing decoded
-                cap.grab()
-            brightness = 0.0
-            ok, f = cap.retrieve()
+            ok, note = self._warm_up(cap)
+            tried.append(f"{i}: {note}")
             if ok:
-                self.frames_decoded += 1
-                brightness = float(f.mean())
-                purge(f, "video")
-                del f
-            if brightness > 5:
+                log.info("camera %d: %s", i, note)
                 return cap
             cap.release()
-        raise RuntimeError("camera gave no usable frames (black = permission denied). "
+        raise RuntimeError(f"camera gave no usable frames ({'; '.join(tried)}). Black frames mean the "
+                           "permission is denied or the lens is covered/the lid closed. "
                            + PERMISSION_HINT.format(what="Camera"))
+
+    def _warm_up(self, cap: cv2.VideoCapture, max_s: float = 2.0, every: int = 5) -> tuple[bool, str]:
+        """Grab until auto-exposure settles; decode every ``every``-th frame to check it isn't black.
+
+        A cold camera returns black frames for a moment, so one early decode can't tell a
+        denied permission from a sensor still ramping up; give it up to ``max_s``."""
+        t_end, n, failed, brightness = time.monotonic() + max_s, 0, 0, -1.0
+        while time.monotonic() < t_end:
+            if not cap.grab():
+                failed += 1
+                time.sleep(0.02)
+                continue
+            n += 1
+            if n % every:
+                continue
+            ok, f = cap.retrieve()
+            if not ok:
+                continue
+            self.frames_decoded += 1
+            brightness = float(f.mean())
+            purge(f, "video")
+            del f
+            if brightness > 5:
+                break
+        return brightness > 5, f"{n} grabbed, {failed} failed grabs, brightness {brightness:.1f}"
 
     def start(self) -> CameraCapture:
         self._thread.start()

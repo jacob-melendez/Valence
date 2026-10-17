@@ -120,3 +120,19 @@ Asks:
    < 0.3 as low-confidence light.
 4. Re-run `make negative` after the retrain; the keyboard-gaze, slump and audio captures will follow (being re-recorded
    with the fixed slump rule and the Vosk fix).
+
+### Round 3b: live API segfault fixed on the edge side (FYI, no action needed)
+
+`VALENCE_MODE=live uvicorn valence.api.app:app` segfaulted at startup even with torch imported first: LightGBM
+**parsing the model file** (`lgb.Booster(model_file=...)`, `valence/models/served.py:45`) runs a multi-threaded
+OpenMP region, and `params={"num_threads": 1}` does not apply during parsing. Measured (3/3 each): plain -> segfault;
+`params={"num_threads":1}` -> segfault; `OMP_NUM_THREADS=1` -> OK; `DYLD_LIBRARY_PATH=<site-packages>/torch/lib` -> OK
+with a single libomp image in the process (LightGBM then shares torch's runtime). `valence.edge.run` (which the API
+imports first in live mode) now does `os.environ.setdefault("OMP_NUM_THREADS", "1")` before importing torch, so the
+API needs no change; the full app + served model + YOLO-in-a-thread path passes. If you ever need multi-threaded
+LightGBM in the live process, launch with `DYLD_LIBRARY_PATH=$(python -c "import torch,os;print(os.path.dirname(torch.__file__)+'/lib')")`.
+
+Replay-mode note: `/api/replay_recording` shows the recording's `frames_decoded` against `frames_purged = 0`, which
+reads as a governance mismatch on screen; consider hiding the comparison (or labelling it "recorded") in replay.
+Venue note: background people >= 25% of frame height still get predictions; `VALENCE_MIN_BOX_HEIGHT=0.35` keeps only
+people at the desk.
