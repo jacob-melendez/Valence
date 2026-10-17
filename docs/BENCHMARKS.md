@@ -94,3 +94,32 @@ Test: YOLO26n-pose load + 3 MPS inferences + LightGBM `predict(pred_contrib=True
 
 `valence.edge.run` imports torch at module load and warns if lightgbm got there first; the API must import it before
 lightgbm and predict single-threaded (requested in `docs/CONTRACT_REQUESTS.md`).
+
+## Live feature capture (Step 3.5, `scripts/spikes/live_capture.py`)
+
+One person at the desk, built-in camera, features only (`data/real/capture_*.jsonl`, summary in
+`data/real/capture_summary_run1.json`). One edge runner spans the session, so baselines come from the first 25 s.
+10.0 Hz video throughout; every segment 180 s unless noted.
+
+| Segment | Result |
+|---|---|
+| typing (quiet room) | **fist onsets 0.0/min**, slump 0%, head-in-hands 0%, face visible 100%, motion p10/p50/p90 0.014/0.027/0.048 sw/s, 52 dB median |
+| fists (15 cued two-handed clenches, every 12 s) | **recall 15/15, 0 false onsets**; 28 per-hand onsets before onsets became person-level (now 1 per clench) |
+| keyboard gaze (typing while looking down) | old nose-only slump rule: **slumped 93% of the time** (false). Fixed: slump now needs nose < 0.70x **and** ears < 0.93x baseline |
+| covered camera (15 s) | no person tracked, so no face/fist/slump output |
+| slump, audio | redo pending (slump segment had no upright phases; audio exposed the Vosk zeroing bug, fixed in e38f955) |
+
+**Posture probe** (`scripts/spikes/posture_probe.py`, cued upright / keyboard gaze / slump x 3 cycles, ratios of
+head-point height above the shoulder line to the upright baseline, medians):
+
+| | upright | gaze | slump |
+|---|---|---|---|
+| nose | 1.00 | 0.84 | 0.42 |
+| eyes | 1.00 | 0.89 | 0.58 |
+| ears | 1.00 | 0.96 | 0.86 |
+| shoulder line drop (frame heights) | 0.00 | +0.01 | +0.12 |
+
+Head pitch (looking at the keys) swings the nose but barely moves the ears; a slump lowers the whole head. Replaying the
+probe through `PostureTracker` (3 s hold): new rule slump 0.84 / gaze 0.00 / upright 0.00; nose-only 0.95 / 0.00 / 0.00
+on this probe, but nose-only failed on the deeper real typing gaze above. Shoulder drop alone is baseline-sensitive
+(fails when the first upright phase is taken as baseline), so it is not used.
