@@ -7,6 +7,10 @@ to disk:
 * ``valence/edge/``: may write features-only JSONL in text mode, but no binary writes and none of
   the banned calls.
 
+A write that provably carries no media (e.g. validated calibration scalars) can be allowed with an
+explicit comment on the call's line: ``# persistence-ok: <reason>``. Every exception is listed by
+``--exceptions`` so reviewers can audit them.
+
 Run ``python -m valence.governance.persistence_scan`` to print violations (exit code 1 if any).
 """
 
@@ -36,6 +40,7 @@ BANNED_MODULE_CALLS = {
     ("scipy.io.wavfile", "write"),
     ("wavfile", "write"),
 }
+PRAGMA = "# persistence-ok:"
 STRICT_DIRS = ("valence/perception",)
 TEXT_WRITES_OK_DIRS = ("valence/edge",)
 
@@ -70,10 +75,16 @@ def _open_mode(call: ast.Call) -> str | None:
     return None  # dynamic mode: treat as a write
 
 
+def exceptions_in(source: str, path: str) -> list[Violation]:
+    return [Violation(path, i, line.split(PRAGMA, 1)[1].strip() or "(no reason given)")
+            for i, line in enumerate(source.splitlines(), start=1) if PRAGMA in line]
+
+
 def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violation]:
     out: list[Violation] = []
+    allowed = {v.line for v in exceptions_in(source, path) if v.reason != "(no reason given)"}
     for node in ast.walk(ast.parse(source, filename=path)):
-        if not isinstance(node, ast.Call):
+        if not isinstance(node, ast.Call) or node.lineno in allowed:
             continue
         func = node.func
         name = _dotted(func)
@@ -98,23 +109,36 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
     return out
 
 
+def _sources(root: Path):
+    for rel_dir, allow_text in [(d, False) for d in STRICT_DIRS] + [(d, True) for d in TEXT_WRITES_OK_DIRS]:
+        base = root / rel_dir
+        if base.exists():
+            for py in sorted(base.rglob("*.py")):
+                if ".venv" not in py.parts:
+                    yield py, allow_text
+
+
+def list_exceptions(root: str | Path = ".") -> list[Violation]:
+    root = Path(root)
+    return [v for py, _ in _sources(root) for v in exceptions_in(py.read_text(encoding="utf-8"), str(py.relative_to(root)))]
+
+
 def scan_repo(root: str | Path = ".") -> list[Violation]:
     root = Path(root)
     found: list[Violation] = []
-    for rel_dir, allow_text in [(d, False) for d in STRICT_DIRS] + [(d, True) for d in TEXT_WRITES_OK_DIRS]:
-        base = root / rel_dir
-        if not base.exists():
-            continue
-        for py in sorted(base.rglob("*.py")):
-            if ".venv" in py.parts:
-                continue
-            found.extend(scan_source(py.read_text(encoding="utf-8"), str(py.relative_to(root)), allow_text))
+    for py, allow_text in _sources(root):
+        found.extend(scan_source(py.read_text(encoding="utf-8"), str(py.relative_to(root)), allow_text))
     return found
 
 
 if __name__ == "__main__":
-    violations = scan_repo(sys.argv[1] if len(sys.argv) > 1 else ".")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    root = args[0] if args else "."
+    if "--exceptions" in sys.argv:
+        for v in list_exceptions(root):
+            print(f"{v.path}:{v.line}: allowed: {v.reason}")
+    violations = scan_repo(root)
     for v in violations:
         print(v)
-    print(f"{len(violations)} violation(s)")
+    print(f"{len(violations)} violation(s), {len(list_exceptions(root))} documented exception(s)")
     sys.exit(1 if violations else 0)

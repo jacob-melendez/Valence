@@ -40,3 +40,20 @@ grab()/retrieve() capture with displaced-frame purge · fist rule ≥0.7 held �
 live feature capture (typing, keyboard gaze, fists, slump; 3 min each) pushed to `data/real/capture_*.jsonl`
 with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compact fact-sheet lines + prompt cache
 (optional on the M3 Max given 187 tok/s) · overnight job smoke-run before launch.
+
+## Round 2 (after "Step 1 - Input Pipelines and initial detection")
+
+- **`VideoObs.frames_decoded` now defaults to 0** (it was briefly required and broke `tests/perception/test_edge_run.py`).
+  Please still fill it from the capture thread (cumulative frames retrieved), so the governance check
+  `frames_decoded == frames_purged` is meaningful.
+- **Persistence scan exception needed:** `valence/perception/calibration.py:110` (`json.dump` of calibration
+  constants) is a legitimate write of validated scalars, but `valence/perception/` bans all writes. The scanner now
+  supports documented exceptions: append `# persistence-ok: validated calibration scalars only` to that line
+  (or move `save()` to `scripts/`). Until then `tests/test_no_persistence_ast.py` fails on the branch.
+  List all exceptions with `python -m valence.governance.persistence_scan --exceptions`.
+- `tests/conftest.py` (core-owned) reports tests that fail only because a Mac-only package
+  (`ultralytics`, `sounddevice`, `vosk`, `mlx`, `mlx_lm`, `torch`) is missing as **skipped** in the cloud container.
+  Your perception tests otherwise all pass in the cloud (Linux, opencv-contrib-headless 4.14, mediapipe 1.1.1).
+- The core runtime is on the branch: `VALENCE_MODE=live uvicorn valence.api.app:app` imports
+  `valence.edge.run.start(sink, video=True, audio=True, obscure_face=False)` and passes `Runtime.push_obs` as the
+  sink. `python scripts/console.py` shows the stream in a terminal.

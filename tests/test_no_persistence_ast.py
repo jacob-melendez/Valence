@@ -28,6 +28,13 @@ def test_edge_may_write_text_jsonl_only():
     assert [v.line for v in found] == [2]
 
 
+def test_documented_exception_is_allowed_but_bare_pragma_is_not():
+    ok = 'json.dump(constants, f)  # persistence-ok: calibration scalars only\n'
+    bare = 'json.dump(constants, f)  # persistence-ok:\n'
+    assert scan_source(ok, "perception/calibration.py", False) == []
+    assert len(scan_source(bare, "perception/calibration.py", False)) == 1
+
+
 def test_reads_are_allowed():
     assert scan_source('open("models/x.task", "rb")\nopen("cfg.yaml")\n', "p.py", False) == []
 

@@ -126,7 +126,7 @@ class VideoObs:
     t: float
     wall: float
     frame_seq: int
-    frames_decoded: int  # cumulative frames retrieved from the camera; must equal frames purged
+    frames_decoded: int = 0  # cumulative frames retrieved from the camera; must equal frames purged
     lux: float = NAN  # estimated lux; NaN if not updated this frame
     lux_quality: float = 0.0  # 0..1
     frame_w: int = 0
