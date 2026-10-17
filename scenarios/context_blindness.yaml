@@ -1,0 +1,11 @@
+description: Same head-in-hands pose in two contexts - laughter and compliments (amused) versus silence after five hours (exhausted). Context, not the pose, decides.
+seed: 105
+people: 2
+start_hour: 20.0
+start_hours_since_break: [0.5, 0.5]
+lux_base: 380
+face_hidden: 0.05
+segments:
+  - {minutes: 6, state: Collaborative_Happy, overrides: {hih_p: 0.8}}
+  - {minutes: 6, states: [null, null]}
+  - {minutes: 8, state: Exhausted, overrides: {hih_p: 0.8}}

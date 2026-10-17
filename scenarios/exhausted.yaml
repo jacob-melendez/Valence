@@ -1,0 +1,9 @@
+description: Late-night exhaustion - silent dim room, slumped and withdrawn, over five hours without a break.
+seed: 103
+people: 1
+start_hour: 2.0
+start_hours_since_break: 5.2
+lux_base: 140
+face_hidden: 0.15
+segments:
+  - {minutes: 12, state: Exhausted}

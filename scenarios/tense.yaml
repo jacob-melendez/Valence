@@ -1,0 +1,9 @@
+description: (P1 state) Visible frustration - negative face, clenched fists and a loud room; here face and context agree.
+seed: 108
+people: 2
+start_hour: 17.0
+start_hours_since_break: 2.5
+lux_base: 330
+segments:
+  - {minutes: 3, state: Focused}
+  - {minutes: 10, state: Tense}
