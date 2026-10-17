@@ -265,7 +265,7 @@ class Runtime:
             if now - self._last_tracks >= 0.1:
                 self._last_tracks = now
                 self.bus.publish(Tracks(
-                    t=obs.t, capture_ts_ms=int(obs.wall * 1000), frame_w=obs.frame_w, frame_h=obs.frame_h,
+                    t=obs.wall, capture_ts_ms=int(obs.wall * 1000), frame_w=obs.frame_w, frame_h=obs.frame_h,
                     mirrored=obs.mirrored,
                     persons=[TrackPerson(id=p.track_id, label=f"Person #{p.track_id}", bbox=p.bbox,
                                          fist_active=p.fist_active, slump=p.slump) for p in obs.persons],

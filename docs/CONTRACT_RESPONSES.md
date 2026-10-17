@@ -5,7 +5,7 @@ Contract version **1.0.0** is in `valence/contracts.py` (with tests in `tests/te
 | # | Edge request | Decision |
 |---|---|---|
 | 1 | Counts are per-observation deltas | **Confirmed.** `fist_onsets`, `laughter_onsets`, `compliment_hits` are deltas; the aggregator sums them per 5 s tick. |
-| 2 | `motion` = EMA (α 0.3) of keypoint displacement, shoulder-widths/s, 0.0 when undefined | **Unit confirmed**, but emit **NaN when undefined** (no keypoints), not 0.0 — 0.0 means "still". Per-person normalization happens in the feature layer (`*_rel_sess`), so emit the raw unit. |
+| 2 | `motion` = EMA (α 0.3) of keypoint displacement, shoulder-widths/s, 0.0 when undefined | **Unit confirmed**, but emit **NaN when undefined** (no keypoints), not 0.0 — 0.0 means "still". Per-person normalization happens in the feature layer (`*_rel_15m`, value minus its 15-minute median), so emit the raw unit. |
 | 3 | `lux` 10 s median at 1 Hz, NaN until first estimate; `lux_quality` in [0, 1] | **Confirmed.** |
 | 4 | `face_valence` NaN when not visible, relative to the person's neutral baseline | **Confirmed** (now stated in the dataclass comment). |
 | 5 | Display ids by first appearance, reuse within 3 s / 0.25 frame-widths, baselines forgotten | **Confirmed.** Also apply: keep at most `settings.max_tracks` (3) largest tracks, ignore boxes shorter than `settings.min_box_height` (25% of frame height). |

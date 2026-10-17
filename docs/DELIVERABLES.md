@@ -190,12 +190,15 @@ next push.
 - [x] **Served predictor** (M2 with M0 in shadow, clipping + `ood_features`, `pred_contrib` layers, raw
   mask-override condition): P0 · CLOUD · S4 · `valence/models/served.py`
 - [x] **MaskOverrideDetector**: P0 · CLOUD · S3 · `valence/models/served.py` (condition) +
-  `valence/models/predictor.py` (hysteresis) · The hysteresis is now "on at ≥ 3 of the last 6 face-visible
-  ticks, off at ≤ 1"; PLAN.md says "3 consecutive ticks". Align the docs.
+  `valence/models/predictor.py` (hysteresis) · The implemented rule differs from PLAN.md: M0 ≥ 0.45 (plan
+  0.55), M0 must read `Collaborative_Happy` while M2 does not, and "on at ≥ 3 of the last 6 face-visible
+  ticks, off at ≤ 1" (plan: 3 consecutive). PRD §2.8, ARCHITECTURE §9.4 and API §3.7 now state both rules;
+  choosing the final one is open.
 - [x] **Counterfactual** (re-run M2 with one feature changed) and
   `GET /api/explain/{event_id}/counterfactual`: P1 · CLOUD · S4 · `valence/models/served.py` (the plan named
   `counterfactual.py`), `valence/api/app.py`
-- [ ] **M3 GRU(64) + attention benchmark**: P1 · CLOUD · H12:30–15:30 · `valence/models/temporal.py`
+- [ ] **M3 GRU(64) + attention benchmark**: P1 · CLOUD · H12:30–15:30 · `valence/models/temporal.py` · the
+  file appeared (uncommitted) after the snapshot; no results yet.
 - [x] **Feature descriptions** (display, unit, `level`, `scope`), layer builder, FactSheet builder: P0 ·
   CLOUD · S4 · `valence/explain/describe.py`, `valence/explain/explainer.py`
 - [x] **Instant template text**: P0 · CLOUD · S4 · `valence/explain/template.py`
@@ -282,8 +285,8 @@ next push.
 - [x] **Evaluation figures, v1**: P0 · CLOUD · H7:00–8:00 · `reports/figs/` · **uncommitted** · details in
   C2/C3.
 - [ ] **Frozen feature order as its own file**: P0 · CLOUD · S3 · `artifacts/feature_spec.json` · The order
-  is currently stored as `feature_names` in `model_meta.json`. Either write the file or change the
-  references to it in ARCHITECTURE/API.
+  is currently stored as `feature_names` in `model_meta.json` (114 features). PRD, ARCHITECTURE and API now
+  point to `model_meta.json` and note the gap; write the file or update PLAN.md.
 - [ ] **Simulator datasets, split by session**: P0 · CLOUD · H5:15–6:00 · `data/sim/` (gitignored by design)
   · Today the trainer regenerates sessions in memory from `seed` + `sessions`, and `evaluate.py` rebuilds
   the held-out split the same way. No dataset or split manifest is on disk (*proposed*:

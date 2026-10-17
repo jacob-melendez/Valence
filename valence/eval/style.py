@@ -36,6 +36,7 @@ NAMES = {
     "m3": "M3 GRU sequence (benchmark)",
 }
 ORDER = ["m2", "m2_noface", "m3", "m1", "m0t", "m0"]
+SHORT = {"m2": "M2", "m2_noface": "M2 no face", "m3": "M3", "m1": "M1", "m0t": "M0t", "m0": "M0"}
 
 
 def _axes(title: str, subtitle: str, size=(8.0, 4.6)):
@@ -100,13 +101,14 @@ def history_chart(curves: dict[str, list], path: Path) -> None:
         _line(ax, xs, ys, key, lo=[p[2] for p in pts], hi=[p[3] for p in pts])
         ends[key] = ys[-1]
     for key, y in _spread_labels(ends, 0.035).items():
-        ax.annotate(f"{NAMES[key].split(' ')[0]}  {ends[key]:.2f}", (15, y), xytext=(12, 0),
+        ax.annotate(f"{SHORT[key]}  {ends[key]:.2f}", (15, y), xytext=(12, 0),
                     textcoords="offset points", va="center", fontsize=8.5, color=TEXT, annotation_clip=False)
     ax.set_xticks(list(sorted({p[0] for pts in curves.values() for p in pts})))
     ax.set_xlabel("minutes of history in the rolling window", color=TEXT_2, fontsize=9)
     ax.set_ylabel("macro-F1", color=TEXT_2, fontsize=9)
     ax.set_ylim(0, 1)
-    ax.axhline(1 / 4 if len(curves) else 0, color=TEXT_2, linewidth=1, alpha=0.35)
+    ax.axhline(0.25, color=TEXT_2, linewidth=1, alpha=0.35)
+    ax.annotate("chance (4 states)", (0, 0.25), xytext=(2, 4), textcoords="offset points", fontsize=8, color=TEXT_2)
     _finish(fig, ax, path)
 
 
@@ -127,7 +129,7 @@ def robustness_chart(series: dict[str, list], kind: str, path: Path) -> None:
         _line(ax, xs, ys, key)
         ends[key] = (xs[-1], ys[-1])
     for key, y in _spread_labels({k: v[1] for k, v in ends.items()}, 0.035).items():
-        ax.annotate(f"{NAMES[key].split(' ')[0]}  {ends[key][1]:.2f}", (ends[key][0], y), xytext=(12, 0),
+        ax.annotate(f"{SHORT[key]}  {ends[key][1]:.2f}", (ends[key][0], y), xytext=(12, 0),
                     textcoords="offset points", va="center", fontsize=8.5, color=TEXT, annotation_clip=False)
     if kind == "low_light":
         ax.invert_xaxis()

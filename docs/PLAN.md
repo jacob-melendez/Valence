@@ -331,3 +331,21 @@ cloud container is Python 3.13 x86: write 3.12-compatible code; Mac-only deps in
    (LoRA `--iters 10`, A/B on 5 sheets), then launch `scripts/overnight.sh` with `set -uo pipefail`,
    independent jobs and one status file per job, under `caffeinate -dims`, plugged in.
 10. After sleep: no new code — triage, flip the narrator ship flag, run a 60-min soak, rehearse.
+
+
+## Build-time decisions (recorded after approval)
+
+Changes made while building, with the reason. The rest of this plan is unchanged.
+
+| Area | Plan said | Built / decided | Why |
+|---|---|---|---|
+| Mask override | M0 conf >= .55, any M0/M2 disagreement, 3 consecutive ticks | M0 reads Collaborative_Happy (positive face) while M2 reads a non-positive state; M0 conf >= .45; M2 conf >= .70; face SHAP for M0's class positive; on at >= 3 of the last 6 face-visible ticks, off at <= 1; a tick without a face holds; reset when the shown label changes | "Mask" means a positive-looking face over a non-positive state; a flat face read as Focused under Exhausted context is a face-only error, not a mask. Strict 3-in-a-row flickered on every face dropout. |
+| Features | ~110, `S_rel_sess` | 114 (adds `E_cnt_now`, `face_visible_now`), `S_rel_15m` = now minus 15-min median | Keeps the feature function pure (window-only) so train/live parity is exact. |
+| Feature spec file | `artifacts/feature_spec.json` | order, sets and temperatures in `artifacts/model_meta.json` | One metadata file per trained ladder. |
+| Break clock | room-level | per person, presence-based (absence >= `break_absent_min`) | Matches the edge's per-person tracking; a judge who sits down starts at 0 h. |
+| Withdrawal | slump + low motion + turned away | slump >= 60% of the tick and motion <= 0.06 sw/s (`valence/features/spec.py`), same rule in sim and live | Turned-away needs keypoints, which never leave perception. |
+| YAMNet | AUDIO_CLIPS | AUDIO_CLIPS (edge implemented after first benchmarking AUDIO_STREAM) | Deterministic attribution of laughter to its audio step. |
+| libomp | `OMP_NUM_THREADS=2` fallback | torch imported before LightGBM in live mode; LightGBM `num_threads=1`; never set `OMP_NUM_THREADS` | Measured segfaults on the demo Mac (CONTRACT_REQUESTS round 2). |
+| M3 | cloud CPU, P1 | cloud CPU (torch from PyPI; the PyTorch index is blocked by the network policy) | Benchmark only; M2 stays served. |
+| Simulator breaks | 1/90 min, 5-15 min | 1/120 min, 10-20 min | Long stretches without a break must occur for the fatigue logistic to matter; breaks shorter than the live 10-min rule would reset the clock in sim but not live. |
+| Difficulty | tune `noise_scale` to M2 <= .92 | `noise_scale` = 1.0, untuned (M2 macro-F1 0.82 is already under the ceiling) | Anti-circularity: the headline numbers were not tuned toward. |

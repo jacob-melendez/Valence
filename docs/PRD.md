@@ -325,6 +325,11 @@ so the no-face model will confuse that pair; we report it as "the face is inform
 | Length | 20–90 words |
 | Cache | Cached text is re-validated against the current FactSheet |
 
+The draft narrator (`valence/narrator/`, Stage A) implements the number, state, driver, mask, banned-term
+and length checks; the qualifier, room-scope and cached-text checks are still open (`docs/DELIVERABLES.md`
+A8). It also differs in two parameters: up to 3 attempts (temperature 0.7, 0.4, then greedy) instead of one
+retry, and `max_tokens` 110 instead of 90.
+
 The result arrives as an `explanation` message with the same `event_id` and `source` = `llm`,
 `llm_retry` or `template`.
 

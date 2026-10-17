@@ -311,7 +311,10 @@ def counterfactual(event_id: str, feature: str, value: float) -> dict[str, Any]:
     person = a.runtime.window.snapshot(pid)
     if not person:
         raise HTTPException(404, "person not in the window")
-    return fn(person, a.runtime.window.room(), feature, value)
+    try:
+        return fn(person, a.runtime.window.room(), feature, value)
+    except KeyError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 # --- control endpoints ------------------------------------------------------------------------------
