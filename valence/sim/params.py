@@ -21,7 +21,7 @@ class StateParams:
     slump_p: float  # long-run share of time slumped
     hih_p: float  # long-run share of time with head in hands
     motion: float  # typical motion, shoulder-widths/s
-    face_hidden_extra: float = 0.0  # extra probability the face is unreadable (hands over face)
+    face_hidden_extra: float = 0.0  # > 0: each episode draws its own face-hidden share U(0.4, 0.7) (hands over face)
     mask_p: float = 0.0  # probability an episode wears a forced smile instead of its true face
     mask_mu: float = 0.45  # valence of the forced smile
     group_affinity: float = 1.0  # transition weight multiplier when 2+ people are present
@@ -93,7 +93,7 @@ class Nuisance:
     room_tau_min: tuple[float, float] = (2.0, 4.0)  # room dB lag behind occupants' states
     person_tau_min: tuple[float, float] = (1.0, 2.0)  # behavior lag behind a new state
     break_per_min: float = 1 / 120
-    break_len_min: tuple[float, float] = (5.0, 15.0)
+    break_len_min: tuple[float, float] = (10.0, 20.0)
     session_min: tuple[float, float] = (60.0, 120.0)
     start_hour: tuple[float, float] = (9.0, 23.0)
     start_hours_since_break: tuple[float, float] = (0.0, 5.0)

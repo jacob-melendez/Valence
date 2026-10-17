@@ -86,6 +86,7 @@ class _Person:
         self.slump_on = 0
         self.hih_on = 0
         self.burst = 1.0
+        self.episode_hidden: float | None = None
 
     # --- hidden state -------------------------------------------------------------------------
     def _fatigue(self) -> float:
@@ -118,6 +119,7 @@ class _Person:
         self.episode_age = 0
         mu = p.mask_mu if self.rng.random() < p.mask_p else p.face_mu
         self.episode_face = float(self.rng.normal(mu, self.nz.face_episode_sd))
+        self.episode_hidden = float(self.rng.uniform(0.4, 0.7)) if p.face_hidden_extra > 0 else None
 
     def step_markov(self) -> None:
         """Advance the semi-Markov process by one tick (training corpus)."""
@@ -262,7 +264,7 @@ def simulate_session(
         for person, b in zip(present, behaviors):
             pp = person.params
             video_ok = rng.random() >= nz.dropout
-            person.burst = (2.5 if person.burst < 1 else 0.3) if rng.random() < 0.1 else person.burst
+            person.burst = (1.7 if person.burst < 1 else 0.3) if rng.random() < 0.1 else person.burst  # mean x1.0
             fists = int(rng.poisson((b["fist_rate"] * person.burst + FP["fist_per_min"]) / TICKS_PER_MIN))
             person.slump_on = _two_state(rng, person.slump_on, b["slump_p"] + FP["slump_share"])
             # People cover their faces when they laugh: laughter in the room pulls head-in-hands up.
@@ -271,7 +273,10 @@ def simulate_session(
             slump = person.slump_on * rng.uniform(0.7, 1.0) + (1 - person.slump_on) * rng.uniform(0.0, 0.15)
             hih = person.hih_on * rng.uniform(0.5, 1.0)
             motion = b["motion"] * float(np.exp(rng.normal(0.0, 0.4 * ns))) * (0.7 if person.slump_on else 1.0)
-            hidden = min(0.98, face_hidden + pp.face_hidden_extra + 0.6 * hih)
+            if person.episode_hidden is not None:  # the episode's share already is "hands over the face"
+                hidden = person.episode_hidden
+            else:
+                hidden = min(0.98, face_hidden + 0.3 * hih)
             face_ok = video_ok and rng.random() >= hidden
             if face_ok:
                 low_light = max(0.0, (nz.low_light_lux - lux) / nz.low_light_lux) * 0.35

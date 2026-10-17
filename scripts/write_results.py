@@ -91,7 +91,11 @@ def main() -> None:
     if "m3" in m["models"]:
         out += ["", f"M3 (GRU + attention over raw ticks, trained on {m['models']['m3'].get('device', '?')}): macro-F1 "
                 f"{m['models']['m3']['macro_f1_mixed_history']:.3f} on mixed-history test windows. Benchmark only; M2 is served "
-                "because its TreeSHAP attributions drive the explanations.", "",
+                "because its TreeSHAP attributions drive the explanations."
+                + (" Its curve peaks before the full window and then drops, which suggests it is under-trained on long "
+                   "sequences within the training budget; treat it as a lower bound." if m["accuracy_vs_history"].get("m3")
+                   and m["accuracy_vs_history"]["m3"][-1]["macro_f1"] < max(p["macro_f1"] for p in m["accuracy_vs_history"]["m3"]) - 0.03
+                   else ""), "",
                 "![Which minutes mattered](../reports/figs/m3_attention.png)"]
     age = m.get("accuracy_by_episode_age", [])
     if age:
