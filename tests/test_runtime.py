@@ -128,3 +128,22 @@ def test_recording_replay_offline(tmp_path, runtime):
     preds = [m for m in replay_offline(runtime, path) if m["type"] == "prediction"]
     assert 11 <= len(preds) <= 13  # one per 5 s tick
     assert all(m["person_id"] == 1 for m in preds)
+
+
+def test_override_resets_when_label_changes():
+    from valence.models.predictor import PersonSmoother, PredictionOutput
+
+    states = ("Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy")
+    sm = PersonSmoother(states, override_block_s=0)
+
+    def out(label, override):
+        probs = {s: (0.85 if s == label else 0.05) for s in states}
+        return PredictionOutput(label=label, confidence=0.85, probabilities=probs, face_only_label=None,
+                                face_only_confidence=None, layers=[], raw_override=override)
+
+    for _ in range(4):
+        r = sm.update(out("Frustrated_Masked", True), 100)
+    assert r.mask_override
+    for _ in range(4):  # face hidden (None) and the label moves on: the override must not follow it
+        r = sm.update(out("Collaborative_Happy", None), 100)
+    assert r.label == "Collaborative_Happy" and not r.mask_override

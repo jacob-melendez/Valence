@@ -76,6 +76,8 @@ class PersonSmoother:
             self.candidate = top
             if self.candidate_n >= self.hold:
                 self.label, self.candidate, self.candidate_n = top, None, 0
+                self.override_hist.clear()  # an override belongs to the label it was raised for
+                self.override_on = False
         else:
             self.candidate, self.candidate_n = None, 0
         # Override hysteresis: on when the condition held on >= 3 of the last 6 face-visible ticks, off at <= 1.

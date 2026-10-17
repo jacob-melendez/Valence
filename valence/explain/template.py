@@ -37,7 +37,7 @@ def template_text(sheet: FactSheet) -> str:
     context_layers = [layer for layer in sheet.layers if layer.name != "Facial Surface"]
     drivers = top_drivers(context_layers if sheet.mask_override or not sheet.face_visible else sheet.layers, k=3)
     evidence = _join([d.display for d in drivers])
-    if sheet.mask_override and sheet.face_only.label:
+    if sheet.mask_override and sheet.face_only.label == "Collaborative_Happy":
         face_name = STATE_DISPLAY.get(sheet.face_only.label, sheet.face_only.label)
         body = (f"The face alone suggests {face_name}, but {evidence} point the other way. "
                 "Context corrected the facial mask.")
