@@ -38,3 +38,51 @@ If `purge.py` exposes a different name (e.g. a module-level `purge()`), tell me 
   sample images; reads are not writes, please don't flag them.
 - **FactSheet with a hidden face**: the narrator accepts `face_only.label: null` and `face_only.face_valence: null`
   when `face_visible` is false. If the core uses a different marker (e.g. `"Unknown"`), tell me.
+
+## Round 2 (after contract 1.0.0)
+
+Everything in CONTRACT_RESPONSES.md is adopted on the edge side (frames_decoded via grab()/retrieve(),
+frame_w/frame_h/mirrored=False, <=3 largest tracks >=25% height from `settings`, contract `obs_to_dict` in the
+recorder, YAMNet AUDIO_CLIPS synchronous on the block's last 0.975 s, `note_transcript_purged()` per Vosk result).
+
+### 1. libomp: torch + LightGBM in one process (live mode) — please act on this
+
+Measured on the M3 Max (torch 2.14.1 bundles its own libomp; LightGBM 4.7.0 needs Homebrew `libomp`):
+
+| setup (one process: YOLO on MPS + LightGBM predict/pred_contrib) | result |
+|---|---|
+| `import torch` first, LightGBM `num_threads=1` (or 0) | OK (5/5) |
+| torch first + `KMP_DUPLICATE_LIB_OK=TRUE` only | OK |
+| torch first + `OMP_NUM_THREADS=2` (the `.env.example` suggestion) | **segfault** |
+| torch first, LightGBM default threads (None / -1 / 4) | **segfault** |
+| **`import lightgbm` before torch** (any setting) | **segfault** (torch conv/bn fusion in YOLO load) |
+
+Asks: (a) in live mode import `valence.edge.run` (it imports torch at module load) **before** anything imports
+lightgbm, e.g. at the top of `valence/api/app.py` when `settings.mode == "live"`; (b) predict with
+`num_threads=1` (pred_contrib on one row is <5 ms anyway); (c) drop `OMP_NUM_THREADS=2` from `.env.example`.
+`valence.edge.run` logs a warning if it sees lightgbm already imported without torch.
+Mac setup needs `brew install libomp` (LightGBM won't load without it); added to the Mac install notes.
+
+### 2. Derived-buffer purge kinds
+
+`frames_decoded == purged["video"]` only holds if just the decoded camera frames are purged as `"video"`.
+Perception also purges copies it derives from a frame (RGB conversion, head crops, grayscale for lux) and from
+audio (1 s concatenation, int16 PCM for Vosk, YAMNet clip). Please add `"video_derived"` and `"audio_derived"`
+to `KINDS` (counted separately, same zero + weakref tracking). `valence/perception/gate.py:purge_derived`
+already uses them when present and falls back to `"video"`/`"audio"` until then (so until then
+purged["video"] > frames_decoded).
+
+Also: `VideoObs.frames_decoded` is the capture's count when that frame was handed to perception; the capture
+thread may have decoded (and purged as displaced) 1-2 more by the time you compare, so compare with a
+tolerance of the in-flight slot (<= 2) or compare at stop.
+
+### 3. `motion` NaN
+
+Will emit NaN when undefined (after the posture module review lands).
+
+### 4. URGENT: `.gitignore` `models/` hides `valence/models/`
+
+The pattern `models/` matches every directory named `models`, so `valence/models/` (predictor) was never
+committed: on a fresh checkout `tests/test_runtime.py`, `tests/test_api.py` and `valence/api/app.py` fail with
+`ModuleNotFoundError: valence.models`. Please change it to `/models/` (and `/adapters/`), then `git add
+valence/models` and push. (Same fix applied to the Mac's local exclude.)

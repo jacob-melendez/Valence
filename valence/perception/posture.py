@@ -121,7 +121,7 @@ class PostureTracker:
         return PostureState(
             slump=slump,
             head_in_hands=hih,
-            motion=0.0 if math.isnan(self._motion) else self._motion,
+            motion=self._motion,
             head_drop=self._head_drop,
             calibrated=self._baseline is not None,
         )

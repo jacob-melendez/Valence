@@ -1,27 +1,34 @@
-"""Single import point for the biometric purge gate.
+"""Single import point for the biometric purge gate (``valence/governance/purge.py``).
 
-The gate itself lives in ``valence/governance/purge.py`` (owned by the core session):
-``purge(buf, kind)`` zero-fills the buffer in place, registers a weakref finalizer and
-counts the purge. Everything in perception/edge calls ``purge`` from here right after
-feature extraction, then ``del``s its own references.
+``purge(buf, kind)`` zero-fills the buffer in place and tracks it with a weakref until it is
+freed; a buffer still alive at the end of a tick is a PURGE_VIOLATION. Perception calls it right
+after feature extraction, then ``del``s its own references.
+
+Two flavours, so the governance counters stay meaningful:
+
+- ``purge(buf, kind)``: a raw capture buffer (a decoded camera frame, a mic callback block).
+  ``frames_decoded == purged["video"]`` holds because only decoded frames are purged this way.
+- ``purge_derived(buf, kind)``: a copy derived from raw media inside perception (RGB conversion,
+  head crop, grayscale, concatenated or int16 audio). Zeroed and tracked the same way, counted
+  under ``<kind>_derived`` when the gate supports that kind.
 """
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 
-try:
-    from valence.governance.purge import gate as _gate
+from valence.governance.purge import KINDS, gate
 
-    def purge(buf: np.ndarray, kind: str) -> None:
-        _gate.purge(buf, kind)
 
-    GATE_AVAILABLE = True
-except ImportError:  # governance module not pulled yet: still zero-fill, but say so loudly
-    GATE_AVAILABLE = False
-    print("[GOVERNANCE] valence.governance.purge missing; using zero-fill fallback", file=sys.stderr)
+def purge(buf: np.ndarray, kind: str) -> None:
+    gate.purge(buf, kind)
 
-    def purge(buf: np.ndarray, kind: str) -> None:
-        buf.fill(0)
+
+def purge_derived(buf: np.ndarray, kind: str) -> None:
+    derived = f"{kind}_derived"
+    gate.purge(buf, derived if derived in KINDS else kind)
+
+
+def note_transcript_purged(n: int = 1) -> None:
+    """Recognizer result strings discarded inside perception (str cannot be zeroed)."""
+    gate.note_transcript_purged(n)

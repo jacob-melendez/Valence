@@ -19,7 +19,8 @@ def _person(**kw):
 
 
 def _video():
-    return contracts.VideoObs(t=1.0, wall=2.0, frame_seq=7, lux=312.5, lux_quality=0.6, persons=(_person(),))
+    return contracts.VideoObs(t=1.0, wall=2.0, frame_seq=7, frames_decoded=7, lux=312.5, lux_quality=0.6,
+                              frame_w=1280, frame_h=720, persons=(_person(),))
 
 
 def _audio():
@@ -30,7 +31,7 @@ def _audio():
 def test_obs_to_dict_is_json_safe_and_typed():
     v = obs_to_dict(_video())
     assert v["type"] == "video" and v["persons"][0]["face_valence"] is None
-    assert v["persons"][0]["bbox"] == [0.1, 0.2, 0.5, 0.9]
+    assert list(v["persons"][0]["bbox"]) == [0.1, 0.2, 0.5, 0.9]
     a = obs_to_dict(_audio())
     assert a["type"] == "audio" and a["rms_power"] == pytest.approx(1.23456789e-5, rel=1e-6)
     json.dumps(v, allow_nan=False)

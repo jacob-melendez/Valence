@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 import cv2  # noqa: E402
 
+from valence.edge import calibration_store  # noqa: E402
 from valence.perception import calibration  # noqa: E402
 from valence.perception.gate import purge  # noqa: E402
 from valence.perception.lux import LuxModel, background_stats  # noqa: E402
@@ -152,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"cannot fit: {e}") from None
     report(model, readings)
     if args.yes or input(f"\nsave to {calibration.CALIBRATION_PATH}? [Y/n] ").strip().lower() in {"", "y", "yes"}:
-        calibration.save({"lux": model.to_dict()})
+        calibration_store.save({"lux": model.to_dict()})
         print("saved")
     else:
         print("not saved")

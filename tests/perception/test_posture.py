@@ -210,8 +210,8 @@ class TestMotion:
     def test_still_is_zero(self) -> None:
         tracker = PostureTracker()
         states = run(tracker, 0.0, 2.0)
-        assert states[0][1].motion == 0.0
-        assert all(s.motion == pytest.approx(0.0) for _, s in states)
+        assert math.isnan(states[0][1].motion)  # no previous sample yet: undefined, not "still"
+        assert all(s.motion == pytest.approx(0.0) for _, s in states[1:])
 
     @pytest.mark.parametrize("hz", [5.0, 10.0, 30.0])
     def test_units_are_shoulder_widths_per_second(self, hz: float) -> None:
@@ -238,12 +238,13 @@ class TestMotion:
         state = tracker.update(*pose(wrists=((900.0, 100.0), (500.0, 600.0))), 0.1)
         assert state.motion == pytest.approx(0.0)
 
-    def test_undefined_cases_report_zero(self) -> None:
+    def test_undefined_cases_report_nan(self) -> None:
+        """Contract: NaN when undefined, because 0.0 means "still"."""
         tracker = PostureTracker()
         xy, conf = pose()
-        assert tracker.update(xy, np.zeros(17), 0.0).motion == 0.0
-        assert tracker.update(xy, conf, 0.0).motion == 0.0
-        assert tracker.update(xy + 50, conf, 0.0).motion == 0.0
+        assert math.isnan(tracker.update(xy, np.zeros(17), 0.0).motion)
+        assert math.isnan(tracker.update(xy, conf, 0.0).motion)
+        assert math.isnan(tracker.update(xy + 50, conf, 0.0).motion)
 
 
 class TestStateAndValidation:
@@ -259,7 +260,8 @@ class TestStateAndValidation:
     def test_nothing_seen_yet(self) -> None:
         state = PostureTracker().update(np.zeros((17, 2)), np.zeros(17), 0.0)
         assert isinstance(state, PostureState)
-        assert (state.slump, state.head_in_hands, state.motion, state.calibrated) == (False, False, 0.0, False)
+        assert (state.slump, state.head_in_hands, state.calibrated) == (False, False, False)
+        assert math.isnan(state.motion)
         assert math.isnan(state.head_drop)
 
     def test_keeps_only_a_private_copy_of_previous_keypoints(self) -> None:

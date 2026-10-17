@@ -12,7 +12,8 @@ TIME_EPS = 1e-9  # absorbs float error in timestamp differences (2.3 - 1.3 < 1.0
 
 
 class HysteresisDebouncer:
-    """Enter when ``score >= on`` for ``on_count`` consecutive samples; exit once
+    """Enter when ``score >= on`` for ``on_count`` consecutive samples spanning at least
+    ``on_hold_s`` seconds (first to last high sample); exit once
     ``score < off`` has held for ``off_hold_s`` seconds (0 exits on the first low
     sample). A rising edge is counted as an onset only if ``refractory_s`` has passed
     since the previous counted onset. Scores between ``off`` and ``on`` keep the
@@ -20,21 +21,23 @@ class HysteresisDebouncer:
     an entry streak and counts as low for exit.
     """
 
-    __slots__ = ("on", "off", "on_count", "off_hold_s", "refractory_s",
-                 "active", "onsets", "_streak", "_low_since", "_last_onset_t")
+    __slots__ = ("on", "off", "on_count", "on_hold_s", "off_hold_s", "refractory_s",
+                 "active", "onsets", "_streak", "_high_since", "_low_since", "_last_onset_t")
 
-    def __init__(self, on: float, off: float, on_count: int = 1,
-                 off_hold_s: float = 0.0, refractory_s: float = 0.0) -> None:
+    def __init__(self, on: float, off: float, on_count: int = 1, off_hold_s: float = 0.0,
+                 refractory_s: float = 0.0, on_hold_s: float = 0.0) -> None:
         if not off <= on:
             raise ValueError("off threshold must be <= on threshold")
         self.on, self.off = on, off
-        self.on_count, self.off_hold_s, self.refractory_s = on_count, off_hold_s, refractory_s
+        self.on_count, self.on_hold_s = on_count, on_hold_s
+        self.off_hold_s, self.refractory_s = off_hold_s, refractory_s
         self.reset()
 
     def reset(self) -> None:
         self.active = False
         self.onsets = 0  # cumulative counted rising edges
         self._streak = 0
+        self._high_since: float | None = None
         self._low_since: float | None = None
         self._last_onset_t = -math.inf
 
@@ -42,10 +45,15 @@ class HysteresisDebouncer:
         """Feed one sample; returns True iff an onset was counted at this sample."""
         observed = not math.isnan(score)
         if not self.active:
-            self._streak = self._streak + 1 if observed and score >= self.on else 0
-            if self._streak < self.on_count:
+            if observed and score >= self.on:
+                self._streak += 1
+                if self._high_since is None:
+                    self._high_since = t
+            else:
+                self._streak, self._high_since = 0, None
+            if self._streak < self.on_count or t - self._high_since < self.on_hold_s - TIME_EPS:
                 return False
-            self.active, self._streak, self._low_since = True, 0, None
+            self.active, self._streak, self._high_since, self._low_since = True, 0, None, None
             if t - self._last_onset_t >= self.refractory_s - TIME_EPS:
                 self._last_onset_t = t
                 self.onsets += 1
@@ -63,8 +71,11 @@ class HysteresisDebouncer:
 
 
 def fist_debouncer() -> HysteresisDebouncer:
-    """Closed_Fist: enter >= 0.6 x3 samples, exit < 0.4 for 1 s, 3 s refractory."""
-    return HysteresisDebouncer(on=0.6, off=0.4, on_count=3, off_hold_s=1.0, refractory_s=3.0)
+    """Closed_Fist: enter at >= 0.7 held >= 0.5 s, exit < 0.4 for 1 s, 3 s refractory.
+
+    (Raised from 0.6 x 3 samples after live typing produced false fists; the keyboard zone
+    is excluded upstream in the video perceiver.)"""
+    return HysteresisDebouncer(on=0.7, off=0.4, on_count=1, on_hold_s=0.5, off_hold_s=1.0, refractory_s=3.0)
 
 
 def laughter_debouncer() -> HysteresisDebouncer:

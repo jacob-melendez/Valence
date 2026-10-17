@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from valence.edge import calibration_store
 from valence.perception import calibration
 from valence.perception.lux import LuxModel
 
@@ -38,9 +39,9 @@ def test_load_missing_gives_defaults(cal_path: Path) -> None:
 
 
 def test_save_load_round_trip_and_merge(cal_path: Path) -> None:
-    calibration.save({"spl_offset_db": 101.5, "spl_calibrated": True})
+    calibration_store.save({"spl_offset_db": 101.5, "spl_calibrated": True})
     assert cal_path.exists()
-    calibration.save({"lux": {"a": 1.25, "calibrated": True}})
+    calibration_store.save({"lux": {"a": 1.25, "calibrated": True}})
     cfg = calibration.load()
     assert cfg["spl_offset_db"] == 101.5 and cfg["spl_calibrated"] is True
     assert cfg["lux"]["a"] == 1.25 and cfg["lux"]["calibrated"] is True
@@ -51,7 +52,7 @@ def test_save_load_round_trip_and_merge(cal_path: Path) -> None:
 def test_lux_model_and_spl_helpers(cal_path: Path) -> None:
     assert calibration.lux_model() == LuxModel()
     fitted = LuxModel(2.0, 0.02, -0.05, True)
-    calibration.save({"lux": fitted.to_dict(), "spl_offset_db": 97.0})
+    calibration_store.save({"lux": fitted.to_dict(), "spl_offset_db": 97.0})
     assert calibration.lux_model() == fitted
     assert calibration.spl_offset_db() == 97.0
     assert calibration.lux_model({"lux": {"a": 1.0}}).a == 1.0
@@ -59,7 +60,7 @@ def test_lux_model_and_spl_helpers(cal_path: Path) -> None:
 
 def test_atomic_write_leaves_no_temp_files(cal_path: Path) -> None:
     for k in range(3):
-        calibration.save({"spl_offset_db": 90.0 + k})
+        calibration_store.save({"spl_offset_db": 90.0 + k})
     assert [p.name for p in cal_path.parent.iterdir()] == ["calibration.json"]
 
 
@@ -69,7 +70,7 @@ def test_malformed_file_gives_defaults(cal_path: Path) -> None:
     assert calibration.load()["spl_offset_db"] == 94.0
     cal_path.write_text("[1, 2]", encoding="utf-8")
     assert calibration.load()["lux"]["calibrated"] is False
-    calibration.save({"spl_offset_db": 99.0})
+    calibration_store.save({"spl_offset_db": 99.0})
     assert calibration.load()["spl_offset_db"] == 99.0
 
 
@@ -81,22 +82,22 @@ def test_malformed_file_gives_defaults(cal_path: Path) -> None:
     {1: 2.0},
 ])
 def test_rejects_non_constants(cal_path: Path, bad: dict) -> None:
-    calibration.save({"spl_offset_db": 95.0})
+    calibration_store.save({"spl_offset_db": 95.0})
     before = cal_path.read_text(encoding="utf-8")
     with pytest.raises(TypeError):
-        calibration.save(bad)
+        calibration_store.save(bad)
     assert cal_path.read_text(encoding="utf-8") == before
 
 
 def test_rejects_non_finite(cal_path: Path) -> None:
     with pytest.raises(ValueError):
-        calibration.save({"spl_offset_db": math.nan})
+        calibration_store.save({"spl_offset_db": math.nan})
     assert not cal_path.exists()
 
 
 def test_explicit_path_argument(tmp_path: Path) -> None:
     path = tmp_path / "other.json"
-    calibration.save({"spl_offset_db": 88.0}, path=path)
+    calibration_store.save({"spl_offset_db": 88.0}, path=path)
     assert calibration.load(path)["spl_offset_db"] == 88.0
 
 

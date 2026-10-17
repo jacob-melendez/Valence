@@ -199,10 +199,10 @@ def _v1(ctx: _Context) -> list[str]:
         f"Key drivers: {_evidence(ctx, 'at', '; {x} weighed against it')}.",
     ]
     if ctx.mask:
-        seen = f" of {ctx.baseline}" if ctx.baseline else ""
+        seen = f" over the face-only reading of {ctx.baseline}" if ctx.baseline else ""
         lines.append(
             f"{ctx.person}'s smiling expression{_paren(ctx.valence)} was outweighed by these signals, "
-            f"so context overrode the face-only reading{seen}."
+            f"so context corrected the facial mask{seen}."
         )
     elif ctx.hidden:
         lines.append(

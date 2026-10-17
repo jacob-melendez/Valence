@@ -193,6 +193,7 @@ def _pick_features(rng: random.Random, label: str, face: _Face) -> list[str]:
 
 
 def _raw_shap(rng: random.Random, label: str, feature: str, face: _Face) -> float:
+    """Unnormalised SHAP: anchors dominate, a masking face pushes against the label."""
     if feature == "face_valence_mean":
         if face.mask:
             return -rng.uniform(0.15, 0.9)
@@ -216,10 +217,19 @@ def _counter_signal(rng: random.Random, label: str, features: list[str], raw: di
         raw[rng.choice(pool)] = -rng.uniform(0.3, 0.8)
 
 
+def _keep_story(raw: dict[str, float]) -> None:
+    """The single strongest driver always supports the label; opposing ones stay below it."""
+    strongest = max(raw.values())
+    for feature, value in raw.items():
+        if value < -0.9 * strongest:
+            raw[feature] = -0.9 * strongest
+
+
 def _build_layers(rng: random.Random, label: str, world: dict[str, float], face: _Face) -> list[dict[str, Any]]:
     features = _pick_features(rng, label, face)
     raw = {f: _raw_shap(rng, label, f, face) for f in features}
     _counter_signal(rng, label, features, raw)
+    _keep_story(raw)
     total = sum(abs(v) for v in raw.values())
     layers: list[dict[str, Any]] = []
     for layer in LAYER_NAMES:

@@ -58,8 +58,9 @@ CONCEPTS: dict[str, list[str]] = {
     "slump": [r"\bslump\w*", r"\bposture\w*", r"\bslouch\w*", r"\bhunch(?:ed|ing)\b"],
     "head_in_hands": [
         r"\bheads?[- ]in[- ](?:(?:the|their|both)[- ])?hands?\b",
-        r"\bhead (?:resting |held |propped )?(?:in|on) (?:their |the |both )?hands?\b",
+        r"\bheads?(?:\s+[a-z]+){0,2}\s+(?:in|on|into|against)\s+(?:(?:their|the|both)\s+)?hands?\b",
         r"\bface in (?:their |the |both )?hands\b",
+        r"\bhands? (?:on|over|covering|supporting) (?:their |the )?(?:head|face)\b",
         r"\bhead[- ]down\b",
     ],
     "withdrawal": [

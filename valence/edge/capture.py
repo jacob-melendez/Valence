@@ -1,7 +1,9 @@
 """Camera and microphone capture threads.
 
-The camera thread keeps only the latest frame (a 1-slot handoff); a frame that is replaced
-before perception takes it is purged. The mic callback only copies the block into a queue.
+The camera thread ``grab()``s every frame (keeps the driver queue fresh, decodes nothing) and
+``retrieve()``s only at the perception rate, so every decoded frame is counted
+(``frames_decoded``) and purged: by perception, or here if it is displaced from the 1-slot
+handoff before perception takes it. The mic callback only copies the block into a queue.
 Both fail loudly on the symptoms of a denied macOS permission (black frames, exact silence).
 """
 
@@ -16,7 +18,7 @@ import numpy as np
 import sounddevice as sd
 
 from valence.perception.audio_features import resample_48k_to_16k
-from valence.perception.gate import purge
+from valence.perception.gate import purge, purge_derived
 
 SR = 16000
 PERMISSION_HINT = ("System Settings -> Privacy & Security -> {what}: enable the app that launched Python "
@@ -24,30 +26,33 @@ PERMISSION_HINT = ("System Settings -> Privacy & Security -> {what}: enable the 
 
 
 class CameraCapture:
-    def __init__(self, index: int | None = None, width: int = 1280, height: int = 720) -> None:
+    def __init__(self, index: int | None = None, width: int = 1280, height: int = 720, fps: float = 10.0) -> None:
+        self.period = 1.0 / fps
+        self.frames_grabbed = 0
+        self.frames_decoded = 0
+        self.frames_dropped = 0
         self.cap = self._open(index, width, height)
         self._cond = threading.Condition()
-        self._latest: tuple[np.ndarray, float, float] | None = None
+        self._latest: tuple[np.ndarray, float, float, int] | None = None
         self._stop = threading.Event()
-        self.frames_read = 0
-        self.frames_dropped = 0
         self._thread = threading.Thread(target=self._run, name="valence-camera", daemon=True)
 
-    @staticmethod
-    def _open(index: int | None, width: int, height: int) -> cv2.VideoCapture:
+    def _open(self, index: int | None, width: int, height: int) -> cv2.VideoCapture:
         for i in [index] if index is not None else [0, 1, 2]:
             cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
             if not cap.isOpened():
                 continue
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            for _ in range(10):  # auto-exposure warm-up: grab only, nothing decoded
+                cap.grab()
             brightness = 0.0
-            for _ in range(10):  # auto-exposure warm-up
-                ok, f = cap.read()
-                if ok:
-                    brightness = float(f.mean())
-                    purge(f, "video")
-                    del f
+            ok, f = cap.retrieve()
+            if ok:
+                self.frames_decoded += 1
+                brightness = float(f.mean())
+                purge(f, "video")
+                del f
             if brightness > 5:
                 return cap
             cap.release()
@@ -59,14 +64,22 @@ class CameraCapture:
         return self
 
     def _run(self) -> None:
+        next_t = time.monotonic()
         while not self._stop.is_set():
-            ok, frame = self.cap.read()
-            if not ok:
-                time.sleep(0.01)
+            if not self.cap.grab():
+                time.sleep(0.005)
                 continue
-            item = (frame, time.monotonic(), time.time())
+            self.frames_grabbed += 1
+            now = time.monotonic()
+            if now < next_t:
+                continue  # grabbed, never decoded
+            next_t = max(next_t + self.period, now - self.period)
+            ok, frame = self.cap.retrieve()
+            if not ok:
+                continue
+            self.frames_decoded += 1
+            item = (frame, now, time.time(), self.frames_decoded)
             del frame
-            self.frames_read += 1
             with self._cond:
                 old, self._latest = self._latest, item
                 self._cond.notify()
@@ -75,8 +88,9 @@ class CameraCapture:
                 purge(old[0], "video")
             del item, old
 
-    def take(self, timeout: float = 1.0) -> tuple[np.ndarray, float, float] | None:
-        """Hand the newest frame (and its ownership) to the caller."""
+    def take(self, timeout: float = 1.0) -> tuple[np.ndarray, float, float, int] | None:
+        """Hand the newest decoded frame (and its ownership) to the caller:
+        ``(frame, t, wall, frames_decoded_so_far)``."""
         with self._cond:
             if self._latest is None:
                 self._cond.wait(timeout)
@@ -152,14 +166,14 @@ class MicCapture:
         del parts
         if self.native_sr != SR:
             native, block = block, resample_48k_to_16k(block)
-            purge(native, "audio")
+            purge_derived(native, "audio")
             del native
         return block, t, wall
 
     def check_not_silent(self, seconds: float = 1.0) -> None:
         block, _, _ = self.read(seconds)
         peak = float(np.abs(block).max())
-        purge(block, "audio")
+        purge_derived(block, "audio")
         if peak == 0.0:
             raise RuntimeError(f"mic {self.device_name!r} returned exact silence (permission denied). "
                                + PERMISSION_HINT.format(what="Microphone"))
