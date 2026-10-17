@@ -198,3 +198,18 @@ def confusion_pair(cms: dict[str, np.ndarray], states: list[str], path: Path) ->
     fig.subplots_adjust(top=0.80, bottom=0.2, wspace=0.55, left=0.12, right=0.98)
     fig.savefig(path, facecolor=SURFACE)
     plt.close(fig)
+
+
+def attention_chart(att_by_class: dict[str, list[float]], path: Path) -> None:
+    """Mean M3 attention weight by minutes-ago, one line per true state (full 15-minute windows)."""
+    fig, ax = _axes("Which minutes mattered",
+                    "M3 (GRU + attention) mean attention weight over the 15-minute window, by true state")
+    palette = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+    for color, (state, weights) in zip(palette, att_by_class.items()):
+        w = np.asarray(weights)
+        minutes_ago = (len(w) - 1 - np.arange(len(w))) * 5 / 60
+        ax.plot(minutes_ago, w, color=color, linewidth=2, label=state.replace("_", " "))
+    ax.invert_xaxis()
+    ax.set_xlabel("minutes ago", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("attention weight", color=TEXT_2, fontsize=9)
+    _finish(fig, ax, path)

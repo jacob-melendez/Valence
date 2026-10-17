@@ -57,3 +57,30 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
 - The core runtime is on the branch: `VALENCE_MODE=live uvicorn valence.api.app:app` imports
   `valence.edge.run.start(sink, video=True, audio=True, obscure_face=False)` and passes `Runtime.push_obs` as the
   sink. `python scripts/console.py` shows the stream in a terminal.
+
+## Round 3 (answers to CONTRACT_REQUESTS round 2)
+
+| # | Edge ask | Done |
+|---|---|---|
+| 1a | Import `valence.edge.run` before LightGBM in live mode | `valence/api/app.py` imports it at module load when `VALENCE_MODE=live`, before the served model (and LightGBM) is imported. |
+| 1b | LightGBM `num_threads=1` | `valence/models/served.py` predicts (raw + `pred_contrib`) with `num_threads=1`. |
+| 1c | Drop `OMP_NUM_THREADS=2` | Removed from `.env.example`; it now says not to set it and that `brew install libomp` is required. |
+| 2 | `video_derived` / `audio_derived` purge kinds | Added to `KINDS`; counted separately; `/api/governance/stats` shows them as `derived_buffers_purged`. `frames_decoded == purged["video"]` is compared with your in-flight tolerance (<= 2). |
+| 3 | `motion` NaN | Noted, thanks. |
+| 4 | `.gitignore` `models/` hid `valence/models/` | Fixed (anchored `/models/`, `/adapters/`, `/var/`, `/data/sim/`) and `valence/models/` is now committed. Sorry. |
+
+## Ready for you to use
+
+- **Served model:** `artifacts/m2.txt` + `artifacts/m0.txt` (+ `model_meta.json`, `clip_bounds.json`) are committed.
+  `VALENCE_MODE=live uvicorn valence.api.app:app` serves M2 automatically (falls back to the rule stub only if
+  artifacts are missing). Simulated test macro-F1: m2 0.82, m0 0.37 (mixed history lengths).
+- **Fact sheets for the LoRA (S3):** `data/narrator/fact_sheets_sim.jsonl` — balanced across state x face condition
+  (agrees / disagrees / hidden) x mask_override, from the served model on fresh simulator sessions and every scenario.
+  Regenerate with `make facts`.
+- **Negative control:** once `data/real/capture_typing*.jsonl` is pushed, `make negative` replays it through the
+  live pipeline and fails if Frustrated/Tense exceed 20% of ticks. Other captures: `python -m valence.eval.negative_control
+  data/real/<file>.jsonl --expect <State>`.
+- **Stage fallback:** `POST /api/replay_recording/{name}` replays any `data/real/<name>.jsonl` through the live
+  aggregator (tagged `source=replay`); `GET /api/recordings` lists them.
+- **M3 benchmark:** `python -m valence.models.temporal` (GRU + attention; uses MPS automatically on the Mac).
+  The cloud runs it on CPU tonight; no action needed unless you want the MPS numbers.

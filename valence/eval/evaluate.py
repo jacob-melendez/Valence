@@ -99,10 +99,10 @@ def legacy_result(seed: int) -> dict[str, float]:
             "social_withdrawal_flag", "facial_valence_snapshot"]
     out = {}
     for name, cols in {"face_only": ["facial_valence_snapshot"], "context_only": full[:-1], "full": full}.items():
-        tr, te = slice(0, 1400), slice(1400, None)
-        m = lgb.train({"objective": "multiclass", "num_class": 4, "verbose": -1, "num_threads": 4},
-                      lgb.Dataset(legacy.loc[tr, cols], y[tr]), num_boost_round=100)
-        out[name] = float((m.predict(legacy.loc[te, cols]).argmax(1) == y[te]).mean())
+        x = legacy[cols].to_numpy(dtype=float)
+        m = lgb.train({"objective": "multiclass", "num_class": 4, "verbose": -1, "num_threads": 1},
+                      lgb.Dataset(x[:1400], y[:1400]), num_boost_round=100)
+        out[name] = round(float((m.predict(x[1400:]).argmax(1) == y[1400:]).mean()), 4)
     return out
 
 
@@ -140,6 +140,11 @@ def main() -> None:
         preds = predict({k: v for k, v in models.items() if k in curves}, X)
         for n, raw in preds.items():
             curves[n].append((minutes, *boot_f1(y, raw.argmax(1), m["session_id"].to_numpy(), args.bootstrap)))
+    m3_path = reports / "m3_metrics.json"
+    if m3_path.exists():  # M3 is trained separately (valence.models.temporal), on the same test sessions
+        m3 = json.loads(m3_path.read_text())
+        curves["m3"] = [(p["minutes"], p["macro_f1"], p["macro_f1"], p["macro_f1"]) for p in m3["accuracy_vs_history"]]
+        metrics["models"]["m3"] = {"macro_f1_mixed_history": m3["test_macro_f1"], "device": m3["device"]}
     metrics["accuracy_vs_history"] = {n: [{"minutes": c[0], "macro_f1": round(c[1], 4), "ci95": [round(c[2], 4), round(c[3], 4)]}
                                           for c in pts] for n, pts in curves.items()}
     style.history_chart(curves, figs / "accuracy_vs_history.png")
