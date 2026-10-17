@@ -17,17 +17,18 @@ What this document is and is not:
   on the demo Mac replaces them (section 10). No capture numbers exist yet in `docs/BENCHMARKS.md`.
 - Field names follow `valence/contracts.py` (contract version 1.0.0) exactly.
 
-**Known differences between this spec and the code** (checked against `valence/sim/params.py`,
-`generator.py` and `artifacts/model_meta.json` on 2026-10-17; the v1 models were trained on the code's
-values):
+**Spec vs code: resolved.** The differences found on 2026-10-17 were settled as follows (also recorded in the
+"Build-time decisions" table of `docs/PLAN.md`); the models in `artifacts/` are trained on this version:
 
-| Topic | This spec | Code at the time of writing |
-|---|---|---|
-| Break onset rate | 1 per 90 min (plan: ~1/90 min) | `NUISANCE.break_per_min = 1/120` |
-| Break length | U(10, 20) min, so every simulated break is also a live break (≥ `break_absent_min`) | U(5, 15) min, so some simulated breaks are shorter than the live 10-min rule |
-| Overwhelmed face hiding | U(0.40, 0.70) per episode | `face_hidden_extra = 0.55` added to the session base and the head-in-hands term (cap 0.98) |
-| Difficulty | `noise_scale` tuned by `tune_difficulty.py`, frozen in `artifacts/sim_manifest.json` | no tuning script or manifest; v1 trained at `noise_scale` 1.0, seed 7, 300 sessions, regenerated in memory (`artifacts/model_meta.json`) |
-| Relative features | `*_rel_sess` (plan name) | `*_rel_15m`: current value minus its 15-minute median (`valence/features/compute.py`) |
+| Topic | Decision (now in code and in this spec) |
+|---|---|
+| Break onset rate | 1 per 120 min (×2 in Exhausted/Overwhelmed). Kept below the plan's ~1/90 so long stretches without a break occur and the fatigue tilt (~3 h) matters. |
+| Break length | U(10, 20) min, so every simulated break is also a break under the live 10-minute absence rule. |
+| Fist bursts | burst multiplier switches symmetrically between 1.7 and 0.3 (mean ×1.0), so the per-state rates are the true long-run rates. |
+| Overwhelmed face hiding | each Overwhelmed episode draws its own face-hidden share U(0.40, 0.70) (hands over the face); it replaces the session share instead of stacking on it. |
+| Head-in-hands while laughing | Collaborative_Happy head-in-hands share rises by +0.35 on ticks with laughter (people cover their faces when they laugh). |
+| Difficulty | `noise_scale` = 1.0, **untuned**: criterion A (§12.2) already holds (served M2 macro-F1 0.82 ≤ 0.92), so no tuning toward the results was done. The tuning script in §12.2 is not built. |
+| Relative features | `*_rel_15m` = current value minus its 15-minute median (window-only, so train/live parity is exact). |
 
 ## Contents
 
@@ -674,7 +675,7 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | States | `fatigue_affinity` | −0.6 / +1.0 / +2.0 / −0.5 / +1.5 / +1.0 | — | | Design |
 | States | `group_affinity` / `solo_affinity` | 1/1 · 1/1 · 1/1 · 1.8/0.4 · 1/1 · 1.5/0.6 | — | | Plan (Happy with ≥ 2; Tense often ≥ 2); Design (values) |
 | States | transition weight floor | 0.05 | — | | Design |
-| Breaks | `break_per_min` | 1/90, ×2 in Exhausted and Overwhelmed | per min | | Plan (~1/90 min); Design (×2) |
+| Breaks | `break_per_min` | 1/120, ×2 in Exhausted and Overwhelmed | per min | | Design (below the plan's ~1/90 so long stretches occur); ×2 Design |
 | Breaks | `break_len_min` | U(10, 20), ≥ `break_absent_min` | min | | Design (matches live break rule) |
 | Breaks | state after a break | Focused (alone); Focused or Collaborative_Happy 50/50 (≥ 2 people) | — | | Design |
 | Face | `face_mu` | −0.15 / −0.20 / −0.10 / +0.55 / −0.30 / −0.45 | valence | | Plan (FM unmasked −0.20: Design) |
@@ -684,7 +685,7 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Face | `face_tick_sd` | 0.15 | valence | ✓ | Design |
 | Face | low-light term | +0.35 × max(0, (200 − lux) / 200) added to tick σ | valence | | Plan (< 200 lux); Design (slope) |
 | Face | `face_hidden_range` (session base) | U(0.05, 0.40) | share of ticks | | Plan |
-| Face | head-in-hands hiding | +0.6 × `head_in_hands_frac`, cap 0.98 | share | | Design |
+| Face | head-in-hands hiding | +0.3 × `head_in_hands_frac` on the session share, cap 0.98 (not for Overwhelmed, whose episode share already covers it) | share | | Design |
 | Face | Overwhelmed hidden share | U(0.40, 0.70) per episode | share of ticks | | Plan |
 | Face | `face_visible` when readable | U(0.6, 1.0) | fraction | | Design |
 | Sound | `db_target` | 48 / 66 / 45 / 63 / 66 / 70 | dB SPL | | Plan signatures (midpoints) |
