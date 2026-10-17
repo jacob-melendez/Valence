@@ -123,3 +123,9 @@ Head pitch (looking at the keys) swings the nose but barely moves the ears; a sl
 probe through `PostureTracker` (3 s hold): new rule slump 0.84 / gaze 0.00 / upright 0.00; nose-only 0.95 / 0.00 / 0.00
 on this probe, but nose-only failed on the deeper real typing gaze above. Shoulder drop alone is baseline-sensitive
 (fails when the first upright phase is taken as baseline), so it is not used.
+
+## Offline check
+
+`valence.edge.run` sets `YOLO_OFFLINE=1`, `YOLO_AUTOINSTALL=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` on import.
+With those, the full perception stack under load (`scripts/spikes/gpu_load.py`: YOLO + MediaPipe + lux at 10 Hz)
+held **no inet sockets** (`lsof -i -p <pid>` empty after 15 s). Wi-Fi-off demo rehearsal still to do.
