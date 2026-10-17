@@ -28,17 +28,17 @@ is in `docs/BENCHMARKS.md`. Evaluation results are TBD and will come from `valen
 
 ## 1. Implementation status
 
-Status as of 2026-10-17.
+Status as of Saturday evening, 2026-10-17. A committed file is not a claim that its tests pass.
 
 | Piece | File | Status |
 |---|---|---|
 | Message models, `FactSheet`, `NarrationResult`, `json_schemas()` | `valence/contracts.py` | Committed. Tests in `tests/test_contracts.py`. |
-| REST and WebSocket server | `valence/api/app.py` | Being written (uncommitted). This document describes the behavior it implements or will implement. |
-| Runtime that produces the messages | `valence/runtime/engine.py`, `bus.py`, `aggregator.py` | Being written. |
-| Served model | `valence/models/predictor.py` | Rule-based stub (`model_id` `"stub-rules"`) until the trained M2 is in `artifacts/`. |
-| Counterfactual | `valence/models/counterfactual.py` | Planned. The endpoint returns `501` until the trained model is served. |
-| Evaluation reports | `valence/eval/evaluate.py` → `reports/metrics.json`, `reports/figs/*.png` | Planned. `GET /api/eval/summary` returns `{"available": false}` until then. |
-| Narrator service | `valence/narrator/service.py` (LOCAL session) | Planned. Without it, the template text in each `prediction` is the explanation. |
+| REST and WebSocket server | `valence/api/app.py` | Committed. Tests in `tests/test_api.py`. This document describes the behavior it implements; planned behavior is marked. |
+| Runtime that produces the messages | `valence/runtime/engine.py`, `bus.py`, `aggregator.py`, `recording.py` | Committed. Tests in `tests/test_runtime.py`. |
+| Served model | `valence/models/served.py` (M2 + M0 shadow), `valence/models/predictor.py` (smoothing, rule stub) | The trained v1 M2 (`model_id` `"m2_lgbm@<8 hex>"`, core 4 states) is served when `artifacts/model_meta.json` matches `settings.state_set`; otherwise the rule stub (`"stub-rules"`) is served. |
+| Counterfactual | `valence/models/served.py` (`ServedPredictor.counterfactual`) | Implemented for the served M2; the stub returns `501`. |
+| Evaluation reports | `valence/eval/evaluate.py` → `reports/metrics.json`, `reports/figs/*.png` | Script committed; v1 figures exist (uncommitted); `reports/metrics.json` does not exist yet, so `GET /api/eval/summary` returns `{"available": false}`. |
+| Narrator service | `valence/narrator/service.py` (LOCAL session) | Stage A draft committed ("under review"). Without a running narrator, the template text in each `prediction` is the explanation. |
 
 ---
 
@@ -137,12 +137,12 @@ changes mode or room-only, re-read the REST response or `GET /api/state`.
 | `mode` | `"live" \| "replay" \| "hybrid"` | Current input mode. `hybrid` means one modality live and the other replayed, or live with simulated inputs. |
 | `room_only` | bool | `true`: one aggregate room label and no per-person inference (section 7.4.10) |
 | `states` | `StateInfo[]` | Active state set, in the order used by `probabilities`. Each item is `{id, display, tier}`: `id` is the state key, `display` its full name from `STATE_DISPLAY`, and `tier` is `"P0"` or `"P1"`. |
-| `feature_version` | string | Opaque version of the model and feature spec. Currently the served model id, for example `"stub-rules"`. Show it, but do not parse it. |
+| `feature_version` | string | Opaque version of the model and feature spec. Currently the served model id, for example `"m2_lgbm@1a2b3c4d"` (or `"stub-rules"` when no trained model matches the state set). Show it, but do not parse it. |
 | `frame_w`, `frame_h` | int | Size in pixels of the backend's processed video frame. `0` before the first frame and in scenario replay. |
 | `mirrored` | bool | `true` if the backend frame, and so the box coordinates, are horizontally mirrored (section 4) |
 
 ```json
-{"type": "hello", "contract_version": "1.0.0", "mode": "live", "room_only": false, "states": [{"id": "Focused", "display": "Focused", "tier": "P0"}, {"id": "Frustrated_Masked", "display": "Frustrated / Masked Stress", "tier": "P0"}, {"id": "Exhausted", "display": "Exhausted", "tier": "P0"}, {"id": "Collaborative_Happy", "display": "Collaborative / Happy", "tier": "P0"}], "feature_version": "stub-rules", "frame_w": 1280, "frame_h": 720, "mirrored": false}
+{"type": "hello", "contract_version": "1.0.0", "mode": "live", "room_only": false, "states": [{"id": "Focused", "display": "Focused", "tier": "P0"}, {"id": "Frustrated_Masked", "display": "Frustrated / Masked Stress", "tier": "P0"}, {"id": "Exhausted", "display": "Exhausted", "tier": "P0"}, {"id": "Collaborative_Happy", "display": "Collaborative / Happy", "tier": "P0"}], "feature_version": "m2_lgbm@1a2b3c4d", "frame_w": 1280, "frame_h": 720, "mirrored": false}
 ```
 
 ### 3.4 `tracks`
@@ -243,7 +243,7 @@ and an instant template explanation.
 | `confidence` | float | `probabilities[label]`: calibrated (temperature-scaled softmax) and **unsmoothed**. Calibration was fit on simulated data, so label it **"sim-calibrated"** in the UI. While the label is changing, `label` can briefly differ from this tick's highest probability. |
 | `probabilities` | object `{state_id: float}` | Calibrated probability of every active state, summing to about 1. Show all of them. |
 | `face_only` | `{label, confidence}` | Face-only baseline (M0) for this tick. **Both `null` when no face was visible.** `label` is a state id. |
-| `mask_override` | bool | The face-only baseline (confidence ≥ 0.55) and the context model (confidence ≥ 0.70) disagree for 3 consecutive ticks, the face evidence points to M0's state, and the person's window is at least 2 min old. Show "Context corrected the facial mask". |
+| `mask_override` | bool | The face-only baseline and the context model disagree with enough confidence for several ticks, the face evidence inside M2 points to M0's state, and the person's window is at least 2 min old. As implemented: M0 reads `Collaborative_Happy` with confidence ≥ 0.45 while M2 (confidence ≥ 0.70) does not; on after ≥ 3 of the last 6 face-visible ticks, off at ≤ 1. The plan's rule is M0 ≥ 0.55 for 3 consecutive ticks (`docs/ARCHITECTURE.md` 9.4). Show "Context corrected the facial mask". |
 | `warming_up` | bool | `true` during the person's first `settings.warmup_s` (60 s) |
 | `layers` | `Layer[]` | Explanation layers, strongest support first (see below) |
 | `data_quality` | object | `face_visible_frac`: fraction of the last 5 min with a visible face. `lux`: latest lux or `null`. `ood_features`: names of features clipped to the training range; when more than 3 are clipped, confidence is lowered and the narration says so. |
@@ -255,7 +255,7 @@ and an instant template explanation.
 | Field | Type | Meaning |
 |---|---|---|
 | `layers[].name` | `"Ambient Physics" \| "Time Dynamics" \| "Somatic & Social" \| "Facial Surface"` | The PRD's three context layers plus the face |
-| `layers[].contribution` | float | Sum of the attributions of **all** features in the layer toward the predicted label: TreeSHAP in model-margin units for M2, linear terms for the stub. Positive supports the label, negative opposes it. The Facial Surface layer is kept even when it opposes, so a corrected mask stays visible. |
+| `layers[].contribution` | float | Sum of the attributions of all narratable features in the layer toward the predicted label (`fill_ratio` is never narrated and is left out): TreeSHAP in model-margin units for M2, linear terms for the stub. Positive supports the label, negative opposes it. The Facial Surface layer is kept even when it opposes, so a corrected mask stays visible. |
 | `layers[].drivers` | `Driver[]` | Up to 3 strongest drivers in the layer by absolute `shap`. They need not add up to `contribution`. |
 | `drivers[].feature` | string | Feature name, `<channel>_<stat>_<window>` (for example `db_mean_15m`, `fist_cnt_5m`, `face_now`, `hours_since_break`) |
 | `drivers[].display` | string | Pre-formatted text, for example `"average noise of 72 dB over 15 minutes"`. The only place numbers are formatted. |
@@ -391,7 +391,7 @@ function drawTracks(msg: Tracks, canvas: HTMLCanvasElement): void {
 | Situation | What arrives | What to draw |
 |---|---|---|
 | Live | `tracks` at ≤ 10 Hz | Boxes over the browser preview |
-| Replay of a features-only JSONL recording | `tracks` from the recorded boxes | Boxes on a blank canvas sized `frame_w` × `frame_h` |
+| Replay of a features-only JSONL recording (`POST /api/replay_recording/{name}`) | `tracks` from the recorded boxes | Boxes on a blank canvas sized `frame_w` × `frame_h` |
 | Scenario replay (`POST /api/replay/{scenario}`) | No `tracks` (simulated scenarios have no boxes) | A blank canvas. List people from `prediction.person_id`. |
 | Room-only mode | `tracks` unchanged: detection still counts people and feeds aggregate body signals | Boxes, but no per-person state |
 
@@ -446,7 +446,7 @@ Every `TickRecord`, `state_vector` and `prediction` carries both fields.
 | Value | Meaning |
 |---|---|
 | `live` | From the camera and mic through the live aggregator |
-| `replay` | From a scenario rendered by the simulator (`POST /api/replay/{scenario}`), or from a recorded features-only JSONL file |
+| `replay` | From a scenario rendered by the simulator (`POST /api/replay/{scenario}`), or from a recorded features-only JSONL file (`POST /api/replay_recording/{name}`) |
 | `sim` | Simulator training data. Normally never on the live stream. |
 | `sim_seed` | Room history pre-filled by `POST /api/demo/seed` (context only, no face) |
 
@@ -466,8 +466,11 @@ after the input was switched off.
 | `hours_since_break` | `POST /api/demo/seed` with `hours_since_break` | Operator-set break clock for the people present at seed time |
 | `face_occlusion` | `POST /api/sim/face_occlusion` | Face fields blanked (`face_valence` NaN, `face_visible` 0) |
 | `low_light` | `POST /api/sim/low_light` | Lux scaled down and face valence made noisier. Current implementation: lux × 0.15 (30 lux if unknown), Gaussian noise σ 0.35 on valence. |
-| `laughter_count`, `compliments_count`, `clenched_fists_count` | `POST /api/sim/event` | Injected event counts. These tag names are the design; the aggregator side is being written. |
-| `light_lux` | `POST /api/sim/lux` | Overridden lux. This tag name is the design; the aggregator side is being written. |
+| `laughter_count`, `compliments_count`, `clenched_fists_count` | `POST /api/sim/event` | Injected event counts (`aggregator.inject`) |
+| `light_lux` | `POST /api/sim/lux` | Overridden lux (`aggregator.lux_override`) |
+
+A logged break (`POST /api/events/break`) and venue calibration (`POST /api/calibrate/room`) are real events or
+measurements entered by the operator. They are written to the audit log but not tagged here.
 
 **UI rule** (`docs/FRONTEND_PROMPT.md`, item 10): show a badge when `source` ≠ `"live"` (for example "REPLAY")
 or when `simulated_fields` is non-empty (for example "SIMULATED: hours_since_break").
@@ -511,6 +514,7 @@ call injects data that is not sensed, so it is tagged in `simulated_fields` or `
 | GET | `/api/eval/summary` | Evaluation metrics (TBD) | — | — |
 | GET | `/api/eval/figures/{name}.png` | Evaluation chart (TBD) | — | — |
 | GET | `/api/scenarios` | Replay scenarios | — | — |
+| GET | `/api/recordings` | Features-only recordings in `data/real/` | — | — |
 | GET | `/api/models` | Served model | — | — |
 | GET | `/api/health` | Backend health | — | — |
 | GET | `/api/narrator/health` | Narrator health | — | — |
@@ -519,6 +523,7 @@ call injects data that is not sensed, so it is tagged in `simulated_fields` or `
 | POST | `/api/live` | Switch to live sensors | `live`, `reset` | no |
 | POST | `/api/events/break` | Log a break | `break` | no (a real event entered by the operator) |
 | POST | `/api/replay/{scenario}` | Play a scenario | `replay`, `reset` | `source = "replay"` |
+| POST | `/api/replay_recording/{name}` | Replay a features-only recording through the live pipeline | `replay_recording`, `reset` | `source = "replay"` |
 | POST | `/api/sim/face_occlusion` | Simulate a hidden face | `sim` | **yes**: `face_occlusion` |
 | POST | `/api/sim/low_light` | Simulate low light | `sim` | **yes**: `low_light` |
 | POST | `/api/sim/event` | Inject laughter, compliment or fist events | `sim_event` | **yes**: event-count tags |
@@ -529,8 +534,9 @@ call injects data that is not sensed, so it is tagged in `simulated_fields` or `
 | POST | `/api/mode` | Room-only on or off | `mode` | no |
 | POST | `/api/label` | Self-report label (P1) | `self_report` | no (never enters the model) |
 
-`POST /api/live` is not in the plan's endpoint list. It is how the server returns from replay to live
-sensors.
+`POST /api/live`, `GET /api/recordings` and `POST /api/replay_recording/{name}` are not in the plan's endpoint
+list. `live` is how the server returns from replay to live sensors; the recording routes are the camera/mic
+fallback (replay a golden features-only recording made on the demo Mac).
 
 ### 7.3 Read endpoints
 
@@ -592,13 +598,14 @@ It lives in RAM only and is never written to disk.
 Process-wide purge-gate counters: the numbers to show after a soak test.
 
 ```json
-{"frames_decoded": 17402, "frames_purged": 17402, "audio_blocks_purged": 3480, "freed": {"video": 17402, "audio": 3480}, "unzeroable": {}, "transcripts_purged": 212, "violations": 0, "live_raw_buffers": 0, "retention_s": 86400, "near_field_gated_out": 7, "audit_hash": "9f2c4e1a7b3d5c60a1e8d4b27f0c3e9a5b6d1f8e2c7a4b9d0e3f6a1c8b5d2e7f"}
+{"frames_decoded": 17402, "frames_purged": 17402, "audio_blocks_purged": 3480, "derived_buffers_purged": {"video_derived": 26103, "audio_derived": 6960}, "freed": {"video": 17402, "audio": 3480, "video_derived": 26103, "audio_derived": 6960}, "unzeroable": {}, "transcripts_purged": 212, "violations": 0, "live_raw_buffers": 0, "retention_s": 86400, "near_field_gated_out": 7, "audit_hash": "9f2c4e1a7b3d5c60a1e8d4b27f0c3e9a5b6d1f8e2c7a4b9d0e3f6a1c8b5d2e7f"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `frames_decoded`, `frames_purged`, `audio_blocks_purged`, `transcripts_purged`, `violations`, `live_raw_buffers`, `retention_s` | As in the `governance` message (3.5) |
-| `freed` | Purged buffers whose memory was actually released, by kind (`video`, `audio`). Kinds with a zero count are omitted. |
+| `derived_buffers_purged` | Copies made inside perception (RGB conversion, head crops, PCM for Vosk, the YAMNet clip) zero-filled by the `PurgeGate`, by kind (`video_derived`, `audio_derived`). Counted separately so that `frames_decoded == frames_purged` can hold. |
+| `freed` | Purged buffers whose memory was actually released, by kind (`video`, `audio`, `video_derived`, `audio_derived`). Kinds with a zero count are omitted. |
 | `unzeroable` | Purged buffers that were read-only and could not be zero-filled, by kind. Target: empty. |
 | `near_field_gated_out` | Laughter and compliment events discarded by the near-field gate |
 | `audit_hash` | Full SHA-256 of the latest audit entry (64 hex characters) |
@@ -642,7 +649,8 @@ listed here (section 11).
 #### 7.3.8 `GET /api/eval/summary`
 
 Evaluation metrics from `reports/metrics.json` and the names of the available figures in `reports/figs/`.
-**TBD: produced by `valence/eval/evaluate.py`.** Until that script has run:
+**TBD: produced by `valence/eval/evaluate.py`.** Until `reports/metrics.json` exists (it does not yet), the
+response is:
 
 ```json
 {"available": false}
@@ -656,9 +664,10 @@ degraded; and the negative control. In mock mode, the frontend shows placeholder
 
 #### 7.3.9 `GET /api/eval/figures/{name}.png`
 
-Returns `image/png` from `reports/figs/{name}.png`. Names come from `figures` in `/api/eval/summary`. The
-plan's figure names include `accuracy_vs_history`, `acc_vs_episode_age`, `reliability` and `memory_flat`,
-plus confusion and robustness charts (all TBD). Paths are confined to `reports/figs/`. An unknown name or a
+Returns `image/png` from `reports/figs/{name}.png`. Names come from `figures` in `/api/eval/summary`, and
+any file present is served even while the summary reports `available: false`. v1 files present (uncommitted;
+core 4 states, untuned `noise_scale` 1.0): `accuracy_vs_history`, `acc_vs_episode_age`, `reliability`,
+`confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux`. Planned: `memory_flat` (60-min soak). Paths are confined to `reports/figs/`. An unknown name or a
 traversal attempt gives `404 {"detail": "figure not found"}`. These are offline charts, never camera images.
 
 #### 7.3.10 `GET /api/scenarios`
@@ -675,18 +684,20 @@ only with the 6-state set.
 
 #### 7.3.11 `GET /api/models`
 
-```json
-{"served": "stub-rules", "states": ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"], "meta": {}}
+```jsonc
+{"served": "m2_lgbm@1a2b3c4d", "states": ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"], "meta": {"state_set": "core", "sessions": 300, "seed": 7, "noise_scale": 1.0, "feature_names": ["db_now", "..."], "...": "..."}}
 ```
 
-`served` is the served model's id. It is `"stub-rules"`, transparent linear rules standing in for M2, until
-the trained model is in `artifacts/`. `meta` is whatever the served model reports (calibration temperature,
-training info). Its keys are TBD with the trained model.
+`served` is the served model's id: `"m2_lgbm@"` plus the first 8 hex characters of the SHA-256 of
+`artifacts/m2.txt`, or `"stub-rules"` (transparent linear rules standing in for M2) when no trained model
+matches `settings.state_set`. `meta` is the contents of `artifacts/model_meta.json` for the served M2
+(states, training settings, temperatures, feature names and sets) and `{}` for the stub. Its keys are defined
+by `valence/models/train_ladder.py`; do not rely on them in the UI.
 
 #### 7.3.12 `GET /api/health`
 
 ```json
-{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "stub-rules", "edge_error": null}
+{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null}
 ```
 
 `edge_error` is the reason the perception runner failed to start (missing module, camera or mic permission),
@@ -712,29 +723,28 @@ published.
 
 | Param | Type | Notes |
 |---|---|---|
-| `event_id` (path) | string | A `prediction.event_id`. The current implementation uses it to select the person and re-runs on that person's **current** window. |
+| `event_id` (path) | string | A `prediction.event_id`. The current implementation uses it only to select the person (`p<person_id>-...`) and re-runs on that person's **current** window. |
 | `feature` (query) | string | A feature name from the served model's feature spec (for example `hours_since_break`, `db_mean_15m`, `fist_cnt_5m`) |
 | `value` (query) | float | New value for that feature |
 
-Response: **TBD, defined by `valence/models/counterfactual.py` (planned).** The design calls for the
-original and counterfactual probabilities, both labels (unsmoothed argmax), the feature, its old and new
-values, and a check that only the named feature changed:
+Response (`ServedPredictor.counterfactual` in `valence/models/served.py`). Labels are the unsmoothed
+argmax of each re-run; `original_value` is `null` when the feature was NaN. The numbers below are
+placeholders:
 
-```jsonc
-{
-  "event_id": "p1-000348", "feature": "hours_since_break", "original_value": 4.2, "value": 0.5,
-  "original":       { "label": "Frustrated_Masked", "probabilities": { "...": "..." } },
-  "counterfactual": { "label": "Frustrated_Masked", "probabilities": { "...": "..." } },
-  "changed_features": ["hours_since_break"]
-}
+```json
+{"feature": "hours_since_break", "original_value": 4.2, "counterfactual_value": 0.5, "original": {"label": "Frustrated_Masked", "confidence": 0.88}, "counterfactual": {"label": "Frustrated_Masked", "confidence": 0.81, "probabilities": {"Focused": 0.08, "Frustrated_Masked": 0.81, "Exhausted": 0.08, "Collaborative_Happy": 0.03}}, "label_changed": false, "simulated_fields": ["hours_since_break"]}
 ```
+
+`simulated_fields` names the feature that was set by hand, so a UI can mark the result as hypothetical. The
+design also called for echoing `event_id` and a `changed_features` check; the check lives in
+`tests/test_served.py::test_counterfactual_changes_only_the_named_feature` instead.
 
 | Error | When |
 |---|---|
-| `501` | The served model has no counterfactual support (the stub). This is the current behavior. |
+| `501` | The served model has no counterfactual support (the rule stub) |
 | `404` | The person is no longer in the window (absent more than 15 min, reset, or replay restarted) |
 | `422` | `feature` or `value` missing, or `value` not a number |
-| `500` | `event_id` not in the `p<id>-<tick>` form |
+| `500` | `event_id` not in the `p<id>-<tick>` form, or `feature` not in the model's feature list (not yet mapped to `422`) |
 
 ### 7.4 Control and operator endpoints
 
@@ -833,8 +843,8 @@ and `enabled`. **SIMULATED.**
 
 #### 7.4.6 `POST /api/sim/event`
 
-Inject audio or gesture events into the next live tick. This is the fallback when YAMNet or Vosk is
-unavailable. Injected counts bypass the near-field gate. The aggregator side (`inject`) is being written.
+Inject audio or gesture events into the next live tick (`aggregator.inject`). This is the fallback when
+YAMNet or Vosk is unavailable. Injected counts bypass the near-field gate.
 
 | Body field | Type | Default | Notes |
 |---|---|---|---|
@@ -931,22 +941,23 @@ Audit: `mode` with `room_only`.
 
 #### 7.4.11 `POST /api/calibrate/room`
 
-Venue calibration (planned: about 10 minutes at the venue before judging). The operator reads a phone SPL
-meter and lux meter at the desk and posts the readings. The backend pairs them with its current measurements
-(the aggregator side, `calibrate`, is being written).
+Venue calibration (about 10 minutes at the venue before judging). The operator reads a phone SPL meter and
+lux meter at the desk and posts the readings. The backend pairs them with its current measurements
+(`aggregator.calibrate`).
 
 | Body field | Type | Notes |
 |---|---|---|
-| `spl_reference` | float \| null | Phone SPL reading in dB taken now. Sets the dB calibration offset (replacing `settings.db_cal_offset`, default 94). |
-| `lux_reference` | float \| null | Phone lux reading taken now: one point of the 2-point lux fit. Post twice under different light. |
+| `spl_reference` | float \| null | Phone SPL reading in dB taken now. Adds a dB correction (reference minus the Leq of the last 10 s of audio) on top of the levels the edge reports (the edge's own offset defaults to `settings.db_cal_offset` = 94). Ignored for the correction if no audio has arrived. |
+| `lux_reference` | float \| null | Phone lux reading taken now. Multiplies the lux scale by reference ÷ current lux estimate (a one-point scale per call; the plan's 2-point fit is not implemented). Ignored if there is no lux estimate. |
 
 ```json
 {"spl_reference": 52.0, "lux_reference": 320.0}
 ```
 
-Response: `{"ok": true, ...}` plus the values the aggregator applied. Those keys are TBD by
-`aggregator.calibrate`; numeric values are rounded to 3 decimals in the audit entry. Noise-floor measurement,
-listed in the plan, is not in the body yet.
+Response: `{"ok": true, "db_correction": <float>, "lux_scale": <float>}`. `db_correction` is returned whenever
+`spl_reference` is sent (unchanged if no audio has arrived yet); `lux_scale` only when the lux reference was
+applied. Numeric values are rounded to 3 decimals in the audit entry. Noise-floor measurement,
+listed in the plan, is not implemented.
 
 Calibration applies to new observations only. The window then mixes old and new calibration for up to
 15 min, so calibrate first and call `POST /api/control/stop` then `start` before the real run. Audit:
@@ -974,6 +985,29 @@ The label, the time and that person's latest numeric `TickRecord` (no media) are
 `var/labels/<session_id>.jsonl` as evaluation data. Errors: an invalid `state` gives
 `422 {"detail": "state must be one of [...]"}`, and a missing body gives `422`. Audit: `self_report` with
 `label` and `person_id`.
+
+#### 7.4.13 `GET /api/recordings` and `POST /api/replay_recording/{name}`
+
+The camera/mic fallback: replay a features-only JSONL recording (`data/real/<name>.jsonl`, written by
+`python -m valence.edge.run --jsonl`) through the live aggregator, with its original timing scaled by `speed`.
+It exercises the same path as live data, so `tracks` are sent from the recorded boxes.
+
+`GET /api/recordings` returns a bare array, for example `[{"name": "golden_demo", "bytes": 482113}]`.
+
+`POST /api/replay_recording/{name}` releases live sensors, clears all windows, starts the feeder and restarts
+the ticker. All messages then carry `source: "replay"`.
+
+| Body field | Type | Default | Notes |
+|---|---|---|---|
+| `speed` | float | `1.0` | Playback speed |
+| `loop` | bool | `true` | Restart at the end of the file |
+
+```json
+{"ok": true, "recording": "golden_demo"}
+```
+
+Errors: `404 {"detail": "unknown recording <name>"}` (paths are confined to `data/real/`). Audit: `reset`, then
+`replay_recording` with the file name.
 
 ---
 
@@ -1003,7 +1037,8 @@ contribution) and `simulated_fields` (up to 8 entries).
 | `control_start`, `control_pause`, `control_stop` | `POST /api/control/*` | no |
 | `live` | `POST /api/live` | no |
 | `replay` | `POST /api/replay/{scenario}`, and the startup scenario in replay mode | scenario data (`source = "replay"`) |
-| `reset` | `demo/reset`, `replay`, `live`, `control/stop` | no |
+| `replay_recording` | `POST /api/replay_recording/{name}` | recorded data (`source = "replay"`) |
+| `reset` | `demo/reset`, `replay`, `replay_recording`, `live`, `control/stop` | no |
 | `break` | `POST /api/events/break` | no |
 | `sim` | `POST /api/sim/face_occlusion`, `POST /api/sim/low_light` | **yes** |
 | `sim_event` | `POST /api/sim/event` | **yes** |
@@ -1022,8 +1057,10 @@ shows it live and the audit chain proves it afterwards.
 ## 9. Internal narrator API (`127.0.0.1:8081`)
 
 The narrator is a separate process in its own venv (`valence/narrator/.venv`), owned by the LOCAL session
-(`valence/narrator/service.py`, planned). Only the backend's `NarratorClient` calls it. Browsers and other
-clients never do.
+(`valence/narrator/service.py`, a Stage A draft committed "under review"; run with
+`python -m valence.narrator.service [--port 8081] [--template-only]`). Only the backend's `NarratorClient`
+calls it. Browsers and other clients never do. This section is the contract; where the draft service differs,
+the row says so.
 
 ### 9.1 `POST /narrate`
 
@@ -1031,7 +1068,7 @@ Request: a `FactSheet` as JSON (`Content-Type: application/json`). Response: `20
 `NarrationResult`.
 
 What the narrator does with it: compact the sheet to `key: display` lines (about 120 tokens), generate with
-Qwen3-1.7B-4bit (MLX, `enable_thinking=False`, prompt cache, `max_tokens` 90), validate, retry, and fall back
+Qwen3-1.7B-4bit (MLX, `enable_thinking=False`, prompt cache, `max_tokens` 90; the draft uses 110), validate, retry, and fall back
 to its template. The fallback chain is Qwen3-1.7B, then Llama-3.2-3B-Instruct-4bit (if Qwen fails), then the
 template.
 
@@ -1039,12 +1076,14 @@ template.
 |---|---|
 | Deadline | Answer within `settings.narrator_deadline_s` (2.5 s) including retries. The backend's HTTP timeout is 3.0 s. |
 | Validation failure | Return `200` with the template text and `source: "template"`. Never return unvalidated text. |
-| Invalid FactSheet | `422`. The contract models use `extra="forbid"`, so unknown fields are rejected (see section 10 on upgrades). |
-| Model not loaded or warming up | `503`. Measured Qwen3-1.7B load is 1.2 s plus a 4.0 s warm-up at service start (`docs/BENCHMARKS.md`). |
+| Invalid FactSheet | `422`. `contracts.FactSheet` uses `extra="forbid"`; the draft service validates with its own permissive schema (`valence/narrator/schema.py`, `extra="allow"`), so unknown fields pass there (section 11). |
+| Model not loaded or warming up | Contract: `503`. The draft service instead answers with template text (`source: "template"`) if the model failed to load. Measured Qwen3-1.7B load is 1.2 s plus a 4.0 s warm-up at service start (`docs/BENCHMARKS.md`). |
 | Any non-200, timeout or unparseable body | The backend counts a failure, sends **no** `explanation`, keeps the template text, and reports `status.narrator = "fallback"`. |
 | Caching (backend side) | LLM results (not template results) are cached, keyed on person, label, `label_display`, confidence band, `confidence_display`, `mask_override`, `face_visible` and every driver `display` string. A cached text is reused only when every number it could mention is identical. The narrator also re-validates any text it caches itself against the current sheet. |
 
-Validator rules the narrator enforces (summary; details in `docs/NARRATOR.md`, LOCAL):
+Validator rules the narrator must enforce (summary; details in `docs/NARRATOR.md`, LOCAL). The draft
+`valence/narrator/validator.py` checks numbers, the state name, drivers, mask language, banned terms and length;
+the qualifier, room-scope, "Upbeat" and cached-text checks are not implemented yet (`docs/DELIVERABLES.md` A8):
 
 - Numbers in the text must be a subset of the numbers on the sheet.
 - The text names the predicted state, using `STATE_LEXICON` stems and checking Tense's stems before
@@ -1112,7 +1151,9 @@ When the face is visible, `face_only` is filled, for example
 `200` when the model is loaded and warmed up, so `/narrate` can be called. Any other status, or no answer
 within 1 s, means not ready. The backend checks only the status code (on startup, about every 10 s, and on
 `GET /api/narrator/health`). The body is informational and defined by the LOCAL session; a suggested shape is
-`{"ok": true, "model": "Qwen3-1.7B-4bit", "adapter": null}`.
+`{"ok": true, "model": "Qwen3-1.7B-4bit", "adapter": null}`. The draft service returns `200` with the model,
+warm-up state and per-source counts in the body, including while it is in template-only fallback, so a
+status-only check cannot yet tell the two apart (section 11).
 
 ---
 
@@ -1152,8 +1193,9 @@ for generated types:
   defaulted fields such as `type`, `source`, `simulated_fields` and `room_only` as always present.
 
 `tests/test_contracts.py` covers the contract module, including that the schemas export and that the
-frontend's `prediction` example validates. Per-message tests of the live API against these schemas are
-planned (`test_contracts`, `test_e2e_replay`).
+frontend's `prediction` example validates. `tests/test_api.py` exercises the REST endpoints and the WebSocket
+stream. Strict validation of every live message against these schemas is planned (`test_contracts`,
+`test_e2e_replay`).
 
 ---
 
@@ -1163,13 +1205,14 @@ planned (`test_contracts`, `test_e2e_replay`).
 |---|---|---|
 | WebSocket `Origin` check | CORS does not cover WebSockets, and `/ws/events` accepts any origin, so any page open in the same browser could read the stream from loopback. | Reject handshakes whose `Origin` header is present and does not match the CORS regex (2.2). Non-browser clients send no `Origin` and stay allowed. Recommended hardening; not in the plan. |
 | `status.narrator = "down"` | Never emitted; an unreachable narrator shows `fallback`. | Report `down` after repeated failed health checks. |
-| Counterfactual | `501` with the stub. Uses the person's current window, not the stored feature vector of `event_id`. | Re-run on the event's stored vector (held in RAM up to 15 min, per `docs/ARCHITECTURE.md` 9.7). Response shape TBD by `valence/models/counterfactual.py`. |
+| Counterfactual | Implemented for the served M2 (`501` with the stub). Uses the person's current window, not the stored feature vector of `event_id`. An unknown feature gives `500`. | Re-run on the event's stored vector (held in RAM up to 15 min, per `docs/ARCHITECTURE.md` 9.7); `422` for an unknown feature. |
 | Request validation | Bodies are untyped dicts. Bad values can give `500`, an unknown scenario in `demo/seed` gives `500`, and `replay` does not check `speed`. | Typed request models: `422` for bad input and `404` for an unknown scenario. |
 | `demo/seed` on a non-empty window | Not checked. Seeded rows are appended after existing rows. | Refuse with `409` unless the room window is empty. |
-| `calibrate/room` | Response keys TBD by `aggregator.calibrate`. Noise floor is not yet accepted. | SPL offset, 2-point lux, noise floor (plan). |
-| `sim/event`, `sim/lux` tags | The aggregator side (`inject`, `lux_override`) is being written. Fist counts are not in the `sim_event` audit payload. | Tags as in 6.2. Include fists in the audit payload. |
+| `calibrate/room` | dB correction and a one-point lux scale per call (7.4.11). Noise floor is not accepted. | SPL offset, 2-point lux, noise floor (plan). |
+| `sim_event` audit payload | Fist counts are not in the `sim_event` audit payload (laughter and compliments are). | Include fists in the audit payload. |
 | Self-report labels file | `var/labels/<session_id>.jsonl` is written but not listed by `GET /api/retention`, and not deleted at session close (it is evaluation data). | List it in `/api/retention`. |
-| Logged break and `simulated_fields` | `docs/PRD.md` 3.2 says a logged break appears in `simulated_fields`. The aggregator does not tag it. This document follows the code: audited, not tagged. | Decide one rule and align `PRD.md` or the aggregator. |
 | `hello` on settings change | Sent only on connect. | Optionally re-send it to all clients after `mode`, `live`, `replay` or `control` calls (additive). |
-| `feature_version` | Carries the served model id. | Carry the frozen feature-spec version from `artifacts/feature_spec.json` once it exists. |
+| `feature_version` | Carries the served model id. The feature order is stored as `feature_names` in `artifacts/model_meta.json`; the plan's `artifacts/feature_spec.json` does not exist. | Carry a feature-spec version once the spec file exists. |
+| `mask_override` rule | The implemented rule (3.7) differs from the plan's (M0 ≥ 0.55, 3 consecutive ticks). | Pick one rule and align the plan, `docs/ARCHITECTURE.md` 9.4, `docs/PRD.md` 2.8 and the code. |
+| Narrator draft vs this contract | `valence/narrator/schema.py` keeps its own copy of the state list (core 4 only) and display names instead of reading `valence/contracts.py`, accepts extra fields, never returns `503`, and `/health` is `200` even in template-only fallback. It uses `max_tokens` 110 (plan: 90) and up to 3 attempts. | Read states from `contracts.py` (6 states with P1), return `503` or a distinguishable health status when the model is not ready. LOCAL session. |
 | Audit purge-counter entries | Not written yet. | Periodic `purge` entries with the counters (per `audit.py` docstring). |

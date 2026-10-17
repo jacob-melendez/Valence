@@ -26,7 +26,7 @@ here (v1 figures exist in `reports/figs/`, uncommitted). Anything not measured i
 Valence runs entirely on one laptop. Edge perception reduces each video frame and audio block to a few numbers
 (counts, flags, levels, normalized boxes). The raw buffer is then zeroed by the purge gate. The runtime turns
 those numbers into one 5-second record per person and keeps the last 15 minutes in a rolling window. A
-LightGBM model reads about 110 features from that window. A face-only model runs next to it as a baseline.
+LightGBM model reads 114 features (about 110 in the plan) from that window. A face-only model runs next to it as a baseline.
 SHAP contributions are grouped into the PRD's layers, a rule-based detector flags "context corrected the
 face", and the result is streamed to a local web UI. A small local LLM in a separate process rewrites the
 explanation, and a validator checks it against the facts. The internet is used only for one-time model
@@ -469,7 +469,7 @@ The ticker runs this for each person on every completed tick. Target: features t
 
 ### 9.1 Features, clip, models
 
-1. Append the new `TickRecord` to the person's window, then `compute_features(window)` → about 110 floats.
+1. Append the new `TickRecord` to the person's window, then `features_from_window(person, room)` → 114 floats.
 2. Clip to p1–p99 and collect `ood_features`.
 3. Run M2 and M0 (M0 on the face snapshot; skipped, giving a null `face_only`, when no face was visible this
    tick).
@@ -545,7 +545,9 @@ exists. Which rule is final is open (section 16).
     of the top-3 drivers or anything outside the top 5, a qualifier within 6 tokens of a feature that
     contradicts its `level`/`effect`, room-scope drivers not phrased as "the room", mask language without
     `mask_override`, pronouns, demographics or diagnoses, or a length outside 20–90 words. Cached text is
-    re-validated against the current sheet. On failure it retries, then falls back to the template.
+    re-validated against the current sheet. On failure it retries, then falls back to the template. (Design.
+    The Stage A draft makes up to 3 attempts with `max_tokens` 110 and does not yet implement the qualifier,
+    room-scope and cached-text checks; `docs/DELIVERABLES.md` A8.)
 16. The runtime publishes an `explanation` message with the **same `event_id`** as its `prediction`. The UI
     replaces the template text and shows `source`. If `narrator_deadline_s` (2.5 s) passes, the template text
     stays and `status.narrator` reports `fallback` or `down`.
@@ -556,10 +558,13 @@ LOCAL narrator A/B run).
 
 ### 9.7 Counterfactual
 
-`GET /api/explain/{event_id}/counterfactual?feature=value` re-runs M2 on that event's feature vector with one
-feature changed (for example `hours_since_break=0.5`) and returns the new probabilities. Recent feature vectors
-are held in RAM with the same 15-minute lifetime as the window. Verification target: only the named feature
-changes.
+`GET /api/explain/{event_id}/counterfactual?feature=<name>&value=<number>` re-runs M2 with one feature
+changed (for example `feature=hours_since_break&value=0.5`) and returns the original and counterfactual label
+and confidence, the counterfactual probabilities and `label_changed` (`ServedPredictor.counterfactual` in
+`served.py`; the plan named `counterfactual.py`). Design: re-run on that event's stored feature vector, held in
+RAM with the same 15-minute lifetime as the window. As implemented, it re-runs on the person's **current**
+window. Verification target: only the named feature changes
+(`tests/test_served.py::test_counterfactual_changes_only_the_named_feature` exists).
 
 ---
 
@@ -576,16 +581,20 @@ changes.
 | `status` | periodic | Camera, mic, fps, loop latency, narrator state, offline, `degraded`, `purge_violation` |
 | `heartbeat` | periodic | `t` |
 
-Every message is validated against the JSON Schema from `json_schemas()` in `test_contracts` (the existing
-`tests/test_contracts.py` covers the contract module; message-level API tests are planned). The EventBus gives
+The plan validates every message against the JSON Schema from `json_schemas()`. Today
+`tests/test_contracts.py` covers the contract module (including the frontend's `prediction` example) and
+`tests/test_api.py` covers the REST endpoints and the WebSocket stream; strict schema validation of every live
+message is planned. The EventBus gives
 each client a bounded queue that drops the oldest message, so a slow or absent client cannot grow memory.
 `scripts/console.py` is a terminal client of the same bus, so the demo does not depend on the web UI.
 
 REST (`/api`): `states`, `state`, `history?minutes=15`, `governance/stats`, `governance/audit?since=`,
-`governance/verify`, `retention`, `eval/summary`, `eval/figures/{name}.png`, `scenarios`, `models`, `health`,
-`narrator/health`, `explain/{event_id}/counterfactual`; POST `control/{start|stop|pause}`, `events/break`,
-`replay/{scenario}`, `sim/{face_occlusion|low_light}`, `sim/event`, `sim/lux`, `demo/seed`, `demo/reset`,
-`calibrate/room`, `mode`, `label`. CORS allows localhost and the Lovable origin.
+`governance/verify`, `retention`, `eval/summary`, `eval/figures/{name}.png`, `scenarios`, `recordings`,
+`models`, `health`, `narrator/health`, `explain/{event_id}/counterfactual?feature=&value=`; POST
+`control/{start|stop|pause}`, `live`, `events/break`, `replay/{scenario}`, `replay_recording/{name}`,
+`sim/{face_occlusion|low_light}`, `sim/event`, `sim/lux`, `demo/seed`, `demo/reset`, `calibrate/room`, `mode`,
+`label`. `live`, `recordings` and `replay_recording` are additions to the plan's list. CORS allows localhost
+and the Lovable origins.
 
 ---
 
@@ -595,17 +604,17 @@ REST (`/api`): `states`, `state`, `history?minutes=15`, `governance/stats`, `gov
 
 | Control | Location | Mechanism | Evidence |
 |---|---|---|---|
-| **PurgeGate** | `valence/governance/purge.py` (exists) | `gate.purge(buf, kind)` with `kind` in `video`/`audio`. If `buf` is a view, it walks to the owning array; zero-fills it in place (read-only buffers are counted in `unzeroable`); registers `weakref.ref(owner, callback)` in an id→weakref dict. The callback removes the entry when the array is actually freed. `end_tick()` runs one `gc.collect()` if anything is still alive, then counts each survivor as a violation, logs `PURGE_VIOLATION` and stops tracking it. `live_raw_buffers` = purged buffers not yet freed. | `tests/test_purge.py` (zeroing, finalizer, leaked reference, views, read-only, cycles, held detector results); `/api/governance/stats` after a 60-min soak (target: 0 violations, 0 live buffers) |
-| Purge call sites | perception (LOCAL) | Purge right after feature extraction, then `del`. Displaced capture-slot frames are purged too, so `frames_decoded == frames_purged`. YOLO outputs are copied and `del results` happens before the purge; predictor caches are cleared. | `governance` message per tick; fake-Results test (`test_holding_detector_results_leaks_the_frame` exists) |
+| **PurgeGate** | `valence/governance/purge.py` (exists) | `gate.purge(buf, kind)` with `kind` in `video`/`audio` (raw capture buffers) or `video_derived`/`audio_derived` (copies made inside perception, counted separately so `frames_decoded == purged["video"]` can hold). If `buf` is a view, it walks to the owning array; zero-fills it in place (read-only buffers are counted in `unzeroable`); registers `weakref.ref(owner, callback)` in an id→weakref dict. The callback removes the entry when the array is actually freed. `end_tick()` runs one `gc.collect()` if anything is still alive, then counts each survivor as a violation, logs `PURGE_VIOLATION` and stops tracking it. `live_raw_buffers` = purged buffers not yet freed. | `tests/test_purge.py` (zeroing, finalizer, leaked reference, views, read-only, cycles, held detector results, derived kinds); `/api/governance/stats` after a 60-min soak (target: 0 violations, 0 live buffers) |
+| Purge call sites | perception (LOCAL) | Purge right after feature extraction, then `del`. Displaced capture-slot frames are purged too, so `frames_decoded == frames_purged` (within ≤ 2 in-flight frames, or exactly at stop). YOLO outputs are copied and `del results` happens before the purge; predictor caches are cleared. | `governance` message per tick; fake-Results test (`test_holding_detector_results_leaks_the_frame` exists) |
 | Transcript discard | perception audio (LOCAL) | Vosk restricted grammar: only 8 phrases + `[unk]` can be recognized, so there is no free transcript. Matched text is dropped in perception and counted via `note_transcript_purged`. Python strings cannot be zeroed; this limit is documented. | `transcripts_purged` counter |
 | Boundary contract | `valence/contracts.py` (exists) | `PersonObs`/`VideoObs`/`AudioObs` have no field that can carry media, keypoints or text | `tests/test_contracts.py` |
 | **Raw-media log filter** | `valence/governance/logfilter.py` (exists) | `RawMediaFilter` drops any log record whose message or arguments contain `np.ndarray`, `bytes`, `bytearray` or `memoryview`, including inside dicts, lists, tuples and sets. `install()` attaches it to the root logger and all its handlers and counts drops. | `tests/test_logfilter.py` |
-| **Persistence scan** | `valence/governance/persistence_scan.py` (exists) | AST scan. `valence/perception/`: no file writes at all. `valence/edge/`: text-mode writes only (features JSONL). Both ban `imwrite`, `VideoWriter`, `save`, `savez`, `savetxt`, `tofile`, `dump`, `to_pickle`, `wave.open`, `soundfile.write`, `wavfile.write`, `write_bytes`. Reads are allowed. `python -m valence.governance.persistence_scan` exits 1 on any violation. | `tests/test_no_persistence_ast.py` |
-| **Audit chain** | `valence/governance/audit.py` (exists) | One JSONL file per session, `var/audit/<session_id>.jsonl`. Each entry has `seq`, `ts`, `kind`, `payload`, `prev`, `hash` (SHA-256 over prev + canonical body). The payload checker refuses NaN/inf, strings over 200 chars (no transcript can be logged), lists over 64 items, nesting deeper than 4, and non-JSON types. Contents: labels, confidences, SHAP layer summaries, purge counters, operator actions (seed, simulated inputs, calibration). | `tests/test_audit.py`; `GET /api/governance/verify`; `scripts/audit_verify.py` (planned); `audit_hash` in each `governance` message |
-| **Retention** | `audit.py` + retention module (planned) | Audit file deleted on session close (`close(delete=True)`); files older than `audit_ttl_s` (86 400 s) deleted at startup, so a crash cannot leave timelines on disk. The window is RAM-only, 15 min. | `GET /api/retention`, `retention_s` |
-| Offline operation | `.env`, config | `YOLO_OFFLINE=1`, `YOLO_AUTOINSTALL=false`, `HF_HUB_OFFLINE=1`; API and narrator bind to 127.0.0.1 | Wi-Fi-off rehearsal; `status.offline` |
+| **Persistence scan** | `valence/governance/persistence_scan.py` (exists) | AST scan. `valence/perception/`: no file writes at all. `valence/edge/`: text-mode writes only (features JSONL). Both ban `imwrite`, `VideoWriter`, `save`, `savez`, `savetxt`, `tofile`, `dump`, `to_pickle`, `wave.open`, `soundfile.write`, `wavfile.write`, `write_bytes`. Reads are allowed. A provably media-free write can be allowed with a `# persistence-ok: <reason>` comment, listed by `--exceptions`; the calibration writer lives outside perception (`valence/edge/calibration_store.py`). `python -m valence.governance.persistence_scan` exits 1 on any violation. | `tests/test_no_persistence_ast.py` |
+| **Audit chain** | `valence/governance/audit.py` (exists) | One JSONL file per session, `var/audit/<session_id>.jsonl`. Each entry has `seq`, `ts`, `kind`, `payload`, `prev`, `hash` (SHA-256 over prev + canonical body). The payload checker refuses NaN/inf, strings over 200 chars (no transcript can be logged), lists over 64 items, nesting deeper than 4, and non-JSON types. Contents: labels, confidences, SHAP layer summaries, operator actions (seed, simulated inputs, calibration); periodic purge-counter entries are planned. | `tests/test_audit.py`; `GET /api/governance/verify`; `scripts/audit_verify.py` (planned); `audit_hash` in each `governance` message |
+| **Retention** | `audit.py` + `GET /api/retention` (static summary in `app.py`) | Audit file deleted on session close (`close(delete=True)`); files older than `audit_ttl_s` (86 400 s) deleted at startup, so a crash cannot leave timelines on disk. The window is RAM-only, 15 min. | `GET /api/retention`, `retention_s` |
+| Offline operation | `.env` (from `.env.example`), config | `YOLO_OFFLINE=1`, `YOLO_AUTOINSTALL=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`; API and narrator bind to 127.0.0.1 | Wi-Fi-off rehearsal; `status.offline` (a configuration check, not a network probe) |
 | No pixels to the UI | API | `tracks` carries normalized boxes only; the UI uses the browser's own camera for preview | `test_contracts` schemas |
-| Room-only mode | aggregator + API | One aggregate label, no per-person inference | `hello.room_only` |
+| Room-only mode | engine + API | One aggregate label, no per-person inference | `hello.room_only`; `tests/test_runtime.py::test_overlays_and_room_only` |
 
 ### 11.2 Data lifetime
 
@@ -617,7 +626,9 @@ REST (`/api`): `states`, `state`, `history?minutes=15`, `governance/stats`, `gov
 | Per-person baselines (face neutral, posture) | perception | Forgotten when the display id is released (3 s after loss) |
 | `VideoObs` / `AudioObs` | aggregator current-tick buffers | Until the tick closes (5 s) |
 | `TickRecord`s, features | RollingWindow (RAM) | 15 min; cleared by `demo/reset` or person drop |
+| Recent `state_vector` / `prediction` messages | `/api/history` buffer (RAM) | 1,440 messages (about 60 min for one person, 20 min for three) |
 | Audit entries (no features) | `var/audit/<session_id>.jsonl` | Deleted at session close; TTL 86 400 s as a backstop |
+| Self-report labels | `var/labels/<session_id>.jsonl` | Written only on `POST /api/label` (label + that person's latest numeric tick); kept as evaluation data |
 | Features-only recordings | `data/real/*.jsonl` | Operator-initiated captures only (live feature capture, acted set); features, never media |
 
 ### 11.3 Honest limits and framing
@@ -642,29 +653,36 @@ REST (`/api`): `states`, `state`, `history?minutes=15`, `governance/stats`, `gov
 |---|---|---|---|
 | `live` | camera | mic | The real pipeline |
 | `replay` | recorded / scenario | recorded / scenario | Default (`settings.mode`); scripted states for the demo and tests |
-| `hybrid` | live or replay | live or replay | One modality live and the other replayed, or live with simulated inputs |
+| `hybrid` | live or replay | live or replay | One modality live and the other replayed, or live with simulated inputs (planned: the contract allows the value, but the engine has no hybrid source yet) |
 
-Sources are chosen per modality with `--video live|replay --audio live|replay`.
+The mode is set with `VALENCE_MODE` at startup and switched at runtime with `POST /api/live`,
+`POST /api/replay/{scenario}` and `POST /api/replay_recording/{name}`. The plan's per-modality flags
+(`--video live|replay --audio live|replay`) are not implemented.
 
-ReplaySource inputs (`valence/runtime/replay.py`, planned):
+Replay inputs (scenario replay in `valence/runtime/engine.py`, recordings in `valence/runtime/recording.py`;
+the plan's `replay.py` was not created as a separate file):
 
-- **Features JSONL** (`data/real/*.jsonl` in the format of 5.4) re-enters through the same `sink(obs)` the edge
-  uses, so it exercises the aggregator exactly as live data does.
+- **Features JSONL** (`data/real/*.jsonl` in the format of 5.4, via `POST /api/replay_recording/{name}`)
+  re-enters through the same `sink(obs)` the edge uses, so it exercises the aggregator exactly as live data
+  does. It is the camera/mic fallback and drives the negative control offline.
 - **Scenario YAML** (`scenarios/*.yaml`) is rendered by the simulator into `TickRecord`s. These have the same
   shape as live ticks; the simulator produces every field the live pipeline produces.
 - **`POST /api/demo/seed`** fills an empty window with context history only (no face), tagged
   `source = "sim_seed"`. It is a fallback for an empty window. At the venue, the plan is to start live at
   least 20 minutes early so the window is real.
-- Replay is paced by timestamps with a speed factor (`scripts/e2e_check.py --speed 20`).
+- Replay is paced by timestamps with a speed factor (`speed` in the request body; the planned
+  `scripts/e2e_check.py` uses `--speed 20`).
 
 ### 12.2 Provenance fields
 
 Every `TickRecord`, `state_vector` and `prediction` carries:
 
 - `source`: one of `live`, `replay`, `sim`, `sim_seed` (`Source` in the contract).
-- `simulated_fields`: names of fields whose values were set by an operator or simulator rather than sensed:
-  any `POST /api/sim/*` input (`face_occlusion`, `low_light`, `event`, `lux`), seeded history, or an
-  operator-set value such as `hours_since_break`.
+- `simulated_fields`: names of values that were set by an operator or simulator rather than sensed. Tags:
+  `face_occlusion`, `low_light` (`POST /api/sim/*` overlays); `laughter_count`, `compliments_count`,
+  `clenched_fists_count` (`POST /api/sim/event`); `light_lux` (`POST /api/sim/lux`); `room_history` and an
+  operator-set `hours_since_break` (`POST /api/demo/seed`). A logged break and venue calibration are real
+  events or measurements: audited, not tagged. Full rules in `docs/API.md` section 6.
 
 The UI shows a "REPLAY" or "SIMULATED: <field>" badge whenever `source` ≠ `live` or `simulated_fields` is
 non-empty. Every operator action is also written to the audit chain. `POST /api/label {state}` records a
@@ -672,8 +690,12 @@ self-report label for sim-to-real comparison; it never changes a prediction.
 
 ### 12.3 Calibration
 
-`POST /api/calibrate/room` (planned) sets the SPL offset (replacing `db_cal_offset`), a 2-point lux fit and the
-noise floor. It is run for 10 minutes at the venue before judging.
+Plan: `POST /api/calibrate/room` sets the SPL offset, a 2-point lux fit and the noise floor, run for 10 minutes
+at the venue before judging. As implemented, it takes `spl_reference` and `lux_reference` (phone-meter
+readings): the aggregator adds a dB correction (reference minus the Leq of the last 10 s) to the levels the edge
+reports, and multiplies a lux scale by reference ÷ current estimate (one point per call). Noise-floor
+measurement is not implemented. The edge has its own calibration scripts (`scripts/calibrate_spl.py`,
+`scripts/calibrate_lux.py`).
 
 ---
 
@@ -687,11 +709,11 @@ noise floor. It is run for 10 minutes at the venue before judging.
 | 8 GB Mac | 5 Hz loop, LoRA batch 1–2, 8 layers | Demo Mac has 36 GB |
 | Face not found or hidden | `face_valence` NaN, `face_only` null; M2 continues on context (NaN-native features) | Narration switches to the occlusion clause |
 | GestureRecognizer | Finger-curl heuristic from hand landmarks | In the drop order |
-| YAMNet | `AUDIO_CLIPS` mode → ai-edge-litert → `POST /api/sim/event` | `AUDIO_STREAM` measured working |
+| YAMNet | `AUDIO_CLIPS` (in use) → ai-edge-litert → `POST /api/sim/event` | The spike measured YAMNet working (in `AUDIO_STREAM` mode) |
 | Vosk | pywhispercpp tiny.en + hallucination filter → `POST /api/sim/event` | Vosk measured working |
 | Lux regression | Raw brightness + `POST /api/sim/lux` | |
-| LightGBM / torch libomp clash | `KMP_DUPLICATE_LIB_OK=TRUE`, `OMP_NUM_THREADS=2`, `num_threads=1` → sklearn `HistGradientBoostingClassifier` | |
-| Camera or mic unavailable | Hybrid or replay from golden features JSONL | `status.camera` / `status.mic` false, `degraded` lists it |
+| LightGBM / torch libomp clash | Import torch before LightGBM (done in live mode) and predict with `num_threads=1` (done) → `KMP_DUPLICATE_LIB_OK=TRUE` → sklearn `HistGradientBoostingClassifier` | The plan also listed `OMP_NUM_THREADS=2`; on the demo Mac it segfaults (`docs/CONTRACT_REQUESTS.md` round 2), so it is not used |
+| Camera or mic unavailable | Replay from a golden features JSONL (`POST /api/replay_recording/{name}`) or a scenario; hybrid once it exists | `status.camera` / `status.mic` false, `degraded` lists it |
 | Narrator LLM | Llama-3.2-3B-Instruct-4bit (downloaded only if Qwen fails) → template | Llama measured 1108 ms per 89-token answer |
 | Narrator slow or down | Template text stands; `status.narrator` = `fallback` / `down`; ticks continue | Chaos test target: `status` event + fallback while ticks continue |
 | LoRA fails the ship gate | Ship Stage A (prompt-only) | |
@@ -717,7 +739,7 @@ is now measured on temporally structured data and surfaced through explicit mech
 |---|---|
 | Mock rows: `facial_valence_snapshot` 0.4–0.8, `ambient_db` up to 85, `clenched_fists_count` > 0, `hours_since_break` > 3.5, drawn independently per row | Simulator v2: per-person semi-Markov states with dwell times, fatigue tilt after ~3 h, Poisson breaks, room dB that drifts toward occupants' states with a per-session mic offset, bursty fist events, face noise, 5–40% missing face. Frustrated_Masked face mean +0.45 (forced smile). |
 | "Train a Decision Tree on the face column vs the full vector" | M0 (face snapshot) vs M2 (context + face history) LightGBM, with M0t, M1 and M2-noface as controls, compared at 0–15 min of history with bootstrap CIs. Headline: Frustrated_Masked recall, M0 vs M2 (TBD — produced by `valence/eval/evaluate.py`). |
-| `if predicted_state == "Frustrated_Masked" and face_prediction == "Happy"` | `MaskOverrideDetector` (9.4): confidence thresholds on both models, face-layer SHAP check, 3 consecutive ticks, blocked for the first 2 min. Sets `mask_override`; only then may the display read "Frustrated / Masked Stress" (core-4 phase) and the narrator use mask language. |
+| `if predicted_state == "Frustrated_Masked" and face_prediction == "Happy"` | `MaskOverrideDetector` (9.4): confidence thresholds on both models, face-layer SHAP check, persistence over several ticks, blocked for the first 2 min. Sets `mask_override`; only then may the display read "Frustrated / Masked Stress" (core-4 phase) and the narrator use mask language. |
 | Explanation string interpolating raw row values (`ambient_db`, `hours_since_break`) | `FactSheet` built from SHAP drivers with `level`/`effect`/`scope` → instant template text → LLM narration that the validator checks against the sheet. "Context corrected the facial mask" appears only with `mask_override`. |
 | Shown on mock data only | Also shown live: the masked flip with `mask_override`, plus the counterfactual ("still Frustrated at 0.5 h because of fists and noise"). |
 
@@ -759,22 +781,29 @@ The original pseudocode built one string from raw row values. The new trail has 
 
 ## 16. Open items
 
-1. **Fist rule.** Align `fist_debouncer()` (`debounce.py`, currently ≥ 0.6 for 3 samples) with the plan's
-   rule (≥ 0.7 held ≥ 0.5 s, keyboard-zone exclusion). This is an edge-side task.
-2. **Mask override on Focused.** Under the generic rule in 9.4, a Focused person whose face M0 reads as
-   Frustrated could trigger `mask_override`. The target says it must never fire on `focused`. If scenario
-   validation shows it firing, restrict the detector, for example to M2 labels where a mask is meaningful.
-   Decide once M2 exists.
-3. **Display-id release vs `person_drop_min`.** The edge releases an id 3 s after a track is lost and may
-   reuse it for someone new; the aggregator keeps a slot for 15 min. The aggregator should treat an id that
-   reappears after a gap longer than the release window as a new person: clear the slot and inherit room
-   history. To be confirmed in `aggregator.py` and `test_window`.
-4. **Driver scope for `hours_since_break`.** The break clock is room-level (6.1), but the API example in
-   `FRONTEND_PROMPT.md` tags it `scope: "person"`. Fix the scope of the time channels, and the `LAYER_MAP`
-   entry for `fill_ratio`, in `spec.py`.
-5. **Room-only model.** Which model serves the single room label in `--room-only` (for example M2-noface on
-   room-aggregated channels) is not yet specified.
-6. **`social_withdrawal_flag` rule.** Not yet defined (P1).
+Resolved since the first draft of this document: the fist rule now matches the plan (5.5); YAMNet runs in
+`AUDIO_CLIPS` mode (5.5); the break clock is per person, so `hours_since_break` drivers are person-scope, as
+in the `FRONTEND_PROMPT.md` example (6.1); `social_withdrawal_flag` has a shared rule (6.2); `fill_ratio` is
+never narrated and stays out of layer sums (7.4).
+
+1. **Mask-override rule.** The implemented rule (9.4) differs from the plan: M0 ≥ 0.45 instead of 0.55, a
+   positive-face requirement (M0 says `Collaborative_Happy`, M2 does not), and "≥ 3 of the last 6
+   face-visible ticks" instead of "3 consecutive". The positive-face requirement also answers the earlier
+   concern that a furrowed Focused face could count as a mask. Pick the final rule and align `docs/PLAN.md`,
+   this document, `docs/PRD.md`, `docs/API.md` and the code.
+2. **Display-id release vs `person_drop_min`.** The edge releases an id 3 s after a track is lost and may
+   reuse it for someone new; the aggregator keeps the slot (and its break clock) until `person_drop_min`
+   (15 min). The aggregator should treat an id that reappears after a gap longer than the release window as a
+   new person: clear the slot and inherit room history. To be confirmed in `aggregator.py` and `test_window`.
+3. **Room-only model.** In room-only mode the served M2 runs on the aggregate room record. Whether a dedicated
+   room model should serve that label (`docs/DATASET.md` 4.2 defines the room row as its training target), and
+   whether perception should stop per-person face analysis in this mode, are not decided.
+4. **Feature spec file.** The plan freezes the feature order in `artifacts/feature_spec.json`; the code stores
+   it as `feature_names` in `artifacts/model_meta.json`. Write the file, or update the plan.
+5. **Hybrid mode and per-modality sources.** The contract allows `mode: "hybrid"` and the plan names
+   `--video live|replay --audio live|replay`; neither is implemented (12.1).
+6. **Counterfactual input.** The endpoint re-runs on the person's current window, not on the stored feature
+   vector of the requested `event_id` (9.7).
 7. **`end_tick()` timing.** The ticker thread calls `end_tick()` while perception threads are purging. A
    buffer purged microseconds earlier whose caller has not yet run `del` would count as a violation. Purge must
    be the last use of a buffer. If the 60-min soak shows spurious violations, check only buffers purged

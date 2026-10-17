@@ -3,8 +3,9 @@
 This document replaces the original "Mock Dataset" script. It is the specification that
 `valence/sim/generator.py` implements, together with `valence/sim/params.py` (parameter table),
 `valence/sim/scenarios.py` (scripted replays), `valence/sim/legacy.py` (the original generator, kept for
-comparison) and `valence/sim/tune_difficulty.py` (difficulty tuning). Where code and this document disagree,
-this document is the target and the code is changed.
+comparison) and `valence/sim/tune_difficulty.py` (difficulty tuning; not written yet). Where code and this
+document disagree, this document is the target and the code is changed; the known differences are listed
+below.
 
 What this document is and is not:
 
@@ -15,6 +16,18 @@ What this document is and is not:
 - Detector false-positive rates, and the motion and slump scales, are **placeholders**. The live feature capture
   on the demo Mac replaces them (section 10). No capture numbers exist yet in `docs/BENCHMARKS.md`.
 - Field names follow `valence/contracts.py` (contract version 1.0.0) exactly.
+
+**Known differences between this spec and the code** (checked against `valence/sim/params.py`,
+`generator.py` and `artifacts/model_meta.json` on 2026-10-17; the v1 models were trained on the code's
+values):
+
+| Topic | This spec | Code at the time of writing |
+|---|---|---|
+| Break onset rate | 1 per 90 min (plan: ~1/90 min) | `NUISANCE.break_per_min = 1/120` |
+| Break length | U(10, 20) min, so every simulated break is also a live break (≥ `break_absent_min`) | U(5, 15) min, so some simulated breaks are shorter than the live 10-min rule |
+| Overwhelmed face hiding | U(0.40, 0.70) per episode | `face_hidden_extra = 0.55` added to the session base and the head-in-hands term (cap 0.98) |
+| Difficulty | `noise_scale` tuned by `tune_difficulty.py`, frozen in `artifacts/sim_manifest.json` | no tuning script or manifest; v1 trained at `noise_scale` 1.0, seed 7, 300 sessions, regenerated in memory (`artifacts/model_meta.json`) |
+| Relative features | `*_rel_sess` (plan name) | `*_rel_15m`: current value minus its 15-minute median (`valence/features/compute.py`) |
 
 ## Contents
 
@@ -51,7 +64,7 @@ What this document is and is not:
 | Face | Valence relative to the person's neutral, per-state mean, masking for `Frustrated_Masked`; missing on a per-session base of 5–40% of ticks (more during head-in-hands; 40–70% in `Overwhelmed`) |
 | Difficulty | One `noise_scale`, tuned by a rule that never looks at the headline comparison (section 12) |
 | Splits | By session, 70 / 15 / 15; validation split again into an early-stop half and a calibration half |
-| Storage | `data/sim/*.parquet` (gitignored), regenerated deterministically from seeds logged in `artifacts/sim_manifest.json` |
+| Storage | `data/sim/*.parquet` (gitignored), regenerated deterministically from seeds logged in `artifacts/sim_manifest.json` (planned; today the trainer regenerates sessions in memory from the seed and session count in `artifacts/model_meta.json`) |
 | Real data | `data/real/*.jsonl`, features only (no images, audio, transcripts or keypoints) |
 
 ---
@@ -327,7 +340,7 @@ with it.
 | Sharing | Every person row of the tick carries the same room values. In a mixed room (for example one Collaborative_Happy and one Focused person) both rows see the same, intermediate level, so dB is weaker evidence per person than per room. |
 
 Because the offset (±12 dB) is comparable to the gap between quiet and lively states (~15 dB), absolute dB is
-only weakly diagnostic across sessions; relative and trend features (`db_rel_sess`, slopes) carry most of the
+only weakly diagnostic across sessions; relative and trend features (`db_rel_15m`, slopes) carry most of the
 signal. The `M2-noabsdB` ablation tests this.
 
 ### 9.3 Light (`light_lux`, `lux_quality`)
@@ -450,7 +463,7 @@ The simulator generates every channel in the unit the live pipeline produces fro
 | `clenched_fists_count` | onsets per tick, person | debounced fist onsets (score ≥ 0.7 held ≥ 0.5 s; hands in the bottom 20% keyboard zone ignored) |
 | `posture_slump` | fraction of the tick | share of frames with a debounced slump |
 | `head_in_hands_frac` | fraction of the tick | share of frames with head in hands |
-| `motion_energy` | shoulder-widths per second | mean of `PersonObs.motion` (EMA α 0.3 of keypoint displacement). Raw unit; per-person normalization happens in the feature layer (`*_rel_sess`). The edge describes ~0.0–0.1 as still and 0.3+ as fidgeting (`docs/CONTRACT_REQUESTS.md`). |
+| `motion_energy` | shoulder-widths per second | mean of `PersonObs.motion` (EMA α 0.3 of keypoint displacement). Raw unit; per-person normalization happens in the feature layer (`*_rel_15m`). The edge describes ~0.0–0.1 as still and 0.3+ as fidgeting (`docs/CONTRACT_REQUESTS.md`). |
 | `face_valence` | −1..1, relative to the person's neutral | median blendshape valence over the tick; neutral = median of the first 20 s of visible face |
 | `face_visible` | fraction of the tick | share of frames with a readable face |
 | `hours_since_break` | h | presence-based clock: an absence ≥ `break_absent_min` (10 min; ~0.5 for demos) or `POST /api/events/break` resets it |
@@ -535,7 +548,7 @@ Scenarios are **never** part of the training or evaluation splits. They drive th
 | `collaborative_happy` | core | 2 | 12 | Collaborative_Happy 12 (both) | 11:00, 0.3 h, 520 lux, 5% | Laughter and compliments in a bright, lively room; displayed "Collaborative / Happy" because 2 people are present. Override must not fire. |
 | `overwhelmed` | all (P1) | 1 | 13 | Focused 3 → Overwhelmed 10 | 22:30, 4.5 h, 260 lux, seeded draw | Head in hands and slump in a noisy crunch; the face is hidden 40–70% of the time. Decision stability with missing face evidence. |
 | `tense` | all (P1) | 2 | 13 | Focused 3 → Tense 10 (both) | 17:00, 2.5 h, 330 lux, seeded draw | Visible frustration: face, fists and a loud room agree, so no override is expected. |
-| `context_blindness` | core | 2 | 20 | Collaborative_Happy 6 (`hih_p: 0.8`) → both absent 6 → Exhausted 8 (`hih_p: 0.8`) | 20:00, 0.5 h, 380 lux, 5% | The same head-in-hands pose in two contexts gets two labels: with laughter and compliments (amused), and in silence late in a long stretch (exhausted). Spec: the Exhausted half must show ~5 h since break. A plain 6-min absence would reset the clock under the break rule, so this segment needs a `hours_since_break` override (not yet supported by `Segment.overrides`, which only accepts `params.py` fields). |
+| `context_blindness` | core | 2 | 18 | Collaborative_Happy 7 (both, `hih_p: 0.45`) → both absent 2 → Person #1 Exhausted 9 (`hih_p: 0.45`, `lux_mult: 0.5`), Person #2 absent | 20:00; 4.4 h (Person #1) / 1.0 h (Person #2); 380 lux; 5% | The same head-in-hands pose in two contexts gets two labels: with laughter and compliments (amused), and in a silent, dim room after hours of work (exhausted). The 2-min absence is shorter than the 5-min scripted-break threshold, so Person #1's clock keeps running past 4.4 h into the Exhausted half; no `hours_since_break` override is needed. |
 | `full_demo` | core | 1 | 26 | Focused 5 → Frustrated_Masked 9 (`mask_p: 1.0`) → absent 6 (break) → Collaborative_Happy 6 | 15:00, 3.4 h, 300 lux, 5% | The pitch storyline: focused work, the masked flip, a logged break that resets the clock, recovery. With one person the last segment displays "Upbeat". |
 
 Scripted absences reset `hours_since_break` when they last ≥ 5 min (scenarios are short; live demos run with
@@ -554,8 +567,9 @@ window with room context only (no face), tagged `source = "sim_seed"`.
 | Test | 15% (~45) | every reported number |
 
 - Splits are **by session**: all rows of a session, including its room rows, go to one split. Assignment is a
-  seeded permutation of session ids, stored in the manifest. A planned test checks that no session appears in two
-  splits.
+  seeded permutation of session ids, stored in the manifest (planned; today `train_ladder.split_sessions`
+  recomputes it from a seed and `evaluate.py` rebuilds the held-out split the same way). A planned test checks
+  that no session appears in two splits.
 - The tuning corpus (section 12.2) and the scenarios are separate and never enter these splits.
 - Training windows (`valence/features/build_dataset.py`): a window ends every 6 ticks for each person, with a
   random length of 1–180 ticks (up to 15 min), so models see the warm-up regime as well as full windows. The label

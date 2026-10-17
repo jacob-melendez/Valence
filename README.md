@@ -9,7 +9,7 @@ zero-filled in RAM right after feature extraction, and only counts, levels, flag
 on. Those values form a 15-minute **Rolling State Vector**. A classifier labels each person's emotional
 state from it, and every prediction comes with a plain-English explanation of the context behind it.
 
-Built for **TrojanHacks @ USC 2026, AI Data Governance track**. This is an **early build**; see
+Built for **TrojanHacks @ USC 2026, AI Data Governance track**. This is a **build in progress**; see
 [Status](#status).
 
 ## Contents
@@ -75,13 +75,13 @@ when `n_people` < 2. People are only ever "Person #N".
 ### The three proofs
 
 Refined from the original PRD's three proofs ([`docs/PRD.md`](docs/PRD.md) section 4.2). No evaluation
-results exist yet; everything below is the evidence the build is designed to produce.
+result is reported here; everything below is the evidence the build is designed to produce.
 
 | # | Proof | Evidence | Status |
 |---|---|---|---|
 | 1 | **Data minimization** (the code) | `PurgeGate` zero-fills each raw buffer and tracks it with a weak reference; a buffer still alive at tick end is a `PURGE_VIOLATION`. Capture uses `grab()`/`retrieve()` so `frames_decoded == frames_purged`. `pytest -v tests/test_purge.py tests/test_no_persistence_ast.py tests/test_logfilter.py`; `/api/governance/stats` after a 60-min soak (target: 0 `violations`, 0 `live_raw_buffers`); `scripts/audit_verify.py`; demo with Wi-Fi off. | Gate, tests and stats endpoint exist. Soak, `memory_flat.png` and `audit_verify.py`: TBD |
-| 2 | **Context vs face** (the evaluation, on simulated data) | `accuracy_vs_history.png`: macro-F1 at 0/1/2/5/10/15 min of history for M0, M0t, M1, M2-noface, M2 (and M3 if time allows) with session-bootstrap 95% CIs. Headline numbers: `Frustrated_Masked` recall and the "Focused paradox" (true Focused read as Frustrated/Tense), M0 vs M2. `context_blindness` replay: same head-in-hands pose, two contexts, two labels. Live mask flip with `mask_override`; counterfactual ("still Frustrated at 0.5 h because of fists and noise"). | TBD — produced by `valence/eval/evaluate.py` into `reports/metrics.json` and `reports/figs/` |
-| 3 | **Decision stability when face evidence is missing or degraded** (narrowed from v1's "anti-bias") | Robustness curves that degrade only the face channel for M0, M0t, M2, M2-noface; M2 vs M2-noface gap table; live obscure-face (`--obscure-face`): the label holds and the narration switches to its occlusion clause; face-detection rate at 3 light levels. **Demographic validation is an explicit gap, not a claim.** | TBD — `valence/eval/evaluate.py` and the acted set |
+| 2 | **Context vs face** (the evaluation, on simulated data) | `accuracy_vs_history.png`: macro-F1 at 0/1/2/5/10/15 min of history for M0, M0t, M1, M2-noface, M2 (and M3 if time allows) with session-bootstrap 95% CIs. Headline numbers: `Frustrated_Masked` recall and the "Focused paradox" (true Focused read as Frustrated/Tense), M0 vs M2. `context_blindness` replay: same head-in-hands pose, two contexts, two labels. Live mask flip with `mask_override`; counterfactual ("still Frustrated at 0.5 h because of fists and noise"). | v1 figures exist in `reports/figs/` (uncommitted; core 4 states, untuned `noise_scale` 1.0). Headline numbers TBD — produced by `valence/eval/evaluate.py` into `reports/metrics.json` |
+| 3 | **Decision stability when face evidence is missing or degraded** (narrowed from v1's "anti-bias") | Robustness curves that degrade only the face channel for M0, M0t, M2, M2-noface; M2 vs M2-noface gap table; live obscure-face (`--obscure-face`): the label holds and the narration switches to its occlusion clause; face-detection rate at 3 light levels. **Demographic validation is an explicit gap, not a claim.** | v1 face-dropout and lux robustness figures exist (uncommitted). Gap table TBD — `valence/eval/evaluate.py`; live parts TBD (acted set, rehearsal) |
 
 Two supporting deliverables: a narrator faithfulness table (template vs prompt-only LLM vs LoRA: pass rate,
 invented numbers, wrong qualifiers, false mask claims, demographic mentions, latency with YOLO running), and
@@ -91,7 +91,7 @@ the governance framing below.
 
 - **Offline at runtime.** Internet is used only for one-time model downloads. `.env.example` sets
   `YOLO_OFFLINE=1`, `YOLO_AUTOINSTALL=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`. The API binds to
-  `127.0.0.1:8000` and the narrator service (planned) to `127.0.0.1:8081`, loopback only. The demo plan is
+  `127.0.0.1:8000` and the narrator service to `127.0.0.1:8081`, loopback only. The demo plan is
   to rehearse and present with Wi-Fi off.
 - **Raw media is zeroed within one processing step.** Every frame and audio block goes through
   `gate.purge(buf, kind)` (in-place `fill(0)`, weak-reference tracking) right after feature extraction;
@@ -103,8 +103,8 @@ the governance framing below.
 - **Nothing raw reaches disk or logs.** An AST scan (`python -m valence.governance.persistence_scan`) bans
   file writes in `valence/perception/` and binary/media writes in `valence/edge/`; `RawMediaFilter` drops
   any log record that carries an array or bytes; the rolling window lives only in memory (at most 15 min).
-- **The audit log records decisions, not data.** Labels, confidences, SHAP layer summaries, purge counters
-  and operator actions go into a hash-chained JSONL file (`var/audit/<session_id>.jsonl`). It is deleted when
+- **The audit log records decisions, not data.** Labels, confidences, SHAP layer summaries and operator
+  actions go into a hash-chained JSONL file (`var/audit/<session_id>.jsonl`). It is deleted when
   the session closes, and files older than `audit_ttl_s` (86 400 s) are removed at startup.
 
 Honest limits: `del` removes a name, not memory, and copies inside native libraries (GPU allocator caches,
@@ -125,20 +125,24 @@ Details: [`docs/PRD.md`](docs/PRD.md) section 1.4.
 
 ## Status
 
-**Early build, 2026-10-17 (Saturday evening; judging Sunday morning).** The contract and the governance core
-are in place with tests. A first end-to-end vertical slice (simulator replay to API and WebSocket) exists and
-serves a rule-based stub predictor. Everything else is in progress. The live checklist is
+**Build in progress, 2026-10-17 (Saturday evening; judging Sunday morning).** The replay path is
+implemented end to end (simulator scenarios → aggregator → features → served M2 v1 → explanations → REST and
+`/ws/events`). Live perception and the narrator exist as code on the branch but have not had their first live
+end-to-end run. A file existing does not mean its tests pass. The live checklist is
 [`docs/DELIVERABLES.md`](docs/DELIVERABLES.md).
 
 | Area | State |
 |---|---|
 | Shared contract `valence/contracts.py` (`CONTRACT_VERSION` 1.0.0) | On the branch; `tests/test_contracts.py` |
-| Governance core: purge gate, audit chain, raw-media log filter, persistence scan | On the branch; `tests/test_purge.py`, `test_audit.py`, `test_logfilter.py`, `test_no_persistence_ast.py` |
-| Vertical slice: simulator v2, scenarios, aggregator, event bus, engine, REST + `/ws/events`, `scripts/console.py`, template explanations | First version on the branch; served model is the rule-based stub (`model_id` `"stub-rules"`) |
-| Mac perception + edge runner (`valence/perception/`, `valence/edge/`) | Step 1 on the branch (video, audio, face valence, fists, posture, lux, IDs); live feature capture and calibration pending |
-| Narrator (`valence/narrator/`) | Validator and templates on the branch; service on :8081 and LoRA planned |
-| Feature computation, dataset builder, model ladder (M0 to M2), evaluation | In progress |
-| Results and figures (`reports/metrics.json`, `reports/figs/*.png`) | None yet. TBD — produced by `valence/eval/evaluate.py` |
+| Governance core: purge gate (incl. derived-buffer kinds), audit chain, raw-media log filter, persistence scan | On the branch; `tests/test_purge.py`, `test_audit.py`, `test_logfilter.py`, `test_no_persistence_ast.py`. The persistence scan currently reports 0 violations. |
+| Runtime and API: aggregator, event bus, engine, features-only recording replay, REST + `/ws/events`, `scripts/console.py` | On the branch; `tests/test_runtime.py`, `tests/test_api.py`. Hybrid mode not implemented yet |
+| Simulator v2, legacy generator, 8 scenarios | On the branch. Difficulty tuning (`tune_difficulty.py`) not written yet |
+| Features (114, same code offline and live), dataset builder | On the branch; `tests/test_feature_parity.py` |
+| Model ladder (M0 to M2 variants), served M2 with M0 shadow, counterfactual | v1 trained (core 4 states, 300 sessions, seed 7, untuned `noise_scale` 1.0; `artifacts/model_meta.json`); `tests/test_served.py`. M3 in progress. P1 six-state models not trained |
+| Explainer, template text, narrator client | On the branch |
+| Evaluation (`valence/eval/evaluate.py`), negative control | On the branch. v1 figures in `reports/figs/` (uncommitted); `reports/metrics.json` TBD; negative control needs the live capture |
+| Mac perception + edge runner (`valence/perception/`, `valence/edge/`) | On the branch (video, audio, face valence, fists, posture, lux, IDs, capture threads). Live feature capture and calibration pending |
+| Narrator (`valence/narrator/`) | Stage A service (:8081), validator and templates on the branch as drafts; LoRA planned |
 | Docs `GOVERNANCE.md`, `MODEL_CARD.md`, `RESULTS.md`, `DEMO.md`, `PERCEPTION.md`, `NARRATOR.md` | Planned |
 
 **Measured so far** (Apple M3 Max, 36 GB; the only source of measured numbers is
@@ -151,11 +155,6 @@ serves a rule-based stub predictor. Everything else is in progress. The live che
 | Narrator LLM Qwen3-1.7B 4-bit (MLX) | 187 tok/s generation; 536 ms wall for a 55-token answer; 1.27 GB peak |
 
 Live-camera numbers are still pending in `docs/BENCHMARKS.md`.
-
-**Known open item:** at the time of writing, `python -m valence.governance.persistence_scan` flags
-`valence/perception/calibration.py:110` (a write of calibration scalars) until the edge session adds the
-documented `# persistence-ok:` exception (see [`docs/CONTRACT_RESPONSES.md`](docs/CONTRACT_RESPONSES.md),
-round 2).
 
 ---
 
@@ -185,7 +184,8 @@ python -m valence.governance.persistence_scan --exceptions  # also list document
 - Optional extras in `pyproject.toml`: `bench` (torch, for the M3 GRU benchmark) and `slides` (shap, for
   beeswarm figures only; serving uses LightGBM `pred_contrib`).
 
-Replay demo on the current slice (stub predictor):
+Replay demo (serves the trained M2 when `artifacts/model_meta.json` matches `VALENCE_STATE_SET`, otherwise
+the rule stub, flagged `predictor:stub` in `status.degraded`):
 
 ```bash
 make replay                     # SCENARIO=full_demo SPEED=1 by default; API on 127.0.0.1:8000
@@ -214,8 +214,11 @@ cp .env.example .env                       # offline switches + VALENCE_* runtim
 
 Nothing reads `.env` automatically yet. Export it before starting (`set -a; source .env; set +a`), or pass
 `--env-file .env` to uvicorn. Every `VALENCE_<NAME>` variable overrides the matching field in
-`valence/config.py`. If torch and LightGBM clash over libomp in one process, uncomment
-`KMP_DUPLICATE_LIB_OK=TRUE` and `OMP_NUM_THREADS=2` in `.env`.
+`valence/config.py`. LightGBM needs `brew install libomp`. torch and LightGBM share one process in live mode:
+`valence/api/app.py` imports the edge (torch) before LightGBM and the served model predicts with
+`num_threads=1`. Do **not** set `OMP_NUM_THREADS` (measured on the demo Mac: segfault; see
+`docs/CONTRACT_REQUESTS.md` round 2). Uncomment `KMP_DUPLICATE_LIB_OK=TRUE` in `.env` only if a libomp clash
+still appears.
 
 Then:
 
@@ -231,8 +234,8 @@ make live                                       # API + live edge on 127.0.0.1:8
 - Never run uvicorn with `--reload` while live sensors are on (it opens the camera twice).
 - Room calibration: `scripts/calibrate_spl.py` (mic dBFS to dB SPL against a phone meter) and
   `scripts/calibrate_lux.py` (camera to lux against a phone lux meter).
-- The narrator service (planned) runs in its own venv, `valence/narrator/.venv`. Without it, the template
-  explanation in each `prediction` stands.
+- The narrator service (`python -m valence.narrator.service`, Stage A draft) runs in its own venv,
+  `valence/narrator/.venv`. Without it, the template explanation in each `prediction` stands.
 
 ---
 
@@ -244,13 +247,17 @@ make live                                       # API + live edge on 127.0.0.1:8
 |---|---|---|
 | `make test` | `pytest -q` | In `Makefile` |
 | `make scan` | Persistence scan | In `Makefile` |
-| `make replay` | API + scripted replay (`SCENARIO=full_demo SPEED=1`) | In `Makefile`; serves the stub predictor until M2 is wired in |
+| `make replay` | API + scripted replay (`SCENARIO=full_demo SPEED=1`) | In `Makefile`; serves M2 when the artifacts match the state set |
 | `make live` | API + live edge (Mac only) | In `Makefile`; depends on the Mac edge setup above |
 | `make console` | Terminal view of the event stream | In `Makefile` |
+| `make train` | Simulate the corpus in memory and train the model ladder into `artifacts/` (`python -m valence.models.train_ladder --sessions 300 --seed 7 --noise-scale 1.0 --state-set core`; `STATES=all` for 6 states) | In `Makefile`. `noise_scale` 1.0 is untuned until `tune_difficulty.py` exists |
+| `make eval` | `python -m valence.eval.evaluate --bootstrap 200` into `reports/metrics.json` and `reports/figs/*.png` | In `Makefile` |
+| `make facts` | Balanced narrator fact sheets into `data/narrator/fact_sheets_sim.jsonl` | In `Makefile` |
+| `make negative` | Negative control on the live typing capture (`data/real/capture_typing*.jsonl`, `--expect Focused`) | In `Makefile`; needs the live feature capture |
 | `make smoke` | Pre-demo check | In `Makefile` as `test` + `scan`. **Planned** pre-demo sequence: `make smoke && pytest -q && python scripts/e2e_check.py --speed 20` (`e2e_check.py` not written yet) |
-| `make data` | Generate simulator v2 sessions into `data/sim/` (session-split, seeds logged) | **Planned** (target declared, no recipe yet) |
-| `make train` | Train the model ladder into `artifacts/` (`python -m valence.models.train_ladder --sessions 300 --seed 7 --noise-scale 1.0 --state-set core`) | **Planned** (target declared, no recipe yet) |
-| `make eval` | `python -m valence.eval.evaluate` into `reports/metrics.json` and `reports/figs/*.png` | **Planned** (target declared, no recipe yet) |
+
+There is no separate data target: `make train` regenerates the simulator sessions from the seed. Writing the
+corpus to `data/sim/` with a manifest is planned (`docs/DATASET.md` section 15).
 
 ---
 
@@ -263,23 +270,23 @@ Mac). Ownership is disjoint; full module map in [`docs/ARCHITECTURE.md`](docs/AR
 |---|---|---|---|
 | `valence/contracts.py` | C | States, display rules, `PersonObs` / `VideoObs` / `AudioObs`, `TickRecord`, `FactSheet`, `NarrationResult`, WebSocket messages, `json_schemas()` | Exists |
 | `valence/config.py` | C | `Settings`; every field overridable by `VALENCE_<NAME>` | Exists |
-| `valence/governance/` | C | `purge.py` (`PurgeGate`, module-level `gate`), `audit.py` (`AuditLog`), `logfilter.py` (`RawMediaFilter`), `persistence_scan.py` | Exists; retention summary planned |
-| `valence/runtime/` | C | `bus.py` (bounded per-client queues, drop-oldest), `aggregator.py` (room/person slots, near-field gate, break clock), `engine.py` (ticker, replay and live sources) | Exists (first version) |
+| `valence/governance/` | C | `purge.py` (`PurgeGate`, module-level `gate`), `audit.py` (`AuditLog`), `logfilter.py` (`RawMediaFilter`), `persistence_scan.py` | Exists; the retention summary is served by `valence/api/app.py` |
+| `valence/runtime/` | C | `bus.py` (bounded per-client queues, drop-oldest), `aggregator.py` (room/person slots, near-field gate, per-person break clocks, calibration), `engine.py` (ticker, scenario replay and live sources), `recording.py` (features-only JSONL replay) | Exists |
 | `valence/sim/` | C | `generator.py` (simulator v2), `params.py`, `scenarios.py`, `legacy.py` (original mock, kept for comparison) | Exists; `tune_difficulty.py` planned |
-| `valence/features/` | C | `spec.py`, `window.py`; `compute.py` (~110 features, same code offline and live), `build_dataset.py` | `spec.py`, `window.py` exist; rest in progress |
-| `valence/models/` | C | `predictor.py` (interface, smoothing, stub), `served.py` (M2 + M0 shadow), `train_ladder.py` | In progress; `temporal.py` (M3), `counterfactual.py` planned |
-| `valence/explain/` | C | `describe.py`, `explainer.py` (layers, fact sheet), `template.py`, `narrator_client.py` | Exists (first version) |
-| `valence/eval/` | C | `evaluate.py` into `reports/` | In progress; `score_acted.py`, `negative_control.py` planned |
+| `valence/features/` | C | `spec.py`, `window.py`, `compute.py` (114 features, same code offline and live), `build_dataset.py` | Exists |
+| `valence/models/` | C | `predictor.py` (interface, smoothing, stub), `served.py` (M2 + M0 shadow, counterfactual), `train_ladder.py`, `temporal.py` (M3) | Exists; `temporal.py` in progress (uncommitted at the time of writing) |
+| `valence/explain/` | C | `describe.py`, `explainer.py` (layers, fact sheet), `template.py`, `narrator_client.py` | Exists |
+| `valence/eval/` | C | `evaluate.py` into `reports/`, `negative_control.py` (also scores acted recordings with `--expect`), `style.py` | Exists |
 | `valence/api/app.py` | C | Lifespan, REST under `/api`, `/ws/events` | Exists |
-| `valence/perception/` | L | Video (YOLO26n-pose + ByteTrack, hands, posture, face valence from blendshapes, lux), audio (dB, YAMNet laughter, Vosk grammar), debouncing, IDs, `gate.py` (single import point for the purge gate) | Exists (Step 1) |
-| `valence/edge/` | L | `run.py`: `start(sink, *, video, audio, obscure_face) -> stop`; CLI `--print` / `--jsonl`; `capture.py` | Exists |
-| `valence/narrator/` | L | `validator.py`, `lexicon.py`, `schema.py`, `templates.py`, `fake_fact_sheets.py`; runs in its own venv `valence/narrator/.venv` (gitignored) | Exists; `service.py` (:8081) and LoRA planned |
+| `valence/perception/` | L | Video (YOLO26n-pose + ByteTrack, hands, posture, face valence from blendshapes, lux), audio (dB, YAMNet laughter, Vosk grammar), debouncing, IDs, calibration constants, `gate.py` (single import point for the purge gate) | Exists |
+| `valence/edge/` | L | `run.py`: `start(sink, *, video, audio, obscure_face) -> stop`; CLI `--print` / `--jsonl`; `capture.py`; `calibration_store.py` | Exists |
+| `valence/narrator/` | L | `service.py` (:8081), `engine.py`, `prompt.py`, `validator.py`, `lexicon.py`, `schema.py`, `templates.py`, `fake_fact_sheets.py`, `evaluate.py`; runs in its own venv `valence/narrator/.venv` (gitignored) | Stage A drafts exist; LoRA planned |
 | `scenarios/*.yaml` | C | `focused`, `frustrated_masked`, `exhausted`, `collaborative_happy`, `overwhelmed`, `tense`, `context_blindness`, `full_demo` | Exists |
-| `scripts/` | C / L | C: `console.py` (exists); `e2e_check.py`, `mem_soak.py`, `audit_verify.py`, `export_fact_sheets.py` (planned). L: `spikes/`, `download_models.sh`, `calibrate_spl.py`, `calibrate_lux.py` (exist); `overnight.sh` (planned) | Mixed |
+| `scripts/` | C / L | C: `console.py`, `export_fact_sheets.py` (exist); `e2e_check.py`, `mem_soak.py`, `audit_verify.py` (planned). L: `spikes/`, `download_models.sh`, `calibrate_spl.py`, `calibrate_lux.py` (exist); `overnight.sh` (planned) | Mixed |
 | `tests/` | C; L for `tests/perception/`, `tests/narrator/` | Unit and integration tests | Exists, growing |
 | `docs/` | C; L for `BENCHMARKS.md`, `PERCEPTION.md`, `NARRATOR.md`, `CONTRACT_REQUESTS.md` | See [Documentation](#documentation) | Mixed |
 | `data/` | C: `sim/` (gitignored), `narrator/fact_sheets_sim.jsonl`. L: `real/` (features only), `narrator/{train,valid,test}.jsonl` | Features-only datasets | Planned |
-| `artifacts/`, `reports/` | C | Models, calibration temperatures, feature spec, clip bounds; metrics and figures | Planned (being produced) |
+| `artifacts/`, `reports/` | C | `artifacts/`: v1 models (`m0.txt`, `m2.txt` committed; the rest of the ladder local only), `model_meta.json` (temperatures, feature names, states), `clip_bounds.json`. `reports/`: figures and metrics | `artifacts/` exists (v1); `reports/figs/` v1 (uncommitted); `reports/metrics.json` TBD |
 | `models/`, `adapters/`, `var/` | — | Downloaded weights, LoRA adapters, runtime files such as `var/audit/` | Gitignored, never committed |
 | `pyproject.toml`, `requirements.txt`, `requirements.lock`, `Makefile`, `.gitignore`, `.env.example` | C | Packaging, core dependencies, commands, offline settings | Exists |
 | `requirements-mac.txt` | L | Mac-only perception, audio and narrator dependencies | Exists |
