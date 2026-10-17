@@ -37,10 +37,22 @@ def camera_names() -> list[str]:
     return [ln.strip().rstrip(":") for ln in out.splitlines() if ln.startswith("    ") and ln.strip().endswith(":")]
 
 
-def test_camera(indices: list[int]) -> int:
+def test_camera(indices: list[int], wait_s: float = 0.0) -> int:
+    print(f"cameras (system_profiler): {camera_names() or '?'}")
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            return _probe_cameras(indices)
+        except SystemExit:
+            if time.monotonic() >= deadline:
+                raise
+            print("  waiting for camera permission (click OK on the macOS prompt)...", flush=True)
+            time.sleep(3.0)
+
+
+def _probe_cameras(indices: list[int]) -> int:
     import cv2
 
-    print(f"cameras (system_profiler): {camera_names() or '?'}")
     for i in indices:
         cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
         if not cap.isOpened():
@@ -128,14 +140,19 @@ def main() -> None:
     ap.add_argument("--mic", default=os.environ.get("VALENCE_MIC"), help="input device name substring")
     ap.add_argument("--skip-camera", action="store_true")
     ap.add_argument("--skip-mic", action="store_true")
+    ap.add_argument("--wait", type=float, default=0.0, help="keep retrying the camera this many seconds "
+                    "(first run: macOS shows the permission prompt asynchronously)")
     a = ap.parse_args()
 
     if platform.machine() != "arm64":
         raise SystemExit(f"PYTHON FAIL: {platform.machine()} interpreter (Rosetta?). Use an arm64 Python 3.12.")
     print(f"python {sys.version.split()[0]} {platform.machine()}  parent app: {os.environ.get('__CFBundleIdentifier', '?')}")
+    if os.environ.get("__CFBundleIdentifier", "").startswith("com.anthropic"):
+        print("  note: Claude Code's shell helper has no camera usage string, so macOS can't grant it the camera;"
+              " run camera steps from Terminal.app / iTerm / VS Code")
 
     if not a.skip_camera:
-        cam = test_camera([a.camera] if a.camera is not None else [0, 1, 2])
+        cam = test_camera([a.camera] if a.camera is not None else [0, 1, 2], a.wait)
         print(f"CAMERA OK: index {cam}")
     if not a.skip_mic:
         mic = test_mic(a.mic)

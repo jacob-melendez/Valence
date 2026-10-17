@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import math
 
+TIME_EPS = 1e-9  # absorbs float error in timestamp differences (2.3 - 1.3 < 1.0)
+
 
 class HysteresisDebouncer:
     """Enter when ``score >= on`` for ``on_count`` consecutive samples; exit once
@@ -44,7 +46,7 @@ class HysteresisDebouncer:
             if self._streak < self.on_count:
                 return False
             self.active, self._streak, self._low_since = True, 0, None
-            if t - self._last_onset_t >= self.refractory_s:
+            if t - self._last_onset_t >= self.refractory_s - TIME_EPS:
                 self._last_onset_t = t
                 self.onsets += 1
                 return True
@@ -55,7 +57,7 @@ class HysteresisDebouncer:
             return False
         if self._low_since is None:
             self._low_since = t
-        if t - self._low_since >= self.off_hold_s:
+        if t - self._low_since >= self.off_hold_s - TIME_EPS:
             self.active, self._low_since = False, None
         return False
 
