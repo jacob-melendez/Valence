@@ -265,7 +265,9 @@ def simulate_session(
             person.burst = (2.5 if person.burst < 1 else 0.3) if rng.random() < 0.1 else person.burst
             fists = int(rng.poisson((b["fist_rate"] * person.burst + FP["fist_per_min"]) / TICKS_PER_MIN))
             person.slump_on = _two_state(rng, person.slump_on, b["slump_p"] + FP["slump_share"])
-            person.hih_on = _two_state(rng, person.hih_on, b["hih_p"])
+            # People cover their faces when they laugh: laughter in the room pulls head-in-hands up.
+            hih_share = b["hih_p"] + (0.35 if laughs and person.state == "Collaborative_Happy" else 0.0)
+            person.hih_on = _two_state(rng, person.hih_on, hih_share, switch=0.35 if laughs else 0.15)
             slump = person.slump_on * rng.uniform(0.7, 1.0) + (1 - person.slump_on) * rng.uniform(0.0, 0.15)
             hih = person.hih_on * rng.uniform(0.5, 1.0)
             motion = b["motion"] * float(np.exp(rng.normal(0.0, 0.4 * ns))) * (0.7 if person.slump_on else 1.0)

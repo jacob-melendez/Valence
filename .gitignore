@@ -221,13 +221,21 @@ __marimo__/
 
 # --- Valence ---
 .env
-models/
-adapters/
+/models/
+/adapters/
 *.pt
 *.task
 *.tflite
 *.safetensors
-var/
-data/sim/
+/var/
+/data/sim/
 valence/narrator/.venv/
 reports/tmp/
+
+# trained artifacts: only the served models (m0, m2 + meta) are committed; `make train` rebuilds the ladder
+artifacts/m0t.txt
+artifacts/m1.txt
+artifacts/m2_noface.txt
+artifacts/m2_noabsdb.txt
+artifacts/m2_notime.txt
+artifacts/m3*

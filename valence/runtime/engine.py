@@ -154,6 +154,7 @@ class Runtime:
             self._thread.join(timeout=2 * self.s.tick_s)
 
     def close(self) -> None:
+        self._stop_feeder()
         self.stop()
         self.audit.close(delete=True)
 
@@ -174,6 +175,7 @@ class Runtime:
 
     # --- sources and operator actions ----------------------------------------------------------------
     def use_scenario(self, df: pd.DataFrame, name: str, *, speed: float = 1.0, loop: bool = False) -> None:
+        self._stop_feeder()
         self.source = ScenarioSource(df, name, loop=loop)
         self.mode = "replay"
         self.speed = speed
@@ -181,10 +183,32 @@ class Runtime:
         self._audit("operator", {"action": "replay", "scenario": name, "speed": speed})
 
     def use_live(self) -> None:
+        self._stop_feeder()
         self.source = LiveSource(self.aggregator)
+        self.aggregator.source = "live"
         self.mode = "live"
         self.speed = 1.0
         self._audit("operator", {"action": "live"})
+
+    def use_recording(self, path, *, speed: float = 1.0, loop: bool = False) -> None:
+        """Replay a features-only JSONL recording through the live aggregator (stage fallback)."""
+        from valence.runtime.recording import JsonlFeeder
+
+        self._stop_feeder()
+        self.reset_people(keep_room=False)
+        self.source = LiveSource(self.aggregator, label="replay")
+        self.aggregator.source = "replay"
+        self.mode = "replay"
+        self.speed = 1.0
+        self.feeder = JsonlFeeder(path, self.push_obs, speed=speed, loop=loop)
+        self.feeder.start()
+        self._audit("operator", {"action": "replay_recording", "recording": str(getattr(path, "name", path))[:80]})
+
+    def _stop_feeder(self) -> None:
+        feeder = getattr(self, "feeder", None)
+        if feeder is not None:
+            feeder.stop()
+            self.feeder = None
 
     def reset_people(self, keep_room: bool = True) -> None:
         if keep_room:

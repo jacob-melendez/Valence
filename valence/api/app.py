@@ -15,6 +15,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+if os.environ.get("VALENCE_MODE") == "live":
+    # macOS: torch (imported by the edge) must load its libomp before LightGBM does, or YOLO segfaults.
+    # Measured on the demo Mac; see docs/CONTRACT_REQUESTS.md round 2.
+    try:
+        import valence.edge.run  # noqa: F401
+    except Exception:  # edge unavailable (cloud, missing deps): the API reports it as degraded
+        pass
+
 from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -221,7 +229,8 @@ def governance_stats() -> dict[str, Any]:
     s = gate.stats()
     return {
         "frames_decoded": a.runtime.aggregator.frames_decoded, "frames_purged": s.purged.get("video", 0),
-        "audio_blocks_purged": s.purged.get("audio", 0), "freed": s.freed, "unzeroable": s.unzeroable,
+        "audio_blocks_purged": s.purged.get("audio", 0), "derived_buffers_purged": {
+            k: v for k, v in s.purged.items() if k.endswith("_derived")}, "freed": s.freed, "unzeroable": s.unzeroable,
         "transcripts_purged": s.transcripts_purged, "violations": s.violations,
         "live_raw_buffers": s.live_raw_buffers, "retention_s": a.settings.audit_ttl_s,
         "near_field_gated_out": a.runtime.aggregator.gated_out, "audit_hash": a.runtime.audit.last_hash,
@@ -350,6 +359,30 @@ def replay(scenario: str, body: dict[str, Any] = Body(default={})) -> dict[str, 
     a.runtime.stop()
     a.runtime.start()
     return {"ok": True, "scenario": scenario, "speed": speed}
+
+
+@app.get("/api/recordings")
+def get_recordings() -> list[dict[str, Any]]:
+    from valence.runtime.recording import list_recordings
+
+    return list_recordings()
+
+
+@app.post("/api/replay_recording/{name}")
+def replay_recording(name: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Replay a features-only recording from data/real/ through the live pipeline (camera/mic fallback)."""
+    from valence.runtime.recording import RECORDINGS
+
+    a = state()
+    path = (RECORDINGS / f"{name}.jsonl").resolve()
+    if path.parent != RECORDINGS.resolve() or not path.exists():
+        raise HTTPException(404, f"unknown recording {name}")
+    a.stop_edge()
+    a.runtime.use_recording(path, speed=float(body.get("speed", 1.0)), loop=bool(body.get("loop", True)))
+    a.runtime.paused = False
+    a.runtime.stop()
+    a.runtime.start()
+    return {"ok": True, "recording": name}
 
 
 @app.post("/api/live")

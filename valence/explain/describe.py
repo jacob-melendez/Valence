@@ -94,7 +94,7 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
         if stat in ("now", "mean", "max", "ewm", "p90"):
             what = {"now": "current noise", "mean": "average noise", "max": "peak noise",
                     "ewm": "recent noise", "p90": "noise peaks"}[stat]
-            tail = "" if stat == "now" else f" over {span[9:] if span.startswith('the last ') else span}"
+            tail = "" if stat == "now" else f" over {span}"
             return d(f"{what} of {round(value)} dB{tail}", "dB", _level(value, 65, 58, 45))
         if stat == "d1m15m":
             sign = "above" if value >= 0 else "below"
@@ -102,12 +102,12 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
                      _level(value, 6, 3, -3))
         if stat == "slope":
             trend = "rising" if value >= 0 else "falling"
-            return d(f"noise {trend} {abs(value):.1f} dB per minute over {span[9:]}", "dB/min", _level(value, 1.0, 0.4, -0.4))
+            return d(f"noise {trend} {abs(value):.1f} dB per minute over {span}", "dB/min", _level(value, 1.0, 0.4, -0.4))
         if stat.startswith("rel"):
             sign = "above" if value >= 0 else "below"
-            return d(f"noise {abs(round(value))} dB {sign} this session's usual level", "dB", _level(value, 6, 3, -3))
+            return d(f"noise {abs(round(value))} dB {sign} its 15-minute median", "dB", _level(value, 6, 3, -3))
         if stat == "std":
-            return d(f"noise varying by {value:.1f} dB over {span[9:]}", "dB", _level(value, 6, 3, 1))
+            return d(f"noise varying by {value:.1f} dB over {span}", "dB", _level(value, 6, 3, 1))
 
     if ch == "lux":
         if stat in ("now", "mean", "ewm", "max"):
@@ -116,7 +116,8 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
             return d(f"{word} ({round(value)} lux)", "lux", lvl)
         if stat == "d1m15m" or stat.startswith("rel"):
             sign = "brighter" if value >= 0 else "darker"
-            return d(f"light {abs(round(value))} lux {sign} than usual", "lux", _level(value, 100, 40, -40))
+            ref = "its 15-minute median" if stat.startswith("rel") else "its 15-minute average"
+            return d(f"light {abs(round(value))} lux {sign} than {ref}", "lux", _level(value, 100, 40, -40))
         if stat in ("slope", "std"):
             return d(f"light changing ({value:+.1f} lux/min)", "lux/min", _level(abs(value), 20, 8, 0.5))
 
@@ -143,7 +144,7 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
             lvl = _level(value, 0.3, 0.1, -0.2)
             word = {"high": "smiling expression", "elevated": "slightly positive expression",
                     "normal": "neutral expression", "low": "negative expression"}[lvl]
-            tail = "" if stat == "now" else f" over {span[9:]}"
+            tail = "" if stat == "now" else f" over {span}"
             return d(f"{word}{tail} (valence {value:+.2f})", "", lvl)
         if stat == "std":
             return d(f"expression varying (spread {value:.2f})", "", _level(value, 0.35, 0.2, 0.05))
