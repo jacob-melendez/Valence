@@ -221,14 +221,14 @@ __marimo__/
 
 # --- Valence ---
 .env
-models/
-adapters/
+/models/
+/adapters/
 *.pt
 *.task
 *.tflite
 *.safetensors
-var/
-data/sim/
+/var/
+/data/sim/
 valence/narrator/.venv/
 reports/tmp/
 

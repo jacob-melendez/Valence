@@ -32,7 +32,9 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-KINDS = ("video", "audio")
+# "video"/"audio": the decoded camera frame / captured audio block (frames_decoded == purged["video"]).
+# "*_derived": copies perception makes from them (RGB conversion, head crops, PCM for Vosk, YAMNet clip).
+KINDS = ("video", "audio", "video_derived", "audio_derived")
 
 
 @dataclass(frozen=True)

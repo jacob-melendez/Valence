@@ -105,3 +105,13 @@ def test_transcripts_and_kind_validation(gate):
         gate.purge(np.zeros(3), "text")
     with pytest.raises(TypeError):
         gate.purge(b"raw", "audio")
+
+
+def test_derived_kinds_counted_separately(gate):
+    frame = np.ones((4, 4, 3), dtype=np.uint8)
+    crop = frame[:2, :2].copy()
+    gate.purge(crop, "video_derived")
+    gate.purge(frame, "video")
+    del frame, crop
+    stats = gate.end_tick()
+    assert stats.purged == {"video": 1, "video_derived": 1} and stats.violations == 0
