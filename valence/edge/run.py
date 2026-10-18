@@ -210,8 +210,22 @@ def _env_int(name: str) -> int | None:
     return int(v) if v not in (None, "") else None
 
 
+def participants_only(obs: VideoObs, rel_height: float | None = None) -> VideoObs:
+    """Drop bystanders: keep people whose box is at least ``rel_height`` x the tallest box in the
+    frame (the aggregator's participant rule, ``settings.participant_rel_height``)."""
+    if len(obs.persons) < 2:
+        return obs
+    rel = settings.participant_rel_height if rel_height is None else rel_height
+    tallest = max(p.bbox[3] - p.bbox[1] for p in obs.persons)
+    keep = tuple(p for p in obs.persons if p.bbox[3] - p.bbox[1] >= rel * tallest)
+    return obs if len(keep) == len(obs.persons) else dataclasses.replace(obs, persons=keep)
+
+
 class JsonlSink:
-    """Features-only recorder: one ``contracts.obs_to_dict`` per line, text mode, never media."""
+    """Features-only recorder: one ``contracts.obs_to_dict`` per line, text mode, never media.
+
+    Recordings keep only the people at the desk (``participants_only``): a bystander's features
+    never reach disk, even though perception tracks them so they can mask the lux background."""
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +234,8 @@ class JsonlSink:
         self.lines = 0
 
     def __call__(self, obs: VideoObs | AudioObs) -> None:
+        if isinstance(obs, VideoObs):
+            obs = participants_only(obs)
         line = json.dumps(obs_to_dict(obs), separators=(",", ":"), allow_nan=False)
         with self._lock:
             self._f.write(line + "\n")

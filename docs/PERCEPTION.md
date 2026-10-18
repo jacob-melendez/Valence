@@ -32,7 +32,10 @@ mic ─16 kHz float32, 100 ms callback (copy only)─► 1 s block ─► AudioP
 
 Per-person baselines (neutral face, upright posture) are in-memory medians tied to an ephemeral display id; when the
 id is released (person gone > 3 s) they are forgotten. No embeddings, no re-identification, no identity.
-Recordings (`--jsonl`, `data/real/*.jsonl`) contain only the contract fields (`contracts.obs_to_dict`).
+Recordings (`--jsonl`, `data/real/*.jsonl`) contain only the contract fields (`contracts.obs_to_dict`) and only
+**participants**: a person whose box is shorter than 0.55x the tallest in the frame (a bystander behind the desk) is
+dropped before the line is written (`valence.edge.run.participants_only`, same rule as the aggregator). Perception
+still tracks bystanders so their boxes can mask the lux background, but their features never reach disk.
 
 ## Signals
 
