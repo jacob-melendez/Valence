@@ -284,3 +284,30 @@ bash scripts/spikes/run_demo.sh                               # demo launcher us
   on a hidden-face sheet without `mask_override` passed) was not seen after full training, but it
   is a validator gap, not something training fixes.
 - Template fallback is always faithful but repetitive (distinct-2 0.136 on the test split).
+
+## Room-relative wording (P1-2, 2026-10-18)
+
+The core side moved Ambient Physics to the venue baseline, so driver displays now read e.g. "average noise of 76 dB over
+the last 5 minutes, 14 dB above this room's baseline" or "100 lux, dimmer than this room's usual light". Fresh export:
+`scripts/export_fact_sheets.py --seed 11` (1,779 sheets, 1,140 with a room-relative driver); random 300, 2.5 s deadline,
+camera-free YOLO load at 10 Hz, AC power:
+
+| | **LoRA (shipped)** | prompt-only | LoRA on the old wording (above) |
+|---|---|---|---|
+| final pass | 100% | 100% | 100% |
+| LLM first try | **87.3%** | 76.0% | 93.3% |
+| LLM any attempt / fallback | 95.3% / **4.7%** | 90.3% / 9.7% | 98.7% / 1.3% |
+| hallucinated-number rate (raw attempts) | **0.009** | 0.085 | 0.000 |
+| false-mask rate | **0.004** | 0.155 | 0.000 |
+| qualifier/contrast mismatch | 0.073 | 0.153 | 0.041 |
+| latency p50 / p95 / max (ms) | 1046 / 2227 / 2486 | 718 / 2136 / 2472 | 1010 / 1904 / 2465 |
+| over deadline | 0 | 0 | 0 |
+
+First try by case (LoRA / prompt): mask 91.5% / 66.2%, hidden 91.3% / 79.7%, visible 83.8% / 78.8%. LoRA's top raw
+failures: contrast 24, drivers 19, timeout 14, qualifier 9.
+
+Decision: **LoRA stays shipped** (final and first try >= prompt-only, p95 2.23 s <= 2.5 s). The adapter never saw the
+room-relative displays, which costs ~6 points of first try and ~320 ms of p95 (more retries, longer answers). A
+retrain on data rebuilt from a fresh export (`build_lora_data.py` on the new sheets, ~50 min on AC) should recover it;
+not done before the demo because the laptop travels to the venue mid-retrain. Every response stays validator-clean
+either way (the template catches the rest).
