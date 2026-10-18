@@ -40,6 +40,9 @@ BANNED_MODULE_CALLS = {
     ("scipy.io.wavfile", "write"),
     ("wavfile", "write"),
 }
+MEDIA_MODULES = {"cv2", "numpy", "np", "pickle", "joblib", "torch", "soundfile", "wave", "scipy.io.wavfile", "PIL.Image"}
+COPY_CALLS = {("shutil", "copy"), ("shutil", "copy2"), ("shutil", "copyfile"), ("shutil", "copyfileobj"),
+              ("shutil", "move")}
 PRAGMA = "# persistence-ok:"
 STRICT_DIRS = ("valence/perception",)
 TEXT_WRITES_OK_DIRS = ("valence/edge",)
@@ -83,11 +86,28 @@ def exceptions_in(source: str, path: str) -> list[Violation]:
 def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violation]:
     out: list[Violation] = []
     allowed = {v.line for v in exceptions_in(source, path) if v.reason != "(no reason given)"}
-    for node in ast.walk(ast.parse(source, filename=path)):
+    tree = ast.parse(source, filename=path)
+    # Names imported directly from media/serialization modules ("from cv2 import imwrite as w").
+    bare: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in MEDIA_MODULES:
+            for alias in node.names:
+                if alias.name in BANNED_ATTRS or (node.module == "wave" and alias.name == "open"):
+                    bare[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or node.lineno in allowed:
             continue
         func = node.func
         name = _dotted(func)
+        if isinstance(func, ast.Name) and func.id in bare:
+            out.append(Violation(path, node.lineno, f"banned call {bare[func.id]}() (imported as {func.id})"))
+            continue
+        if isinstance(func, ast.Attribute) and (_dotted(func.value), func.attr) in COPY_CALLS:
+            out.append(Violation(path, node.lineno, f"file copy {name}()"))
+            continue
+        if not allow_text_writes and name in ("os.write", "os.fdopen", "os.open", "os.writev"):
+            out.append(Violation(path, node.lineno, f"low-level file write {name}()"))
+            continue
         if isinstance(func, ast.Attribute):
             if func.attr in BANNED_ATTRS:
                 out.append(Violation(path, node.lineno, f"banned call {name or func.attr}()"))

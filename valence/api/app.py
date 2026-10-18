@@ -93,6 +93,17 @@ class App:
 STATE: App | None = None
 
 
+def expire_labels(ttl_s: int) -> int:
+    """Self-report label files follow the audit log's TTL (removed at startup once older than it)."""
+    cutoff = time.time() - ttl_s
+    removed = 0
+    for p in LABELS.glob("*.jsonl") if LABELS.exists() else []:
+        if p.stat().st_mtime < cutoff:
+            p.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def state() -> App:
     if STATE is None:
         raise HTTPException(503, "runtime not started")
@@ -126,6 +137,8 @@ def status(a: App) -> Status:
         degraded.append("predictor:stub")
     if a.edge_error:
         degraded.append("edge")
+    if rt._gap_ticks >= 3:
+        degraded.append("purge_gap")
     stats = gate.stats()
     return Status(
         mode=rt.mode if rt.mode in ("live", "replay", "hybrid") else "replay", camera=camera, mic=mic,
@@ -154,6 +167,7 @@ async def lifespan(app: FastAPI):
     settings = Settings.from_env()
     a = App(settings)
     STATE = a
+    expire_labels(settings.audit_ttl_s)
     a.bus.bind(asyncio.get_running_loop())
     a.narrator.start()
     if settings.mode == "live":
@@ -234,6 +248,7 @@ def governance_stats() -> dict[str, Any]:
         "transcripts_purged": s.transcripts_purged, "violations": s.violations,
         "live_raw_buffers": s.live_raw_buffers, "retention_s": a.settings.audit_ttl_s,
         "near_field_gated_out": a.runtime.aggregator.gated_out, "audit_hash": a.runtime.audit.last_hash,
+        "purge_gap": a.runtime.purge_gap,
     }
 
 

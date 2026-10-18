@@ -139,6 +139,8 @@ class Runtime:
         self.audit = AuditLog(audit_dir or settings.audit_dir, self.session_id, ttl_s=settings.audit_ttl_s)
         self._fps_frames = (time.monotonic(), 0)
         self.fps = 0.0
+        self.purge_gap = 0
+        self._gap_ticks = 0
 
     # --- lifecycle --------------------------------------------------------------------------------
     def start(self) -> None:
@@ -218,6 +220,9 @@ class Runtime:
         self.aggregator.reset_people()
         self.smoothers.clear()
         self.latest.clear()
+        self.history.clear()
+        if self.narrator is not None:
+            self.narrator.clear_cache()
         self._audit("operator", {"action": "reset", "keep_room": keep_room})
 
     def set_overlay(self, name: str, enabled: bool) -> None:
@@ -290,13 +295,17 @@ class Runtime:
         purge = self.gate.end_tick()
         # Replayed recordings carry the original capture's frame counter; this process decoded no frames.
         decoded = self.aggregator.frames_decoded if self.source.label == "live" else purge.purged.get("video", 0)
+        # Every decoded frame must be purged; allow the capture's in-flight slot (<= 2 frames).
+        self.purge_gap = max(0, decoded - purge.purged.get("video", 0))
+        self._gap_ticks = self._gap_ticks + 1 if self.purge_gap > 2 else 0
         self.bus.publish(Governance(
             t=wall, tick=self._tick_i, frames_decoded=decoded,
             frames_purged=purge.purged.get("video", 0), audio_blocks_purged=purge.purged.get("audio", 0),
             transcripts_purged=purge.transcripts_purged, violations=purge.violations,
             live_raw_buffers=purge.live_raw_buffers, audit_hash=self.audit.last_hash[:16],
-            retention_s=self.s.audit_ttl_s,
+            retention_s=self.s.audit_ttl_s, purge_gap=self.purge_gap,
         ))
+        self._evict(wall)
         targets = [ROOM] if self.room_only else sorted({r.person_id for r in records if r.person_id != ROOM})
         emitted = []
         for pid in targets:
@@ -306,6 +315,15 @@ class Runtime:
         self._tick_i += 1
         self.loop_latency_ms = (time.perf_counter() - t0) * 1000
         return emitted
+
+    def _evict(self, wall: float) -> None:
+        """Forget people absent longer than ``person_drop_min`` (window slot, smoother, latest state)."""
+        for pid in self.window.people():
+            rows = self.window.snapshot(pid)
+            if rows and wall - rows[-1].ts > self.s.person_drop_min * 60:
+                self.window.drop(pid)
+                self.smoothers.pop(pid, None)
+                self.latest.pop(pid, None)
 
     def _overlay(self, r: TickRecord) -> TickRecord:
         if not any(self.overlays.values()):

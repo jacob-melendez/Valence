@@ -364,6 +364,7 @@ class Governance(_Model):
     live_raw_buffers: int
     audit_hash: str | None = None
     retention_s: int
+    purge_gap: int = 0  # frames decoded but not (yet) purged; > 2 for 3 ticks raises status "purge_gap"
 
 
 class StateVector(_Model):

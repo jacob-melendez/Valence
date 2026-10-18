@@ -158,3 +158,19 @@ def test_background_tracks_are_not_participants():
     room, *people = agg.flush(wall=1_000_005, t_mono=5, tod_h=12.0)
     assert [p.person_id for p in people] == [1]
     assert room.n_people == 1 and people[0].n_people == 1
+
+
+def test_absent_people_are_evicted_and_reset_clears_history(runtime):
+    runtime.use_scenario(render("full_demo"), "full_demo")
+    for _ in range(20):
+        runtime.step()
+    assert runtime.window.people() == [1] and runtime.history
+    from valence.contracts import TickRecord
+
+    stale = runtime.window.snapshot(1)[-1]
+    runtime.window.append(TickRecord(**{**stale.to_dict(), "person_id": 7, "ts": stale.ts - 3600,
+                                        "face_valence": float("nan")}))
+    runtime._evict(stale.ts)
+    assert 7 not in runtime.window.people()
+    runtime.reset_people()
+    assert not runtime.history

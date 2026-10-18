@@ -103,3 +103,14 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
   `.env.example` guidance (do not override it in live mode).
 - **Remaining captures wanted:** keyboard gaze, deliberate slump, and an audio segment (speech, laughter,
   "great job" x3) so the slump/laughter/compliment scales can be checked the same way.
+
+## Round 5 (governance review findings)
+
+- **Bystanders in recordings:** capture run 1 held features of background tracks 2-4 (some with face valence).
+  The current `data/real/capture_*.jsonl` files were scrubbed to participants only (box >= 0.55 x the tallest in the
+  frame, the aggregator's rule); results are unchanged. Please apply the same filter in the `--jsonl` recorder before
+  writing, so future captures never contain people who are not at the desk. Earlier commits still hold the old files.
+- **Purge gap:** the governance message now carries `purge_gap = frames_decoded - purged["video"]`; more than 2 for 3
+  ticks raises status `purge_gap`. Keep `frames_decoded` as the capture's handoff count.
+- **Model:** core models are being retrained with modality dropout (training copies with the face hidden or degraded) so
+  M2 no longer falls below the no-face model when the face disappears; artifacts follow shortly.
