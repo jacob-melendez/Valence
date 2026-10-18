@@ -63,6 +63,7 @@ RUN=()
 if [[ "${SANDBOX:-1}" != 0 ]]; then
   command -v sandbox-exec > /dev/null || fail "sandbox-exec not found (SANDBOX=0 to run without it)"
   RUN=(sandbox-exec -f "$ROOT/scripts/spikes/valence_offline.sb")
+  export VALENCE_SANDBOXED=1
   echo "sandbox: narrator + API run with outbound network denied (loopback only)"
 fi
 
