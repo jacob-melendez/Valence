@@ -1,4 +1,37 @@
-# Valence pitch: 10-minute deck content
+# Valence pitch: deck content (5-minute talk + 5-minute Q&A)
+
+> **Format changed: 5 minutes of talk, then 5 minutes of Q&A.** Build the deck from **section 0** below. The
+> 12-slide plan in sections 1-2 is the source of the wording, numbers and speaker notes; the slides it drops become
+> backup slides after the close, for answering questions. All rules below (claim IDs, simulated-data footer,
+> REPLAY captions, "do not say") still apply.
+
+## 0. Five-minute version (6 slides, 4:30 planned, 30 s buffer for the live clip)
+
+| # | Slide (built from) | Time (ends) | On screen | Say (about 110 words per minute of slot) |
+|---|---|---|---|---|
+| 1 | **Valence: the face is not enough** (slides 1 + 2) | 0:30 (0:30) | Title, one line: "Faces mask stress; Valence reads context over time, on one laptop." | The masking problem in two sentences; the face-only model misses 89% of masked frustration and calls 56% of focused people negative `[H2]` `[H3]` (on simulated data). |
+| 2 | **Context, over time, on-device** (slides 4 + 5) | 0:45 (1:15) | The four layers (Ambient Physics, Somatic & Social, Facial Surface, Time Dynamics) and the one-laptop pipeline: perception -> purge gate -> features only -> LightGBM + face-only shadow -> SHAP layers -> local LLM narrator -> console. | Frames are dropped right after features are extracted; a 15-minute rolling window of numbers is all that is kept; a face-only model runs beside it as the baseline the context can overrule. |
+| 3 | **Demo** (slide 6, Clip 1 trimmed to ~45 s, plus your live clip if it shows MASK OVERRIDE) | 1:15 (2:30) | Clip 1 (REPLAY caption): Focused -> masked frustration -> MASK OVERRIDE -> Upbeat. | Talk over the key moments only: the face model says happy, context says frustrated, the override fires and the explanation says why. Skip the rule details (they are in Q&A). |
+| 4 | **Results** (slide 7; slide 8's two numbers as one line) | 0:45 (3:15) | `accuracy_vs_history.png`; two headline numbers: masked frustration caught **68% vs 11%**, focused misread **18% vs 56%** `[H2]` `[H3]`; footer: simulated data. | "Context beats the face snapshot, and it gets better as the window fills." One line: stays stable with the face hidden (0.678 vs 0.121) `[R1]`. |
+| 5 | **Governance: decisions kept, data not** (slide 10) | 0:50 (4:05) | Data lifecycle: frames zero-filled after features (purge counters on screen), nothing raw stored (static scan), hash-chained audit with a TTL, camera/mic processes sandboxed with outbound network denied (we found and blocked MediaPipe's built-in telemetry). Positioning line exactly as in slide 10. | This is the track: say what is never stored and how anyone can verify it (counters, audit verify, the scan). Keep the EU AI Act line to the wording in slide 10. |
+| 6 | **Limits + close** (slides 11 + 12) | 0:25 (4:30) | Three limits: evaluated on simulated data; real-data checks are small; not clinical. Close line. | One sentence per limit, then the close. |
+
+**Backup slides after the close (for Q&A, not presented):**
+- slide 3 (legacy mock data);
+- slide 8 (robustness and the venue shift);
+- slide 9 (explainability and the validated narrator);
+- slide 11 (full limits);
+- the architecture detail.
+
+Cut everything else: the counterfactual, the narrator A/B numbers, M3 and the 6-state model are Q&A-only.
+
+**Live clip:** keep it to 15-20 s inside slide 3, and use it only if it shows MASK OVERRIDE on screen. Otherwise use
+Clip 1 alone.
+
+**Rehearse with a timer.** If you run past 4:45, cut slide 2's pipeline narration first, then the results' second
+line.
+
+# Valence pitch: 10-minute deck content (superseded by section 0; source material)
 
 TrojanHacks @ USC 2026, AI Data Governance track. Talk at 1:45 pm. **Slides and videos final by 12:00.**
 
