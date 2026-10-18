@@ -17,6 +17,7 @@ that is deleted at the end, and no frames, audio or transcripts exist on this pa
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gc
 import json
 import os
@@ -67,12 +68,17 @@ def build_runtime(predictor_kind: str, audit_dir: str):
     from valence.runtime.engine import Runtime
 
     settings = Settings()
+    if not Path(settings.artifacts_dir).is_absolute():  # relative to the repo, not the caller's cwd
+        settings = dataclasses.replace(settings, artifacts_dir=str(REPO / settings.artifacts_dir))
     if predictor_kind == "stub":
         predictor = StubPredictor(STATE_SETS[settings.state_set])
     else:
         from valence.api.app import load_predictor  # same choice the server makes (served M2, else stub)
 
         predictor = load_predictor(settings)
+        if isinstance(predictor, StubPredictor):
+            raise SystemExit(f"no served model for state_set={settings.state_set!r} in {settings.artifacts_dir}; "
+                             "train one or pass --predictor stub")
     bus = EventBus()  # no event loop bound and no clients: messages are encoded, then dropped
     rt = Runtime(settings, bus, predictor, gate=PurgeGate(), audit_dir=audit_dir)
     return settings, bus, predictor, rt
@@ -117,7 +123,7 @@ def summarize(samples: list[dict], history_cap: int) -> dict:
         "history_len_max": max(hist),
         "history_len_end": last["history_len"],
         "history_cap": history_cap,
-        "history_plateaued": max(hist) <= history_cap and last["history_len"] == max(hist),
+        "history_plateaued": last["history_len"] == history_cap,  # reached the cap and stayed bounded by it
         "window_records_max": max(s["window_records"] for s in samples),
         "audit_entries_end": last["audit_entries"],
         "audit_bytes_end": last["audit_bytes"],
@@ -220,7 +226,9 @@ def figure(report: dict, path: Path) -> None:
     mins = cfg["minutes"]
     soak_label = f"{mins:g}-minute"
     slope = summ["rss_slope_mb_per_min_second_half"]
-    if summ["flat"]:
+    if slope is None:  # fewer than two samples in the second half
+        title = f"Memory under a {soak_label} soak (too short to fit a slope)"
+    elif summ["flat"]:
         title = f"Memory stays flat under a {soak_label} soak"
     else:
         title = f"Memory grows {slope:+.2f} MB/min under a {soak_label} soak"

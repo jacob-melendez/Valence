@@ -93,6 +93,22 @@ def test_truncated_tail_needs_head(log):
     assert av.main([str(log.path), "--head", head[:16]]) == 1
 
 
+def test_head_tolerates_surrounding_whitespace_and_case(log):
+    assert av.main([str(log.path), "--head", f"  {log.last_hash.upper()} "]) == 0
+    assert av.main([str(log.path), "--head", f" {log.last_hash[:16]}\n"]) == 0
+
+
+def test_invalid_utf8_is_tampering_and_other_files_are_still_checked(log, capsys):
+    other = AuditLog(log.path.parent, "session-other")
+    other.append("operator", {"action": "live"})
+    other.path.write_bytes(other.path.read_bytes().replace(b"live", b"l\xffve"))
+    write(log, edit_field(lines(log)))
+    assert av.main([str(log.path.parent)]) == 1
+    out = capsys.readouterr().out
+    assert "not valid UTF-8" in out
+    assert "session-test" in out and "hash mismatch" in out  # the second file was still verified
+
+
 def test_one_bad_file_in_a_directory_fails(log, tmp_path):
     other = AuditLog(log.path.parent, "session-other")
     other.append("operator", {"action": "live"})
