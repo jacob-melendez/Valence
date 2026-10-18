@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  LAYERS, STATES, STATE_DISPLAY, figureUrl, sendCommand, setSource, useValence,
-  type EvalSummary, type PredictionMsg, type Scenario, type StateKey,
+  LAYERS, STATES, STATE_DISPLAY, figureUrl, fmt, provenanceBadges, sendCommand, setSource, shownExplanation, stateName, useValence,
+  type EvalSummary, type PredictionMsg, type Scenario, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 
 export const STATE_VAR: Record<StateKey, string> = {
@@ -10,12 +10,17 @@ export const STATE_VAR: Record<StateKey, string> = {
   Exhausted: "var(--state-exhausted)",
   Collaborative_Happy: "var(--state-happy)",
 };
-const pct = (v: number) => `${Math.round(v * 100)}%`;
+const stateColor = (id: string | null | undefined, fallback = "var(--primary)") =>
+  (id ? (STATE_VAR as Record<string, string | undefined>)[id] : undefined) ?? fallback;
+const pct = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—");
+/** The backend's display text for a prediction (e.g. "Frustrated", "Upbeat"); the state name if missing. */
+const labelText = (p: PredictionMsg) => p.label_display || stateName(p.label);
 
 // ---------- Header + controls ----------
 export function Header() {
   const s = useValence();
   const [url, setUrl] = useState(s.baseUrl);
+  useEffect(() => { setUrl(s.baseUrl); }, [s.baseUrl]); // picks up ?api= / saved URL resolved after hydration
   const connLabel = { mock: "MOCK STREAM", connecting: "CONNECTING…", open: "LIVE · CONNECTED", closed: "DISCONNECTED · RETRYING" }[s.conn];
   const connColor = s.conn === "open" || s.conn === "mock" ? "bg-ok" : s.conn === "connecting" ? "bg-warn" : "bg-destructive";
   return (
@@ -27,6 +32,12 @@ export function Header() {
       <div className="flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-sm">
         <span className={`h-3 w-3 rounded-full ${connColor} pulse-dot`} /> {connLabel}
       </div>
+      {provenanceBadges(s).map((b) => (
+        <span key={b.label} title={b.title} data-testid="provenance-badge"
+          className={`rounded-md px-3 py-2 font-mono text-sm font-bold ${b.tone === "warn" ? "bg-warn text-primary-foreground" : b.tone === "live" ? "bg-ok text-primary-foreground" : "border text-muted-foreground"}`}>
+          {b.label}
+        </span>
+      ))}
       <div className="flex items-center gap-1 rounded-md border p-1 font-mono text-sm">
         {(["mock", "live"] as const).map((m) => (
           <button key={m} onClick={() => setSource(m, url)}
@@ -114,13 +125,15 @@ export function CameraView() {
         <video ref={videoRef} autoPlay muted playsInline className={`h-full w-full scale-x-[-1] object-cover ${showVideo ? "" : "hidden"}`} />
         {s.persons.map((p) => {
           const pred = s.predictions[p.id];
-          const color = pred ? STATE_VAR[pred.label] : "var(--primary)";
-          const [x1, y1, x2, y2] = p.bbox;
+          const color = stateColor(pred?.label);
+          const [b1, y1, b2, y2] = p.bbox;
+          // The preview is shown mirrored (selfie view), so unmirrored box coordinates are flipped to match (docs/API.md 4.2).
+          const [x1, x2] = s.mirrored ? [b1, b2] : [1 - b2, 1 - b1];
           return (
             <div key={p.id} className="absolute border-[3px] transition-all duration-700"
               style={{ left: `${x1 * 100}%`, top: `${y1 * 100}%`, width: `${(x2 - x1) * 100}%`, height: `${(y2 - y1) * 100}%`, borderColor: color }}>
               <div className="absolute -top-px left-0 -translate-y-full px-2 py-1 font-mono text-sm font-bold text-primary-foreground" style={{ background: color }}>
-                {p.label}{pred ? ` · ${STATE_DISPLAY[pred.label]} ${pct(pred.confidence)}` : ""}
+                {p.label}{pred ? ` · ${labelText(pred)} ${pct(pred.confidence)}` : ""}
               </div>
             </div>
           );
@@ -156,7 +169,11 @@ export function Governance() {
           </div>
         ))}
       </div>
-      <div className="mb-2 font-mono text-xs text-muted-foreground">live raw buffers: <span className="text-ok">{g?.live_raw_buffers ?? "—"}</span></div>
+      <div className="mb-2 font-mono text-xs text-muted-foreground">
+        frames decoded: <span className="text-foreground">{g?.frames_decoded?.toLocaleString() ?? "—"}</span>
+        {" · "}purge gap: <span className={(g?.purge_gap ?? 0) > 2 ? "text-destructive" : "text-ok"}>{g?.purge_gap ?? "—"}</span>
+        {" · "}live raw buffers: <span className="text-ok">{g?.live_raw_buffers ?? "—"}</span>
+      </div>
       <div ref={ref} className="h-52 overflow-y-auto rounded-md bg-terminal p-3 font-mono text-[13px] leading-relaxed text-ok">
         {s.govLog.length === 0 && <div className="text-muted-foreground">waiting for governance events…</div>}
         {s.govLog.map((m, i) => (
@@ -183,11 +200,13 @@ export function SystemStatus() {
         <div className="text-base">
           {item("Camera", st.camera ? "ON" : "OFF", st.camera)}
           {item("Microphone", st.mic ? "ON" : "OFF", st.mic)}
-          {item("Mode", st.mode.toUpperCase())}
-          {item("FPS", st.fps.toFixed(1))}
-          {item("Loop latency", `${st.loop_latency_ms} ms`, st.loop_latency_ms < 250)}
+          {item("Mode", String(st.mode ?? "—").toUpperCase())}
+          {item("FPS", fmt(st.fps))}
+          {item("Loop latency", `${fmt(st.loop_latency_ms, 0)} ms`, (st.loop_latency_ms ?? 0) < 250)}
           {item("Narrator", st.narrator, st.narrator === "ready")}
           {item("Network", st.offline ? "OFFLINE ✓" : "ONLINE", st.offline)}
+          {item("Degraded", st.degraded?.length ? st.degraded.join(", ") : "none", !st.degraded?.length)}
+          {item("Purge violation", st.purge_violation ? "ALARM" : "none", !st.purge_violation)}
           {item("Uptime", `${Math.floor(st.uptime_s / 60)}m ${Math.floor(st.uptime_s % 60)}s`)}
         </div>
       )}
@@ -197,7 +216,13 @@ export function SystemStatus() {
 
 // ---------- Person card ----------
 export function PersonCard({ p }: { p: PredictionMsg }) {
-  const color = STATE_VAR[p.label];
+  const s = useValence();
+  const color = stateColor(p.label);
+  const probs = p.probabilities ?? {};
+  // Core states first, then any extra state the backend sends (e.g. the P1 states).
+  const keys: string[] = [...STATES, ...Object.keys(probs).filter((k) => !(STATES as string[]).includes(k))];
+  const faceLabel = p.face_only?.label ?? null;
+  const ex = shownExplanation(p, s.llm[p.person_id]);
   return (
     <div className="panel border-l-8" style={{ borderLeftColor: color }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -205,18 +230,18 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
         <div className="font-mono text-xs text-muted-foreground">{p.event_id}{p.warming_up ? " · warming up" : ""}</div>
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-3">
-        <div className="text-4xl font-bold" style={{ color }}>{STATE_DISPLAY[p.label]}</div>
+        <div className="text-4xl font-bold" style={{ color }}>{labelText(p)}</div>
         <div className="font-mono text-4xl font-bold">{pct(p.confidence)}</div>
       </div>
 
       <div className="mt-4 space-y-2">
-        {STATES.map((k) => (
+        {keys.map((k) => (
           <div key={k} className="grid grid-cols-[14rem_1fr_3.5rem] items-center gap-3 text-base">
-            <span className={k === p.label ? "font-semibold" : "text-muted-foreground"}>{STATE_DISPLAY[k]}</span>
+            <span className={k === p.label ? "font-semibold" : "text-muted-foreground"}>{stateName(k)}</span>
             <div className="h-4 overflow-hidden rounded-sm bg-muted">
-              <div className="h-full transition-all duration-700" style={{ width: pct(p.probabilities[k] ?? 0), background: STATE_VAR[k] }} />
+              <div className="h-full transition-all duration-700" style={{ width: pct(probs[k] ?? 0), background: stateColor(k, "var(--muted-foreground)") }} />
             </div>
-            <span className="text-right font-mono">{pct(p.probabilities[k] ?? 0)}</span>
+            <span className="text-right font-mono">{pct(probs[k] ?? 0)}</span>
           </div>
         ))}
       </div>
@@ -224,12 +249,21 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
       <div className="mt-5 grid grid-cols-2 gap-3">
         <div className="rounded-md bg-muted p-3">
           <div className="text-xs uppercase tracking-wider text-muted-foreground">Face-only baseline</div>
-          <div className="text-lg font-semibold" style={{ color: STATE_VAR[p.face_only.label] }}>{STATE_DISPLAY[p.face_only.label]}</div>
-          <div className="font-mono">{pct(p.face_only.confidence)}</div>
+          {faceLabel ? (
+            <>
+              <div className="text-lg font-semibold" style={{ color: stateColor(faceLabel) }}>{stateName(faceLabel)}</div>
+              <div className="font-mono">{pct(p.face_only.confidence)}</div>
+            </>
+          ) : (
+            <>
+              <div className="text-lg font-semibold text-muted-foreground">no face visible</div>
+              <div className="font-mono text-muted-foreground">—</div>
+            </>
+          )}
         </div>
         <div className="rounded-md bg-muted p-3">
           <div className="text-xs uppercase tracking-wider text-muted-foreground">Context model</div>
-          <div className="text-lg font-semibold" style={{ color }}>{STATE_DISPLAY[p.label]}</div>
+          <div className="text-lg font-semibold" style={{ color }}>{labelText(p)}</div>
           <div className="font-mono">{pct(p.confidence)}</div>
         </div>
       </div>
@@ -242,30 +276,31 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
       <div className="mt-5">
         <div className="mb-1 flex items-center gap-2">
           <span className="panel-title mb-0">Audit explanation</span>
-          <span className={`rounded px-2 py-0.5 font-mono text-xs font-bold ${p.explanation.source === "template" ? "bg-muted text-muted-foreground" : "bg-primary text-primary-foreground"}`}>
-            {p.explanation.source}{p.explanation.latency_ms ? ` · ${p.explanation.latency_ms} ms` : ""}
+          <span className={`rounded px-2 py-0.5 font-mono text-xs font-bold ${ex.source === "template" ? "bg-muted text-muted-foreground" : "bg-primary text-primary-foreground"}`}>
+            {ex.source}{ex.latency_ms ? ` · ${ex.latency_ms} ms` : ""}
           </span>
+          {ex.asOf && <span className="font-mono text-xs text-muted-foreground">as of {ex.asOf}</span>}
         </div>
-        <p className="text-lg leading-snug">{p.explanation.text}</p>
+        <p className="text-lg leading-snug">{ex.text}</p>
       </div>
 
       <div className="mt-5">
         <div className="panel-title">Top drivers by layer</div>
         <div className="grid gap-3 md:grid-cols-2">
           {LAYERS.map((name) => {
-            const l = p.layers.find((x) => x.name === name);
+            const l = (Array.isArray(p.layers) ? p.layers : []).find((x) => x.name === name);
             return (
               <div key={name} className="rounded-md border p-3">
                 <div className="mb-1 flex justify-between">
                   <span className="font-semibold">{name}</span>
                   <span className={`font-mono font-bold ${(l?.contribution ?? 0) >= 0 ? "text-ok" : "text-destructive"}`}>
-                    {l ? `${l.contribution >= 0 ? "+" : ""}${l.contribution.toFixed(2)}` : "—"}
+                    {l ? `${l.contribution >= 0 ? "+" : ""}${fmt(l.contribution, 2)}` : "—"}
                   </span>
                 </div>
-                {l?.drivers.map((d) => (
+                {l?.drivers?.map((d) => (
                   <div key={d.feature} className="flex items-start justify-between gap-2 text-sm">
                     <span className="text-muted-foreground">{d.shap >= 0 ? "▲ supports" : "▼ opposes"} · {d.display}</span>
-                    <span className={`font-mono ${d.shap >= 0 ? "text-ok" : "text-destructive"}`}>{d.shap >= 0 ? "+" : ""}{d.shap.toFixed(2)}</span>
+                    <span className={`font-mono ${d.shap >= 0 ? "text-ok" : "text-destructive"}`}>{d.shap >= 0 ? "+" : ""}{fmt(d.shap, 2)}</span>
                   </div>
                 ))}
               </div>
@@ -281,18 +316,19 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
 export function StateVectors() {
   const s = useValence();
   const ids = Object.keys(s.vectors).map(Number).sort();
-  const rows: [string, (v: (typeof s.vectors)[number]) => string][] = [
-    ["Noise", (v) => `${v.ambient_db.toFixed(1)} dB`],
-    ["Light", (v) => `${v.light_lux} lux`],
-    ["Hours since break", (v) => `${v.hours_since_break.toFixed(1)} h`],
-    ["Time of day", (v) => v.time_of_day],
-    ["Clenched fists (5 min)", (v) => String(v.clenched_fists_5m)],
+  const rows: [string, (v: StateVectorMsg) => string][] = [
+    ["Noise", (v) => `${fmt(v.ambient_db)} dB`],
+    ["Light", (v) => `${fmt(v.light_lux, 0)} lux`],
+    ["Hours since break", (v) => `${fmt(v.hours_since_break)} h`],
+    ["Time of day", (v) => v.time_of_day ?? "—"],
+    ["Clenched fists (5 min)", (v) => String(v.clenched_fists_5m ?? "—")],
     ["Posture slump", (v) => pct(v.posture_slump)],
-    ["Social withdrawal", (v) => pct(v.social_withdrawal)],
-    ["Compliments (15 min)", (v) => String(v.compliments_15m)],
-    ["Laughter (15 min)", (v) => String(v.laughter_15m)],
+    ["Head in hands", (v) => pct(v.head_in_hands)],
+    ["Social withdrawal", (v) => (v.social_withdrawal ? "yes" : "no")],
+    ["Compliments (15 min)", (v) => String(v.compliments_15m ?? "—")],
+    ["Laughter (15 min)", (v) => String(v.laughter_15m ?? "—")],
     ["Face visible", (v) => (v.face_visible ? "yes" : "NO")],
-    ["Facial valence", (v) => (v.face_visible ? `${v.facial_valence >= 0 ? "+" : ""}${v.facial_valence.toFixed(2)}` : "n/a")],
+    ["Facial valence", (v) => (v.face_visible && v.facial_valence != null ? `${v.facial_valence >= 0 ? "+" : ""}${fmt(v.facial_valence, 2)}` : "n/a")],
   ];
   return (
     <div className="panel">
@@ -303,7 +339,7 @@ export function StateVectors() {
           {rows.map(([k, f]) => (
             <tr key={k} className="border-t">
               <td className="py-1.5 text-muted-foreground">{k}</td>
-              {ids.map((i) => <td key={i} className="text-right font-mono font-semibold">{f(s.vectors[i])}</td>)}
+              {ids.map((i) => { const v = s.vectors[i]; return <td key={i} className="text-right font-mono font-semibold">{v ? f(v) : "—"}</td>; })}
             </tr>
           ))}
         </tbody>
@@ -318,7 +354,7 @@ export function Timeline() {
   const ids = [...new Set(s.history.map((h) => h.person_id))].sort();
   const [pid, setPid] = useState(1);
   const pts = s.history.filter((h) => h.person_id === pid);
-  const tMax = pts.length ? pts[pts.length - 1].t : 0;
+  const tMax = pts[pts.length - 1]?.t ?? 0;
   const tMin = tMax - 900;
   const W = 1000, H = 160;
   const x = (t: number) => ((t - tMin) / 900) * W;
@@ -340,7 +376,7 @@ export function Timeline() {
         <div className="ml-auto flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Window</span>
           <div className="h-3 w-40 overflow-hidden rounded bg-muted"><div className="h-full bg-primary" style={{ width: `${(fill / 15) * 100}%` }} /></div>
-          <span className="font-mono">{fill.toFixed(1)}/15 min {fill < 15 ? "· warming up" : "· full"}</span>
+          <span className="font-mono">{fmt(fill)}/15 min {fill < 15 ? "· warming up" : "· full"}</span>
         </div>
       </div>
       <svg viewBox={`0 0 ${W} ${H + 40}`} className="w-full" preserveAspectRatio="none">
@@ -350,7 +386,7 @@ export function Timeline() {
         })}
         {labels.map((p, i) => {
           const next = labels[i + 1]?.t ?? tMax;
-          return <rect key={i} x={x(p.t)} y={H + 12} width={Math.max(1, x(next) - x(p.t))} height={24} fill={STATE_VAR[p.label!]} />;
+          return <rect key={i} x={x(p.t)} y={H + 12} width={Math.max(1, x(next) - x(p.t))} height={24} fill={stateColor(p.label, "var(--muted-foreground)")} />;
         })}
       </svg>
       <div className="mt-2 flex flex-wrap gap-4 text-sm">
@@ -424,7 +460,7 @@ function Confusion({ c }: { c: NonNullable<EvalSummary["confusion"]>[number] }) 
       <div className="grid gap-0.5 font-mono text-xs" style={{ gridTemplateColumns: `2.5rem repeat(${c.labels.length}, 1fr)` }}>
         <span />{c.labels.map((l) => <span key={l} className="text-center text-muted-foreground">{short[l] ?? l}</span>)}
         {c.matrix.map((row, i) => [
-          <span key={`l${i}`} className="text-muted-foreground">{short[c.labels[i]] ?? c.labels[i]}</span>,
+          <span key={`l${i}`} className="text-muted-foreground">{short[c.labels[i] ?? ""] ?? c.labels[i]}</span>,
           ...row.map((v, j) => (
             <span key={`${i}-${j}`} className="py-1.5 text-center font-bold" style={{ background: `color-mix(in oklch, var(--primary) ${(v / max) * 85}%, var(--muted))`, color: v / max > 0.5 ? "var(--primary-foreground)" : "var(--foreground)" }}>{v}</span>
           )),
@@ -446,11 +482,29 @@ function Calibration({ d }: { d: NonNullable<EvalSummary["calibration"]> }) {
   );
 }
 
-const FIGURES = ["accuracy_vs_history", "robustness_face_hidden", "robustness_low_light", "confusion_context", "confusion_face_only", "calibration"];
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const MODEL_NOTE: Record<string, string> = { m0: "face-only baseline", m2: "context model" };
+
+/** Metrics table rows from either the mock rows or reports/metrics.json (`metrics.models`, served by /api/eval/summary). */
+function metricRows(m: EvalSummary["metrics"]): { accLabel: string; rows: { model: string; acc: number | null; f1: number | null; ece: number | null }[] } {
+  if (Array.isArray(m)) return { accLabel: "Acc", rows: m.map((r) => ({ model: String(r.model), acc: num(r.accuracy), f1: num(r.macro_f1), ece: num(r.ece) })) };
+  const models = m && typeof m === "object" && m.models && typeof m.models === "object" ? m.models : {};
+  const eceM2 = num(m?.calibration_m2?.ece_after);
+  return {
+    accLabel: "Bal acc",
+    rows: Object.entries(models).map(([id, v]) => ({
+      model: MODEL_NOTE[id] ? `${id} · ${MODEL_NOTE[id]}` : id,
+      acc: num(v?.balanced_accuracy), f1: num(v?.macro_f1), ece: id === "m2" ? eceM2 : null,
+    })),
+  };
+}
 
 export function Evaluation() {
   const s = useValence();
   const e = s.evalSummary;
+  const { accLabel, rows } = metricRows(e?.metrics);
+  const disclosure = e && !Array.isArray(e.metrics) && typeof e.metrics?.disclosure === "string" ? e.metrics.disclosure : null;
+  const figures = Array.isArray(e?.figures) ? e.figures : [];
   return (
     <div className="panel">
       <div className="mb-3 flex items-center gap-3">
@@ -459,28 +513,30 @@ export function Evaluation() {
         <span className="flex items-center gap-1.5 text-sm"><span className="h-1 w-5 bg-muted-foreground" />Face-only baseline</span>
         {s.source === "mock" && <span className="ml-auto rounded bg-warn px-2 py-0.5 font-mono text-xs font-bold text-primary-foreground">PLACEHOLDER DATA</span>}
       </div>
-      {!e ? <div className="text-muted-foreground">Evaluation summary unavailable</div> : (
+      {!e ? <div className="text-muted-foreground">Evaluation summary unavailable</div>
+        : e.available === false ? <div className="text-muted-foreground">No evaluation results yet</div> : (
         <div className="grid gap-6 lg:grid-cols-4">
-          {e.accuracy_vs_history && <div><div className="mb-1 text-sm font-semibold">Accuracy vs history window</div><AccuracyChart d={e.accuracy_vs_history} /></div>}
-          {e.robustness && <div><div className="mb-1 text-sm font-semibold">Robustness</div><BarPair xKey="" data={e.robustness.map((r) => ({ label: r.condition, context: r.context, face_only: r.face_only }))} /></div>}
-          {e.calibration && <div><div className="mb-1 text-sm font-semibold">Calibration (context)</div><Calibration d={e.calibration} /></div>}
-          {e.metrics && (
+          {Array.isArray(e.accuracy_vs_history) && <div><div className="mb-1 text-sm font-semibold">Accuracy vs history window</div><AccuracyChart d={e.accuracy_vs_history} /></div>}
+          {Array.isArray(e.robustness) && <div><div className="mb-1 text-sm font-semibold">Robustness</div><BarPair xKey="" data={e.robustness.map((r) => ({ label: r.condition, context: r.context, face_only: r.face_only }))} /></div>}
+          {Array.isArray(e.calibration) && <div><div className="mb-1 text-sm font-semibold">Calibration (context)</div><Calibration d={e.calibration} /></div>}
+          {rows.length > 0 && (
             <div>
               <div className="mb-1 text-sm font-semibold">Metrics</div>
               <table className="w-full text-sm">
-                <thead><tr className="text-left text-muted-foreground"><th className="font-normal">Model</th><th className="text-right font-normal">Acc</th><th className="text-right font-normal">F1</th><th className="text-right font-normal">ECE</th></tr></thead>
-                <tbody>{e.metrics.map((m) => (
-                  <tr key={m.model} className="border-t"><td className="py-1">{m.model}</td><td className="text-right font-mono">{pct(m.accuracy)}</td><td className="text-right font-mono">{m.macro_f1.toFixed(2)}</td><td className="text-right font-mono">{m.ece.toFixed(2)}</td></tr>
+                <thead><tr className="text-left text-muted-foreground"><th className="font-normal">Model</th><th className="text-right font-normal">{accLabel}</th><th className="text-right font-normal">F1</th><th className="text-right font-normal">ECE</th></tr></thead>
+                <tbody>{rows.map((m) => (
+                  <tr key={m.model} className="border-t"><td className="py-1">{m.model}</td><td className="text-right font-mono">{pct(m.acc)}</td><td className="text-right font-mono">{fmt(m.f1, 2)}</td><td className="text-right font-mono">{fmt(m.ece, 2)}</td></tr>
                 ))}</tbody>
               </table>
             </div>
           )}
-          {e.confusion?.map((c) => <div key={c.name} className="lg:col-span-2"><Confusion c={c} /></div>)}
+          {disclosure && <p className="text-sm text-muted-foreground lg:col-span-3">{disclosure}</p>}
+          {Array.isArray(e.confusion) && e.confusion.map((c) => <div key={c.name} className="lg:col-span-2"><Confusion c={c} /></div>)}
         </div>
       )}
-      {s.source === "live" && (
+      {s.source === "live" && figures.length > 0 && (
         <div className="mt-6 grid gap-4 md:grid-cols-3">
-          {(e?.figures ?? FIGURES).map((f) => (
+          {figures.map((f) => (
             <figure key={f} className="rounded-md border bg-muted p-2">
               <img src={figureUrl(f)} alt={f.replace(/_/g, " ")} className="w-full rounded" onError={(ev) => ((ev.currentTarget.style.display = "none"))} />
               <figcaption className="mt-1 font-mono text-xs text-muted-foreground">{f}.png</figcaption>
