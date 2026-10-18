@@ -434,8 +434,9 @@ produces.
 > facial mask)
 >
 > *Template:* "Model predicted Frustrated / Masked Stress (88%) for Person #1. The face alone suggests
-> Collaborative / Happy, but 3 clenched-fist events in the last 5 minutes, average noise of 72 dB over 15
-> minutes and 4.2 hours since the last break point the other way. Context corrected the facial mask."
+> Collaborative / Happy, but 3 clenched-fist events in the last 5 minutes, average noise of 72 dB over the
+> last 15 minutes, 8 dB above this room's baseline and 4.2 hours since the last break point the other way.
+> Context corrected the facial mask."
 
 The label reads "Frustrated / Masked Stress" here only because `mask_override` is true (§2.7). The noise
 driver has `scope: room`, so an LLM narration must phrase it as "the room" (see the `explanation` example in
