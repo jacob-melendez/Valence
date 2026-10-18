@@ -635,3 +635,19 @@ Asks for the core side:
   does not infer it from block levels.
 - Demo: capture the 90 s baseline while the hall is at its normal level; the `POST /api/sim/event` inject is the
   backup and skips the gate, but is marked SIMULATED and audited.
+
+## Home calibration attempt (2026-10-18) and 18-min soak
+
+- **SPL:** phone dBA meter vs pink noise played from the laptop's own speakers gave offsets +115 to +120 dB rising with
+  level: the phone sat at the speaker grille (the source), so it measured far more than the mic heard. Not saved; the
+  default +94 dB stays (consistent with a quiet room reading ~42 dB at baseline). A valid SPL check needs an external,
+  diffuse source (a fan, a speaker across the room) with the phone next to the laptop. Absolute dB only changes the
+  numbers quoted in the text; the models read noise relative to the venue baseline.
+- **Lux:** three home setups (118-160 lux) all gave background luminance 117.1-117.4: webcam auto-exposure cancels small
+  light changes, so there is nothing to fit. Not saved; the default model stays. Light enters the models relative to
+  the venue baseline.
+- **Soak (sandboxed live demo, 18 min, nobody acting):** 10.0 FPS every minute, purge violations 0, live raw buffers 0,
+  `frames_purged_process == frames_decoded` (the API's purge_gap 0), narrator 31/31 llm and 0 template. RSS: narrator
+  1413 -> 1455 MB (flat after minute 5), API 936 -> 983 MB (+47 MB, still drifting; needs a longer run to call). Files
+  open for writing: the launcher's server log and the macOS Metal shader cache only (`soak_monitor.py`'s
+  decoded-purged column compares the tick-sampled counter, which lags by the in-flight frames).
