@@ -152,7 +152,7 @@ observation from the shot list, not a metric. Do **not** say "same face": the fa
 - Pipeline (left to right): Camera + mic → **Edge perception** → **Purge gate** → **Features only (5 s ticks,
   15-min window in RAM)** → **LightGBM context model + face-only shadow** → **Explanation layers (TreeSHAP)** →
   **Local LLM narrator + validator** → **Console**
-- Footer line: On-device. Designed to run with Wi-Fi off; the perception process was checked and opened no internet sockets.
+- Footer line: On-device. The camera/mic processes run in a macOS sandbox with outbound network denied (loopback only).
 
 **Visual:** build the pipeline diagram. Under each box, in small type:
 - Edge perception: YOLO26n-pose + ByteTrack (people, posture), MediaPipe face blendshapes and gestures, YAMNet
@@ -174,8 +174,9 @@ observation from the shot list, not a metric. Do **not** say "same face": the fa
 > local LLM turns that into a sentence. Every number in that sentence is checked before you see it."
 
 **Claims:** two thirds never decoded `[P3]` (assumes a 30 fps camera); 45-57 ms/frame at 10 Hz `[P1]` (M3 Max,
-plugged in, one machine); 8 phrases `[P4]`, `[G10]`; no internet sockets in the perception process `[P12]`.
-Say "designed to run offline", not "fully offline" `[P13]`. **If** the Wi-Fi-off rehearsal is done and passes
+plugged in, one machine); 8 phrases `[P4]`, `[G10]`; camera/mic processes sandboxed with outbound network denied; MediaPipe's built-in usage telemetry is blocked by it
+(unsandboxed, it held 4 HTTPS connections to Google; `docs/BENCHMARKS.md`). Say "sandboxed, no outbound network", not
+"fully offline" `[P13]`. **If** the Wi-Fi-off rehearsal is done and passes
 before 12:00, you may change the footer to "Demo rehearsed with Wi-Fi off".
 
 ---
@@ -476,7 +477,7 @@ Say "on simulated data" at least once per slide that has a model number. Round o
 | "It only fires on negative states" | "It fires when context confidently reads anything but happy and the face pulls toward happy." | M1, served.py POSITIVE |
 | "Same face, different label" (Clip 3) | "Same posture, different room." | The face reading changes too |
 | "The break reset the clock" (Clip 6) | Say nothing about the clock | The clock keeps running in that scenario |
-| "Fully offline" / "Wi-Fi off" (unless rehearsed today) | "Designed to run offline; perception process checked with no sockets." | P13 |
+| "Fully offline" / "Wi-Fi off" (unless rehearsed today) / "nothing ever touches the network" | "The camera and mic processes run in a sandbox with outbound network denied; we found and blocked MediaPipe's built-in telemetry." | P13 |
 | "MASK OVERRIDE works live on real data" (unless the LIVE clip shows it) | "Shown here in replay; the live flip is being recorded." | D11 |
 | "The 6-state model scores 0.767" next to 0.797 | Leave it out, or compare with 0.791 under the same scoring | L8 caveat |
 | "Exhausted, live" | Show Exhausted only in replay | D4: slump cannot be acted live |

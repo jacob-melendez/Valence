@@ -192,8 +192,9 @@ afterthought. Details, with code references and known gaps, are in `docs/GOVERNA
   (68.0% vs 11.2%) and cuts "resting focus face" misreads from 56.3% to 17.9%.
 - With the face hidden on every tick it keeps a macro-F1 of 0.678 while the face-only model drops to 0.121
   (simulated, face channel only; partly by construction, since the served model was trained on face-hidden copies).
-- The whole perception stack runs on one laptop at 10 Hz (45-57 ms per frame), and the perception process opened
-  no internet sockets under load.
+- The whole perception stack runs on one laptop at 10 Hz (45-57 ms per frame). We found that MediaPipe embeds usage
+  telemetry to Google with no opt-out, so the launcher runs the camera/mic processes in a macOS sandbox that denies all
+  outbound network (loopback only); `status.offline` reports a live outbound probe, not just a setting.
 - The narrator's LoRA passes the faithfulness validator on the first try 93.3% of the time, and its raw attempts
   invented no numbers and made no false mask claims, at a p95 of 1904 ms with YOLO running.
 - A governance story we can demonstrate: 23 governance tests, a zero-violation persistence scan, a hash-chained
@@ -283,7 +284,7 @@ All IDs refer to the claims inventory used for `docs/PITCH.md` (sources: `report
 | First 30 s: 32.8% vs 44.3% | E1 | Simulated, per-window accuracy |
 | Narrator 17.1% invented numbers (prompt-only) | P7 | Raw attempts, measured by the validator |
 | Battery: 10-17 tok/s, all timeouts | P8 | |
-| Perception process opened no internet sockets | P12 | API process and Wi-Fi-off rehearsal not checked (listed in "What's next") |
+| Camera/mic processes sandboxed, outbound denied; MediaPipe telemetry found and blocked | P12, BENCHMARKS live smoke | verified with EPERM on the Mac; Wi-Fi-off rehearsal not done |
 | Typing 25/25, fists 24/25, keyboard gaze 25/25 | D1, D2, D3 | One person, ~25 ticks; typing in-sample (stated) |
 | 0.649 → 0.791 at 5 min, plateau; face flat | A1 | Simulated, macro-F1 by history |
 | Context history without face beats face snapshot | A2 | Simulated |

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -69,6 +70,10 @@ class App:
         self.edge_stop = None
         self.edge_error: str | None = None
         self.mic_error: str | None = None  # edge running video-only because audio failed to start
+        # Network reality, not just env flags: run_demo.sh starts the API under a no-outbound sandbox (MediaPipe
+        # embeds usage telemetry with no opt-out) and exports VALENCE_SANDBOXED=1; the probe checks it holds.
+        self.sandboxed = os.environ.get("VALENCE_SANDBOXED") == "1"
+        self.outbound_blocked: bool | None = None  # None until the first probe
 
     def start_edge(self, obscure_face: bool = False) -> None:
         if self.edge_stop is not None:
@@ -134,6 +139,15 @@ def hello(a: App) -> Hello:
     )
 
 
+def outbound_blocked(host: str = "1.1.1.1", port: int = 443, timeout: float = 0.5) -> bool:
+    """True when an outbound TCP connection fails (sandbox EPERM, Wi-Fi off, no route)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return False
+    except OSError:
+        return True
+
+
 def status(a: App) -> Status:
     rt = a.runtime
     now = time.monotonic()
@@ -156,7 +170,7 @@ def status(a: App) -> Status:
     return Status(
         mode=rt.mode if rt.mode in ("live", "replay", "hybrid") else "replay", camera=camera, mic=mic,
         fps=round(rt.fps, 1), loop_latency_ms=round(rt.loop_latency_ms, 1),
-        narrator="ready" if a.narrator.healthy else "fallback", offline=all(os.environ.get(k) for k in ("HF_HUB_OFFLINE", "YOLO_OFFLINE")),
+        narrator="ready" if a.narrator.healthy else "fallback", offline=all(os.environ.get(k) for k in ("HF_HUB_OFFLINE", "YOLO_OFFLINE")) and a.outbound_blocked is True,
         uptime_s=round(time.time() - rt.started, 1), degraded=degraded, purge_violation=stats.violations > 0,
     )
 
@@ -168,6 +182,8 @@ async def _status_loop(a: App) -> None:
         n += 1
         if n % 10 == 1:
             await asyncio.to_thread(a.narrator.check_health)
+        if n % 30 == 1:
+            a.outbound_blocked = await asyncio.to_thread(outbound_blocked)
         a.bus.publish(status(a))
         if n % 5 == 0:
             a.bus.publish(Heartbeat(t=time.time()))
@@ -232,7 +248,8 @@ def health() -> dict[str, Any]:
     a = state()
     return {"ok": True, "contract_version": CONTRACT_VERSION, "mode": a.runtime.mode,
             "model": getattr(a.predictor, "model_id", "unknown"), "edge_error": a.edge_error, "mic_error": a.mic_error,
-            "room_baseline": a.runtime.aggregator.baseline_status()}
+            "room_baseline": a.runtime.aggregator.baseline_status(),
+            "network": {"sandboxed": a.sandboxed, "outbound_blocked": a.outbound_blocked}}
 
 
 @app.get("/api/states")
@@ -256,9 +273,7 @@ def governance_stats() -> dict[str, Any]:
     a = state()
     s = gate.stats()
     return {
-        "frames_decoded": a.runtime.aggregator.frames_decoded if a.runtime.source.label == "live"
-        else a.runtime.frames_purged,
-        "frames_purged": a.runtime.frames_purged, "frames_purged_process": s.purged.get("video", 0),
+        "frames_decoded": a.runtime.frames_decoded, "frames_purged": a.runtime.frames_purged,  # same tick "frames_purged_process": s.purged.get("video", 0),
         "audio_blocks_purged": s.purged.get("audio", 0), "derived_buffers_purged": {
             k: v for k, v in s.purged.items() if k.endswith("_derived")}, "freed": s.freed, "unzeroable": s.unzeroable,
         "transcripts_purged": s.transcripts_purged, "violations": s.violations,
@@ -434,6 +449,7 @@ def replay_recording(name: str, body: dict[str, Any] = Body(default={})) -> dict
 @app.post("/api/live")
 def go_live() -> dict[str, Any]:
     a = state()
+    a.stop_edge()  # a running capture keeps counting; restart it so decoded/purged re-align from zero
     a.runtime.use_live()
     a.runtime.reset_people(keep_room=False)
     a.start_edge()
@@ -523,7 +539,10 @@ def reset_room_baseline() -> dict[str, Any]:
 @app.post("/api/mode")
 def set_mode(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     a = state()
-    a.runtime.room_only = bool(body.get("room_only", False))
+    room_only = bool(body.get("room_only", False))
+    if room_only != a.runtime.room_only:
+        a.runtime.latest.clear()  # the other mode's cards would otherwise linger in /api/state
+    a.runtime.room_only = room_only
     a.runtime._audit("operator", {"action": "mode", "room_only": a.runtime.room_only})
     return {"ok": True, "room_only": a.runtime.room_only}
 

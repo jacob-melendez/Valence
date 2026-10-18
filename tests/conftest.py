@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-MAC_ONLY = {"ultralytics", "sounddevice", "vosk", "mlx", "mlx_lm", "torch", "torchvision"}
+MAC_ONLY = {"ultralytics", "sounddevice", "vosk", "mlx", "mlx_lm", "torch", "torchvision", "cv2"}
 MISSING = {name for name in MAC_ONLY if importlib.util.find_spec(name) is None}
 
 

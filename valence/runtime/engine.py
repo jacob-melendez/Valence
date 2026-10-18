@@ -144,6 +144,7 @@ class Runtime:
         self._gap_ticks = 0
         self._purged_base = 0  # purged video frames before the current source began
         self.frames_purged = 0
+        self.frames_decoded = 0  # paired with frames_purged at the same tick (governance message, stats)
 
     # --- lifecycle --------------------------------------------------------------------------------
     def start(self) -> None:
@@ -320,6 +321,7 @@ class Runtime:
         # counter, and this process decodes no frames for them, so replay reports its own purged count.
         self.frames_purged = purge.purged.get("video", 0) - self._purged_base
         decoded = self.aggregator.frames_decoded if self.source.label == "live" else self.frames_purged
+        self.frames_decoded = decoded
         # Every decoded frame must be purged; allow the capture's in-flight slot (<= 2 frames).
         self.purge_gap = max(0, decoded - self.frames_purged)
         self._gap_ticks = self._gap_ticks + 1 if self.purge_gap > 2 else 0

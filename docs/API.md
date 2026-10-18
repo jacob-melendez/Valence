@@ -307,7 +307,7 @@ Periodic system status, about 1 Hz.
 | `fps` | float | Processed video observations per second (perception rate; target 10, 0 in scenario replay) |
 | `loop_latency_ms` | float | Time the runtime took to process the last tick: windows, features, models, SHAP, messages |
 | `narrator` | `"ready" \| "fallback" \| "down"` | `ready`: the narrator answered its last health check or request. `fallback`: it did not, so template text is in use. `down` is reserved for a narrator that is known to be unreachable; the current runtime reports only `ready` or `fallback`. |
-| `offline` | bool | The offline settings (`HF_HUB_OFFLINE`, `YOLO_OFFLINE`) are set, so no library will try to download anything. It is a configuration check, not a network probe. Valence needs no network after the one-time model downloads. |
+| `offline` | bool | True only when the offline settings (`HF_HUB_OFFLINE`, `YOLO_OFFLINE`) are set **and** an outbound probe fails (a TCP connect to 1.1.1.1:443, every 30 s): the API process cannot reach the internet. `run_demo.sh` runs the API and narrator under a macOS sandbox that denies outbound network (loopback only) and exports `VALENCE_SANDBOXED=1`; `/api/health` `network` reports `sandboxed` and `outbound_blocked`. The sandbox exists because MediaPipe embeds usage telemetry (Clearcut, posting to play.googleapis.com) with no opt-out; unsandboxed, the live API process held 4 HTTPS connections to Google (`docs/BENCHMARKS.md`). |
 | `uptime_s` | float | Seconds since the runtime started |
 | `degraded` | string[] | Components not working normally. Current values: `camera`, `mic` (live mode with no recent observation), `narrator`, `predictor:stub` (trained model not loaded), `edge` (the perception runner failed to start). |
 | `purge_violation` | bool | `true` once any purge violation has occurred in this process (it stays set). Show it as an alarm. |
@@ -635,7 +635,7 @@ Recomputes the hash chain over the whole session file.
 
 `ok: false` means an entry was edited, removed or reordered. In that case `entries` is the 1-based position
 of the first entry that fails, so the bad `seq` is `entries − 1`. The same check runs offline in
-`scripts/audit_verify.py` (planned). Errors: `503` only.
+`scripts/audit_verify.py` (`make audit-verify`; exit 0 intact, 1 tampered). Errors: `503` only.
 
 #### 7.3.7 `GET /api/retention`
 
@@ -670,7 +670,7 @@ degraded; and the negative control. In mock mode, the frontend shows placeholder
 Returns `image/png` from `reports/figs/{name}.png`. Names come from `figures` in `/api/eval/summary`, and
 any file present is served even while the summary reports `available: false`. v1 files present (uncommitted;
 core 4 states, untuned `noise_scale` 1.0): `accuracy_vs_history`, `acc_vs_episode_age`, `reliability`,
-`confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux`. Planned: `memory_flat` (60-min soak). Paths are confined to `reports/figs/`. An unknown name or a
+`confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux`. Also `venue_shift` and `memory_flat` (a 10-min offline soak from `scripts/mem_soak.py`; the 60-min live soak is not done). Paths are confined to `reports/figs/`. An unknown name or a
 traversal attempt gives `404 {"detail": "figure not found"}`. These are offline charts, never camera images.
 
 #### 7.3.10 `GET /api/scenarios`

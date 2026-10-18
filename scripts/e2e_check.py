@@ -241,8 +241,8 @@ class Checker:
         if self.masked_window_s:
             expect = f"; masked segment +{self.masked_window_s[0]:.0f}..+{self.masked_window_s[1]:.0f} s"
         if self.mask_overrides:
-            out.append(Result("mask_override", True, f"{self.mask_overrides} predictions, first at "
-                              f"+{self.first_override_t:.1f} s{expect}"))
+            out.append(Result("mask_override", True, f"first at +{self.first_override_t:.1f} s{expect} (reading stops "
+                              "once it is seen, so this is not a rate; the full scenario fires on most masked ticks)"))
         else:
             out.append(Result("mask_override", False, f"never true in {len(self.predictions)} predictions{expect}"))
         gov_ok = (self.governance > 0 and self.max_violations == 0 and self.max_purge_gap <= MAX_PURGE_GAP
