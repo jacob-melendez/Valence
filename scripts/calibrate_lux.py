@@ -31,6 +31,7 @@ from valence.perception.gate import purge  # noqa: E402
 from valence.perception.lux import LuxModel, background_stats  # noqa: E402
 
 WARMUP_FRAMES = 20
+DELAY_S = 4.0
 BLACK_Y = 1.0
 
 
@@ -107,6 +108,9 @@ def collect(cap: cv2.VideoCapture, n_setups: int, seconds: float) -> list[tuple[
         lux = ask_lux(f"\n[{k}/{n_setups}] set the lighting, then type the phone lux reading (q to stop): ")
         if lux is None:
             break
+        for n in range(int(DELAY_S), 0, -1):  # time to lean out of view after pressing Enter
+            print(f"\a  lean OUT of the camera's view: capturing in {n}...", flush=True)
+            time.sleep(1.0)
         flush(cap, WARMUP_FRAMES)
         y, s, n_frames = capture(cap, seconds)
         if n_frames == 0:
@@ -115,7 +119,7 @@ def collect(cap: cv2.VideoCapture, n_setups: int, seconds: float) -> list[tuple[
         if y < BLACK_Y:
             print("  black frames: camera permission denied or lens covered; setup skipped")
             continue
-        print(f"  {n_frames} frames: median y_bg {y:.1f}, sigma {s:.2f}")
+        print(f"\a  {n_frames} frames: median y_bg {y:.1f}, sigma {s:.2f}  (you can come back)")
         readings.append((y, s, lux))
     return readings
 
