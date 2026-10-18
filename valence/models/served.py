@@ -1,7 +1,6 @@
 """The served predictor: M2 (context + face history) with M0 (face snapshot) running in its shadow.
 
-Per window: features -> clip to the training range (clipped features are reported as out of
-distribution) -> M2 calibrated probabilities -> LightGBM TreeSHAP (``pred_contrib``) for the
+Per window: features -> clip to the training range -> M2 calibrated probabilities -> LightGBM TreeSHAP (``pred_contrib``) for the
 predicted class -> explanation layers. M0 gives the face-only reading; the mask-override condition
 compares the two (docs/PLAN.md, MaskOverrideDetector).
 """
@@ -11,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +26,36 @@ from valence.models.predictor import PredictionOutput
 M0_MIN_CONF = 0.45  # face-only model must clearly read something else (chance is 1/4 or 1/6)
 M2_MIN_CONF = 0.70
 POSITIVE = {"Collaborative_Happy"}  # a "mask" is a positive-looking face over a non-positive state
-OOD_SHRINK_AFTER = 3  # more clipped features than this -> pull probabilities toward uniform
+OOD_SHRINK_AFTER = 3  # more out-of-distribution features than this -> pull probabilities toward uniform
 OOD_SHRINK = 0.3
+OOD_MARGIN = 0.5  # unbounded features: OOD only this fraction of the training range beyond p1/p99
+
+# Clipping to the training p1..p99 range is not evidence of a strange input: a face visible on every frame
+# (1.0 vs a training p99 of 0.998) or an 08:00 time of day are legitimate. Features with a physical domain
+# are OOD only outside it; clock/context features never are; the rest only well beyond the training range.
+NEVER_OOD = {"tod_sin", "tod_cos", "hours_since_break", "n_people", "fill_ratio"}
+PHYSICAL_DOMAINS: list[tuple[str, tuple[float, float]]] = [
+    (r"^face_(now|mean_\w+)$", (-1.0, 1.0)),
+    (r"^face_std_5m$", (0.0, 1.0)),
+    (r"^(face_visible_\w+|withdraw_\w+)$", (0.0, 1.0)),
+    (r"^(slump|hih)_(now|mean_\w+|max_\w+|ewm_\w+)$", (0.0, 1.0)),
+    (r"^(slump|hih)_std_\w+$", (0.0, 0.5)),
+    (r"^\w+_cnt_\w+$", (0.0, math.inf)),  # event counts are legitimately unbounded
+    (r"^\w+_since_s$", (0.0, math.inf)),
+]
+
+
+def ood_band(name: str, lo: float, hi: float) -> tuple[float, float]:
+    """Values outside the returned band count as out of distribution."""
+    if name in NEVER_OOD:
+        return -math.inf, math.inf
+    for pattern, domain in PHYSICAL_DOMAINS:
+        if re.match(pattern, name):
+            return domain
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return -math.inf, math.inf
+    margin = OOD_MARGIN * (hi - lo)
+    return lo - margin, hi + margin
 
 
 def _softmax(z: np.ndarray, t: float) -> np.ndarray:
@@ -54,13 +82,15 @@ class ServedPredictor:
         clip = json.loads((artifacts / "clip_bounds.json").read_text())
         self.lo = np.array([clip.get(n, [-np.inf, np.inf])[0] for n in FEATURE_NAMES])
         self.hi = np.array([clip.get(n, [-np.inf, np.inf])[1] for n in FEATURE_NAMES])
+        band = np.array([ood_band(n, lo, hi) for n, lo, hi in zip(FEATURE_NAMES, self.lo, self.hi)])
+        self.ood_lo, self.ood_hi = band[:, 0], band[:, 1]
         self.face_cols = np.array([layer_of(c) == "Facial Surface" for c in self.cols2])
 
     # --- core -----------------------------------------------------------------------------------
     def _clip(self, x: np.ndarray) -> tuple[np.ndarray, list[str]]:
         ok = ~np.isnan(x)
         clipped = np.where(ok, np.clip(x, self.lo, self.hi), x)
-        ood = [FEATURE_NAMES[i] for i in np.nonzero(ok & (clipped != x))[0] if FEATURE_NAMES[i] != "fill_ratio"]
+        ood = [FEATURE_NAMES[i] for i in np.nonzero(ok & ((x < self.ood_lo) | (x > self.ood_hi)))[0]]
         return clipped, ood
 
     def _m2(self, xc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
