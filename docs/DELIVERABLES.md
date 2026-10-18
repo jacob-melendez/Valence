@@ -127,8 +127,9 @@ next push.
 - [x] **Capture**: `grab()` on every frame, `retrieve()` at the perception rate, `frames_decoded` counted,
   displaced slot frames purged; `VideoObs` carries `frames_decoded`, `frame_w`, `frame_h`, `mirrored`: P0 ·
   LOCAL · Step 2 · `valence/edge/capture.py`, `valence/edge/run.py`
-- [ ] **`audit_verify.py` CLI**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` · the API equivalent
-  `GET /api/governance/verify` exists.
+- [x] **`audit_verify.py` CLI**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` (`d75d853`, `make
+  audit-verify`; exit 1 on an edited, deleted, inserted or reordered entry, `--head` for a cut tail;
+  `tests/test_audit_verify.py`) · the API equivalent `GET /api/governance/verify` exists.
 
 ### A3. Runtime and API
 
@@ -163,8 +164,9 @@ next push.
   `valence/runtime/engine.py`
 - [ ] **First live end-to-end run on the Mac** (edge → runtime → WS → Lovable): P0 · LOCAL + YOU ·
   H9:15–10:30 · `make live`
-- [ ] **`e2e_check.py`** (pre-demo replay check, `--speed 20`): P0 · CLOUD · H12:30–15:30 ·
-  `scripts/e2e_check.py`
+- [x] **`e2e_check.py`** (pre-demo replay check, `--speed 20`): P0 · CLOUD · H12:30–15:30 ·
+  `scripts/e2e_check.py` (`d5eec2f`, `make e2e` or `make e2e API=...`; schema-validates every WS message;
+  9/9 PASS against a replay server, `tests/test_e2e_check.py`)
 - [ ] **`mem_soak.py`** (memory + governance counters over 60 min): P1 · CLOUD · H12:30–15:30 ·
   `scripts/mem_soak.py`
 
@@ -355,7 +357,8 @@ next push.
   P1 · LOCAL · H15:30–17:00 · `reports/soak_governance.json` (*proposed*)
 - [ ] **`memory_flat.png`**: P1 · CLOUD (script) + LOCAL (run) · H15:30–17:00 ·
   `reports/figs/memory_flat.png` via `scripts/mem_soak.py`
-- [ ] **`audit_verify.py` prints OK**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py`
+- [x] **`audit_verify.py` prints OK**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` (on a replay
+  session's audit file: 30 entries, chain intact; an edited entry exits 1)
 - [ ] **`lsof` during a live run shows only the audit log open for writing**: P1 · YOU · H17–20 ·
   recorded in `docs/DEMO.md`
 - [ ] **Demo with Wi-Fi off** (`status.offline` is true): P0 · YOU · H17–20 · rehearsal notes
@@ -537,10 +540,13 @@ committed in `bbd46a4`.
 - [ ] **Feature freeze + tag `demo-v1`**: P0 · CLOUD · H17:00 · git tag
 - [x] **Lovable app in the repo**: P0 · YOU · started at H0 · `frontend/` (subtree merged in `8f2e105`) ·
   built from the v1 chat prompt.
-- [ ] **Lovable app updated to the v2 prompt**: states from `GET /api/states` (4 or 6, no hard-coded list),
+- [x] **Lovable app updated to the v2 prompt**: states from `GET /api/states` (4 or 6, no hard-coded list),
   `frame_w`/`frame_h`/`mirrored`, `source`/`simulated_fields` provenance, reset and room-only controls, the
   full governance counters: P0 · YOU · before H9:15–10:30 · `frontend/` (prompt in
-  `docs/FRONTEND_PROMPT.md`) · none of these appear in `frontend/src` at the snapshot.
+  `docs/FRONTEND_PROMPT.md`) · operator panel in `53fd480`: states and tiers from `hello.states` /
+  `GET /api/states` (Overwhelmed and Tense named and coloured), cards filled from `GET /api/state`, room
+  baseline card (item 14) with Capture 90 s / Reset, live / scenario / recording source controls with
+  speed and loop, demo reset, room-only, retention table; checked with Playwright against a replay API.
 - [ ] **Lovable connected to the live backend**: P0 · YOU · H9:15–10:30 · runs locally next to the backend
 - [ ] **Rehearsal 1**: live, Wi-Fi off: P0 · YOU · H17–20
 - [ ] **Rehearsal 2**: chaos (kill the narrator, bad camera, muted mic) → `status.degraded` + fallbacks while
