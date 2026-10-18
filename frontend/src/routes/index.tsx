@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { boot, useValence } from "@/lib/valence";
 import {
-  CameraView, Controls, Evaluation, Governance, Header, PersonCard, Retention, StateVectors, SystemStatus, Timeline,
+  CameraView, Controls, Evaluation, Governance, Header, PersonCard, Retention, RoomBaselineCard, SourceControls, StateVectors,
+  SystemStatus, Timeline,
 } from "@/components/console/panels";
 import { PanelBoundary } from "@/components/console/PanelBoundary";
 
@@ -28,6 +29,10 @@ function Index() {
     <div className="min-h-screen">
       <PanelBoundary name="Header"><Header /></PanelBoundary>
       <PanelBoundary name="Controls"><Controls /></PanelBoundary>
+      <section className="grid gap-5 px-6 pt-5 lg:grid-cols-2" aria-label="Operator">
+        <PanelBoundary name="Source"><SourceControls /></PanelBoundary>
+        <PanelBoundary name="Room baseline"><RoomBaselineCard /></PanelBoundary>
+      </section>
       <main className="grid gap-5 p-6 xl:grid-cols-[1fr_26rem]">
         <div className="space-y-5">
           <PanelBoundary name="Room view"><CameraView /></PanelBoundary>

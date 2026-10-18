@@ -11,10 +11,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 NAMES = {
     "m0": "M0 face snapshot", "m0t": "M0t face history", "m1": "M1 context snapshot",
-    "m2_noface": "M2 context history, no face", "m2_noabsdb": "M2 without absolute dB",
+    "m2_noface": "M2 context history, no face", "m2_abs": "M2 with absolute dB/lux (ablation)",
     "m2_notime": "M2 without the Time layer", "m2": "**M2 served (context + face history)**", "m3": "M3 GRU + attention (benchmark)",
 }
-ORDER = ["m0", "m0t", "m1", "m2_noface", "m2_noabsdb", "m2_notime", "m2", "m3"]
+ORDER = ["m0", "m0t", "m1", "m2_noface", "m2_abs", "m2_notime", "m2", "m3"]
 
 
 def pct(v: float | None) -> str:
@@ -131,9 +131,24 @@ def main() -> None:
                 "Context alone was perfectly separable and rows had no time structure, so the original data could not test "
                 "the 15-minute window. Simulator v2 adds time structure, overlap, noise and missing modalities "
                 "([DATASET.md](DATASET.md))."]
+    shift = m.get("venue_shift")
+    if shift:
+        names = {"m2": "M2 served (room-relative)", "m2_abs": "M2 with absolute dB/lux", "legacy": "Previous served M2"}
+        venues = [r["venue_db"] for r in shift["m2"]]
+        out += ["", "## Venue shift: a loud hall is not a frustrated person", "",
+                "Focused ticks read as a negative state when the test sessions are mixed with constant hall noise "
+                "(0 = the session's own room). The served model reads the room relative to the venue baseline "
+                "captured on arrival (`POST /api/room/baseline`).", "",
+                "| Model | " + " | ".join("own room" if v == 0 else f"+{v} dB hall" for v in venues) + " |",
+                "|---|" + "---|" * len(venues)]
+        for key in ("m2", "m2_abs", "legacy"):
+            if key in shift:
+                out.append(f"| {names[key]} | " + " | ".join(pct(r["focused_misread_as_negative"]) for r in shift[key]) + " |")
+        out += ["", "![venue shift](../reports/figs/venue_shift.png)"]
     out += ["", "## Ablations", "",
-            f"- Without absolute dB features: macro-F1 {f2(m['models'].get('m2_noabsdb', {}).get('macro_f1'))} vs "
-            f"{f2(m['models']['m2']['macro_f1'])} — robust to microphone and room level differences.",
+            f"- With absolute dB/lux instead of room-relative levels: macro-F1 "
+            f"{f2(m['models'].get('m2_abs', {}).get('macro_f1'))} vs {f2(m['models']['m2']['macro_f1'])} on the "
+            "simulator's own rooms; see the venue shift above for what absolute levels cost in a loud hall.",
             f"- Without the Time layer (hours since break, time of day): {f2(m['models'].get('m2_notime', {}).get('macro_f1'))} — "
             "an operator-set break clock is not what drives the label.", "",
             m.get("disclosure", ""), ""]

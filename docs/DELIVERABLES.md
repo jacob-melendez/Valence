@@ -6,6 +6,9 @@ from `valence/contracts.py`.
 
 **Snapshot:** 2026-10-17 23:00 UTC (≈ 4:00 PM PT Sat). Branch `claude/happy-ride-7w3ng3`, HEAD `9f31355`
 (pushed), tag `slice-v0` on `0987043`. Update this file at every sync point and before each push.
+**Partial update, 2026-10-18** (after `bbd46a4`, venue room baseline): items about the venue baseline, the models,
+the evaluation, the scenarios, the live captures and the docs were re-checked against the repo; other items are
+still as of the snapshot.
 
 ## How to read this file
 
@@ -49,18 +52,18 @@ H0 = plan approval ≈ 2:30 PM PT Saturday. H22 = submission ≈ 12:30 PM PT Sun
 | Submit | H21–22 | 11:30 AM–12:30 PM | README check, Devpost, 2-min recording, submit |
 | Venue | Sunday, before judging | | Recalibrate, start the pipeline ≥ 20 min early, reset between judge groups |
 
-## Progress at the snapshot
+## Progress (counted after the 2026-10-18 partial update)
 
 | Section | Done | Open |
 |---|---|---|
-| Blockers | 4 | 1 |
-| A. Code | 51 | 16 |
-| B. Model & data artifacts | 4 | 13 |
-| C. Judging proofs | 16 | 24 |
-| D. Tests | 14 | 10 |
-| E. Documentation | 11 | 7 |
-| F. Demo & submission | 2 | 19 |
-| G. Frontend outputs (contract) | 20 | 0 |
+| Blockers | 5 | 0 |
+| A. Code | 55 | 13 |
+| B. Model & data artifacts | 10 | 9 |
+| C. Judging proofs | 24 | 17 |
+| D. Tests | 16 | 9 |
+| E. Documentation | 17 | 1 |
+| F. Demo & submission | 2 | 20 |
+| G. Frontend outputs (contract) | 22 | 0 |
 
 ## Blockers
 
@@ -84,9 +87,9 @@ next push.
 - [x] **Persistence scan clean**: P0 · LOCAL · fixed in `c009f50` · the calibration writer moved to
   `valence/edge/calibration_store.py`. `python -m valence.governance.persistence_scan` reported 0 violations
   at the snapshot.
-- [ ] **Commit this docs batch and the figures**: P0 · CLOUD · next push · `docs/PRD.md`,
+- [x] **Commit this docs batch and the figures**: P0 · CLOUD · next push · `docs/PRD.md`,
   `docs/ARCHITECTURE.md`, `docs/DATASET.md`, `docs/API.md`, `docs/DELIVERABLES.md`, `README.md`,
-  `reports/figs/`
+  `reports/figs/` · all committed.
 
 ## A. Code
 
@@ -124,14 +127,23 @@ next push.
 - [x] **Capture**: `grab()` on every frame, `retrieve()` at the perception rate, `frames_decoded` counted,
   displaced slot frames purged; `VideoObs` carries `frames_decoded`, `frame_w`, `frame_h`, `mirrored`: P0 ·
   LOCAL · Step 2 · `valence/edge/capture.py`, `valence/edge/run.py`
-- [ ] **`audit_verify.py` CLI**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` · the API equivalent
-  `GET /api/governance/verify` exists.
+- [x] **`audit_verify.py` CLI**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` (`d75d853`, `make
+  audit-verify`; exit 1 on an edited, deleted, inserted or reordered entry, `--head` for a cut tail;
+  `tests/test_audit_verify.py`) · the API equivalent `GET /api/governance/verify` exists.
 
 ### A3. Runtime and API
 
 - [x] **Event bus** (bounded per-client queues, drop-oldest): P0 · CLOUD · S2 · `valence/runtime/bus.py`
-- [x] **Aggregator** (room + person slots, near-field gate at room median + 6 dB, break clock, calibration,
-  simulated injections): P0 · CLOUD · S2 · `valence/runtime/aggregator.py`
+- [x] **Aggregator** (room + person slots, near-field gate at the venue room baseline + 6 dB, or the room
+  median + 6 dB until the baseline is complete, break clock, calibration, simulated injections): P0 · CLOUD · S2 ·
+  `valence/runtime/aggregator.py`
+- [x] **Venue room baseline** (CONTRACT_REQUESTS round 4): `POST /api/room/baseline {"seconds": 90}` captures the
+  room's median dB, dB IQR and median lux on arrival with the person sitting neutral (automatic from the first 90 s
+  otherwise); `GET /api/room/baseline`, `POST /api/room/baseline/reset`, `room_baseline` in `/api/health`; RAM
+  only, audited as constants. The served models read the room relative to it (9 room-relative features, no
+  absolute dB/lux), and the simulator draws a venue per session: P0 · CLOUD · 2026-10-18 ·
+  `valence/runtime/aggregator.py`, `valence/api/app.py`, `valence/features/compute.py`, `valence/sim/` ·
+  committed in `bbd46a4`; `docs/API.md` §7.4.12.
 - [x] **Rolling window** (180 ticks, room slot, a new person inherits room history): P0 · CLOUD · S2 ·
   `valence/features/window.py`
 - [x] **Ticker, scenario replay and live sources, overlays, seeding, room-only**: P0 · CLOUD · S2 ·
@@ -142,8 +154,8 @@ next push.
 - [x] **Predictor interface**: EMA + hysteresis(2), warm-up, override hysteresis and the 2-min block, rule
   stub: P0 · CLOUD · S2 · `valence/models/predictor.py`
 - [x] **FastAPI REST + `/ws/events`**: every route listed in PLAN.md, including `demo/seed`, `demo/reset`,
-  `calibrate/room`, `mode`, `label`, `sim/event`, `sim/lux` and the counterfactual, plus `POST /api/live`
-  and the recording routes: P0 · CLOUD · S2 → H9:15–10:30 · `valence/api/app.py`
+  `calibrate/room`, `mode`, `label`, `sim/event`, `sim/lux` and the counterfactual, plus `POST /api/live`,
+  the recording routes and the `room/baseline` routes: P0 · CLOUD · S2 → H9:15–10:30 · `valence/api/app.py`
 - [x] **Terminal console**: P0 · CLOUD · S2 · `scripts/console.py`
 - [x] **Fact-sheet export for the narrator** (`make facts`): P1 · CLOUD · S3 · `scripts/export_fact_sheets.py`
   · output listed in B.
@@ -152,26 +164,29 @@ next push.
   `valence/runtime/engine.py`
 - [ ] **First live end-to-end run on the Mac** (edge → runtime → WS → Lovable): P0 · LOCAL + YOU ·
   H9:15–10:30 · `make live`
-- [ ] **`e2e_check.py`** (pre-demo replay check, `--speed 20`): P0 · CLOUD · H12:30–15:30 ·
-  `scripts/e2e_check.py`
-- [ ] **`mem_soak.py`** (memory + governance counters over 60 min): P1 · CLOUD · H12:30–15:30 ·
-  `scripts/mem_soak.py`
+- [x] **`e2e_check.py`** (pre-demo replay check, `--speed 20`): P0 · CLOUD · H12:30–15:30 ·
+  `scripts/e2e_check.py` (`d5eec2f`, `make e2e` or `make e2e API=...`; schema-validates every WS message;
+  9/9 PASS against a replay server, `tests/test_e2e_check.py`)
+- [x] **`mem_soak.py`** (memory + governance counters over 60 min): P1 · CLOUD · H12:30–15:30 ·
+  `scripts/mem_soak.py` (`make soak`; offline `Runtime.step` loop of full_demo, RSS / open fds / history
+  length / audit entries every 15 s; run for 10 min, not 60)
 
 ### A4. Simulator and scenarios
 
-- [x] **Simulator v2** (semi-Markov hidden state, lagged room context, per-session mic offset, nuisance
-  terms, `noise_scale`, P1 state parameters): P0 · CLOUD · H2:30–4:00 · `valence/sim/generator.py`,
-  `valence/sim/params.py`
+- [x] **Simulator v2** (semi-Markov hidden state, lagged room context, per-session mic offset, a random venue
+  hall level and arrival baseline per session, nuisance terms, `noise_scale`, P1 state parameters): P0 · CLOUD ·
+  H2:30–4:00 · `valence/sim/generator.py`, `valence/sim/params.py`
 - [x] **Legacy generator** + `to_legacy_csv()`: P0 · CLOUD · H2:30–4:00 · `valence/sim/legacy.py`,
   `valence/sim/generator.py`
-- [x] **Scenario loader + 8 scenarios** (focused, frustrated_masked, exhausted, collaborative_happy,
-  overwhelmed, tense, context_blindness, full_demo): P0 · CLOUD · H2:30–4:00 · `valence/sim/scenarios.py`,
-  `scenarios/*.yaml`
+- [x] **Scenario loader + 9 scenarios** (focused, frustrated_masked, exhausted, collaborative_happy,
+  overwhelmed, tense, context_blindness, full_demo, loud_venue): P0 · CLOUD · H2:30–4:00 ·
+  `valence/sim/scenarios.py`, `scenarios/*.yaml` · `loud_venue` (a 72 dB hall) added in `bbd46a4`.
 - [ ] **Difficulty tuning on one criterion** (M2 macro-F1 ≤ .92 plus a live-vs-sim feature variance match),
   with the frozen value recorded: P0 · CLOUD · H5:15–6:00 · `valence/sim/tune_difficulty.py` · The current
   artifacts were trained at `noise_scale` 1.0 (`artifacts/model_meta.json`). No tuning script exists yet.
-- [ ] **Capture-informed false-positive rates and motion/slump scales**: P0 · CLOUD · H9:15–10:30 ·
-  `valence/sim/params.py` · needs the live feature capture (B).
+- [x] **Capture-informed false-positive rates and motion/slump scales**: P0 · CLOUD · H9:15–10:30 ·
+  `valence/sim/params.py` · refit to capture run 1 (`e0ad762`); capture runs 2–3 checked the scales without a
+  refit (`reports/capture_vs_sim.json`, `docs/MODEL_CARD.md` §5).
 
 ### A5. Features
 
@@ -184,7 +199,7 @@ next push.
 
 ### A6. Models, explanation, evaluation
 
-- [x] **Ladder trainer** (m0, m0t, m1, m2_noface, m2_noabsdb, m2_notime, m2; 70/15/15 session split;
+- [x] **Ladder trainer** (m0, m0t, m1, m2_noface, m2_abs, m2_notime, m2; 70/15/15 session split;
   early-stop and calibration halves; temperature scaling; clip bounds): P0 · CLOUD · S3 ·
   `valence/models/train_ladder.py`
 - [x] **Served predictor** (M2 with M0 in shadow, clipping + `ood_features`, `pred_contrib` layers, raw
@@ -197,8 +212,8 @@ next push.
 - [x] **Counterfactual** (re-run M2 with one feature changed) and
   `GET /api/explain/{event_id}/counterfactual`: P1 · CLOUD · S4 · `valence/models/served.py` (the plan named
   `counterfactual.py`), `valence/api/app.py`
-- [ ] **M3 GRU(64) + attention benchmark**: P1 · CLOUD · H12:30–15:30 · `valence/models/temporal.py` · the
-  file appeared (uncommitted) after the snapshot; no results yet.
+- [x] **M3 GRU(64) + attention benchmark**: P1 · CLOUD · H12:30–15:30 · `valence/models/temporal.py` ·
+  committed; room-relative dB/lux channels since `bbd46a4`; results in `reports/m3_metrics.json`.
 - [x] **Feature descriptions** (display, unit, `level`, `scope`), layer builder, FactSheet builder: P0 ·
   CLOUD · S4 · `valence/explain/describe.py`, `valence/explain/explainer.py`
 - [x] **Instant template text**: P0 · CLOUD · S4 · `valence/explain/template.py`
@@ -209,9 +224,9 @@ next push.
 - [x] **Negative control and acted-set scoring** (`make negative`; `--expect` labels): P0 (negative control)
   / P1 (acted set) · CLOUD · H9:15–10:30 and H12:00–12:30 · `valence/eval/negative_control.py` · The plan's
   separate `score_acted.py` is folded into this script.
-- [ ] **P1 states** (Frustrated_Masked becomes mask-only, Tense takes unmasked frustration), retrained
-  with `make train STATES=all`: P1 · CLOUD · S5 · `artifacts/` · simulator parameters for P1 exist; no
-  models yet.
+- [x] **P1 states** (Frustrated_Masked becomes mask-only, Tense takes unmasked frustration), retrained
+  with `make train STATES=all`: P1 · CLOUD · S5 · `artifacts/all/` (`m2_lgbm@3be2ee03`) · not evaluated with
+  `evaluate.py`; the `overwhelmed` and `tense` scenarios pass `tests/test_scenarios.py`.
 
 ### A7. Perception and edge (LOCAL)
 
@@ -276,34 +291,41 @@ next push.
 
 - [x] **Served models + metadata** (core 4 states; 300 sessions, seed 7, `noise_scale` 1.0 per
   `model_meta.json`): P0 · CLOUD · S3 · `artifacts/m0.txt`, `artifacts/m2.txt`, `artifacts/model_meta.json`
-  (temperatures, feature sets, states, split seed) · committed in `1c2f393`. Retrain after tuning (A4) and
-  the capture update.
+  (temperatures, feature sets, states, split seed) · served `m2_lgbm@8a78efc7` (capture-refit, venue-randomized
+  simulator; room-relative features), committed in `bbd46a4`. Retrain after tuning (A4).
+- [x] **Rollback model**: the previous served M2 (`m2_lgbm@85874e97`, absolute dB/lux): P0 · CLOUD · 2026-10-18 ·
+  `artifacts/legacy/` · `VALENCE_ARTIFACTS_DIR=artifacts/legacy` serves it; also the venue-shift baseline.
 - [x] **Clip bounds** (train p1–p99): P0 · CLOUD · S3 · `artifacts/clip_bounds.json` · committed.
-- [x] **Rest of the ladder**: P0 (M1, M2-noface) / P1 (M0t, M2-noabsdB, M2-notime) · CLOUD · S3 ·
-  `artifacts/m0t.txt`, `m1.txt`, `m2_noface.txt`, `m2_noabsdb.txt`, `m2_notime.txt` · **local only**;
+- [x] **Rest of the ladder**: P0 (M1, M2-noface) / P1 (M0t, M2-abs, M2-notime) · CLOUD · S3 ·
+  `artifacts/m0t.txt`, `m1.txt`, `m2_noface.txt`, `m2_abs.txt`, `m2_notime.txt` · **local only**;
   `make train` rebuilds them.
-- [x] **Evaluation figures, v1**: P0 · CLOUD · H7:00–8:00 · `reports/figs/` · **uncommitted** · details in
-  C2/C3.
+- [x] **Evaluation figures**: P0 · CLOUD · H7:00–8:00 · `reports/figs/` · 8 figures (incl. `venue_shift.png`),
+  regenerated with the served `8a78efc7` and committed in `bbd46a4` · details in C2/C3.
 - [ ] **Frozen feature order as its own file**: P0 · CLOUD · S3 · `artifacts/feature_spec.json` · The order
-  is currently stored as `feature_names` in `model_meta.json` (114 features). PRD, ARCHITECTURE and API now
+  is currently stored as `feature_names` in `model_meta.json` (123 features). PRD, ARCHITECTURE and API now
   point to `model_meta.json` and note the gap; write the file or update PLAN.md.
 - [ ] **Simulator datasets, split by session**: P0 · CLOUD · H5:15–6:00 · `data/sim/` (gitignored by design)
   · Today the trainer regenerates sessions in memory from `seed` + `sessions`, and `evaluate.py` rebuilds
   the held-out split the same way. No dataset or split manifest is on disk (*proposed*:
   `artifacts/splits.json`).
-- [ ] **Evaluation metrics**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` · TBD, produced by
-  `valence/eval/evaluate.py`
+- [x] **Evaluation metrics**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` · produced by
+  `valence/eval/evaluate.py` (simulated; `docs/RESULTS.md`).
 - [ ] **Golden features-only recording** for the replay fallback: P0 · LOCAL · H9:15–10:30 ·
   `data/real/golden_*.jsonl` (*proposed*) · the replay code exists (`valence/runtime/recording.py`).
-- [ ] **Live feature capture**, 3 min each of quiet typing, keyboard gaze, fist clenching and slumping:
+- [x] **Live feature capture**, 3 min each of quiet typing, keyboard gaze, fist clenching and slumping:
   P0 · LOCAL + YOU · H7:00–8:00 · `data/real/capture_*.jsonl`, plus fist FP/min while typing, slump duty
-  cycle and motion distribution in `docs/BENCHMARKS.md`
+  cycle and motion distribution in `docs/BENCHMARKS.md` · run 1 (typing, fists, baseline, covered camera), run 2
+  (keyboard gaze, slump) and run 3 (audio) committed.
+- [x] **Capture runs 2–3 scale check** against the simulator (keyboard gaze matches simulated Focused; held-slump
+  motion artifact assigned to the edge; laughter and compliments detected; forced-smile scale unconfirmed): P0 ·
+  CLOUD · 2026-10-18 · `reports/capture_vs_sim.json` (`valence/eval/capture_stats.py`), `docs/MODEL_CARD.md` §5.
 - [ ] **Sensor calibration constants** (SPL offset, lux model): P1 · LOCAL + YOU · H8:00–9:15 ·
   `data/real/calibration.json`
 - [ ] **Self-report labels** every 10 min: P1 · YOU · from H9:15 · `POST /api/label` →
   `var/labels/<session_id>.jsonl` (gitignored; stores the label plus the latest numeric tick only)
-- [ ] **P1 six-state models**: P1 · CLOUD · S5 · `artifacts/` (`state_set` = `all`)
-- [ ] **M3 benchmark results**: P1 · CLOUD · H12:30–15:30 · `reports/metrics.json`
+- [x] **P1 six-state models**: P1 · CLOUD · S5 · `artifacts/all/` (`state_set` = `all`, `m2_lgbm@3be2ee03`)
+- [x] **M3 benchmark results**: P1 · CLOUD · H12:30–15:30 · `reports/m3_metrics.json`, merged into
+  `reports/metrics.json`
 - [ ] **Narrator fact sheets from M2 SHAP** (`make facts`): P1 · CLOUD · S3 ·
   `data/narrator/fact_sheets_sim.jsonl`
 - [ ] **Narrator train/valid/test** (1500/150/300, balanced states × {face agrees, disagrees, hidden}):
@@ -334,9 +356,11 @@ next push.
   implemented (capture counts decoded frames; derived copies use their own kinds). Show it on the Mac.
 - [ ] **`/api/governance/stats` after a 60-min soak** (0 violations, 0 `live_raw_buffers`, `retention_s`):
   P1 · LOCAL · H15:30–17:00 · `reports/soak_governance.json` (*proposed*)
-- [ ] **`memory_flat.png`**: P1 · CLOUD (script) + LOCAL (run) · H15:30–17:00 ·
-  `reports/figs/memory_flat.png` via `scripts/mem_soak.py`
-- [ ] **`audit_verify.py` prints OK**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py`
+- [x] **`memory_flat.png`**: P1 · CLOUD (script) + LOCAL (run) · H15:30–17:00 ·
+  `reports/figs/memory_flat.png` via `scripts/mem_soak.py` (10-min cloud run, 29,386 ticks: RSS 266 → 286 MB,
+  second-half slope +0.019 MB/min, fds 4 throughout, history capped at 1,440; `reports/mem_soak.json`)
+- [x] **`audit_verify.py` prints OK**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` (on a replay
+  session's audit file: 30 entries, chain intact; an edited entry exits 1)
 - [ ] **`lsof` during a live run shows only the audit log open for writing**: P1 · YOU · H17–20 ·
   recorded in `docs/DEMO.md`
 - [ ] **Demo with Wi-Fi off** (`status.offline` is true): P0 · YOU · H17–20 · rehearsal notes
@@ -347,31 +371,36 @@ next push.
 
 ### C2. Context vs face
 
-Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate them at H15:30–17:00.
+The figures were regenerated with the served `8a78efc7` (core 4 states, `noise_scale` 1.0, M3 included) and
+committed in `bbd46a4`.
 
 - [x] **`accuracy_vs_history.png`** (macro-F1 at 0/1/2/5/10/15 min, session-bootstrap 95% CIs): P0 · CLOUD
-  · H7:00–8:00 · `reports/figs/accuracy_vs_history.png` · M3 is added when it exists.
+  · H7:00–8:00 · `reports/figs/accuracy_vs_history.png` · M3 included.
 - [x] **Confusion M0 vs M2**: P0 · CLOUD · H7:00–8:00 · `reports/figs/confusion_m0_vs_m2.png`
 - [x] **`acc_vs_episode_age.png`**: P0 · CLOUD · H7:00–8:00 · `reports/figs/acc_vs_episode_age.png`
 - [x] **`reliability.png`**: P0 · CLOUD · H7:00–8:00 · `reports/figs/reliability.png`
-- [ ] **Headline numbers**: Frustrated_Masked recall, and the "Focused paradox" (M0 Focused→Frustrated/Tense
-  confusion vs M2): P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` → `docs/RESULTS.md` · TBD, produced
-  by `valence/eval/evaluate.py`
-- [ ] **ECE before/after temperature scaling**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` · TBD,
-  produced by `valence/eval/evaluate.py`
+- [x] **Headline numbers**: Frustrated_Masked recall, and the "Focused paradox" (M0 Focused→Frustrated/Tense
+  confusion vs M2): P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` → `docs/RESULTS.md` · produced by
+  `valence/eval/evaluate.py`
+- [x] **ECE before/after temperature scaling**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` · produced by
+  `valence/eval/evaluate.py`
+- [x] **Venue shift** (Focused misread as negative with 60/70/75 dB of hall noise mixed in, served M2 vs M2-abs
+  vs the previous served model): P0 · CLOUD · 2026-10-18 · `reports/metrics.json` `venue_shift`,
+  `reports/figs/venue_shift.png`, `docs/RESULTS.md`
 - [ ] **Sensitivity table** (`noise_scale` ×0.5 / ×1 / ×1.5): P0 · CLOUD · H12:30–15:30 · `docs/RESULTS.md`
   · TBD, produced by `valence/sim/tune_difficulty.py`
 - [ ] **Legacy vs v2 slide** (the original mock is separable from context alone): P0 · CLOUD + YOU ·
   H7:00–8:00, slide at H20–21 · `reports/metrics.json` (legacy result from `evaluate.py`) → slide
 - [x] **`context_blindness` scenario** (same head-in-hands pose in two contexts, no clock reset): P0 · CLOUD
   · H2:30–4:00 · `scenarios/context_blindness.yaml`
-- [ ] **`context_blindness` replay shows two labels** with M2 served: P0 · CLOUD · S4 ·
-  `POST /api/replay/context_blindness` · `tests/test_served.py` checks other scenarios, not this one.
+- [x] **`context_blindness` replay shows two labels** with M2 served: P0 · CLOUD · S4 ·
+  `POST /api/replay/context_blindness` · `tests/test_scenarios.py` checks it with every other scenario
+  (`docs/DEMO.md` §3 has the per-tick counts).
 - [ ] **Live mask flip** with `mask_override`: P0 · YOU + LOCAL · H17–20, then the venue · live demo
 - [ ] **Counterfactual demo** ("still Frustrated at 0.5 h because of fists + noise"): P1 · CLOUD · S4 ·
   `GET /api/explain/{event_id}/counterfactual?feature=hours_since_break&value=0.5`
-- [ ] **M2-notime and M2-noabsdB ablations reported**: P1 · CLOUD · H12:30–15:30 · `reports/metrics.json` ·
-  the models exist locally; the numbers are TBD.
+- [x] **M2-notime and M2-abs ablations reported**: P1 · CLOUD · H12:30–15:30 · `reports/metrics.json` ·
+  `docs/RESULTS.md`, `docs/MODEL_CARD.md` §5 (M2-abs replaced M2-noabsdB in `bbd46a4`).
 - [ ] **Claim wording used everywhere**: "Under explicit, published behavioral assumptions, a temporal
   context model beats a face snapshot; in-the-wild validation is future work.": P0 · CLOUD · H12:30–15:30 ·
   `docs/RESULTS.md`, `docs/MODEL_CARD.md`, slides
@@ -379,19 +408,19 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
 ### C3. Anti-bias, narrowed to "decision stability when face evidence is missing or degraded"
 
 - [x] **Robustness curves that degrade only the face channel** (lux feature held fixed) for M0, M0t, M2 and
-  M2-noface: P0 · CLOUD · H7:00–8:00 · `reports/figs/robustness_face_dropout.png` · v1 (core 4,
-  `noise_scale` 1.0), **uncommitted**
-- [x] **Lux shift reported separately**: P0 · CLOUD · H7:00–8:00 · `reports/figs/robustness_lux.png` · v1,
-  **uncommitted**
-- [ ] **M2 vs M2-noface gap table**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` → `docs/RESULTS.md` ·
-  the target from PLAN.md verification is M2-noface ≥ M2 − .05 (core 4).
+  M2-noface: P0 · CLOUD · H7:00–8:00 · `reports/figs/robustness_face_dropout.png` · core 4, `noise_scale` 1.0,
+  committed
+- [x] **Lux shift reported separately**: P0 · CLOUD · H7:00–8:00 · `reports/figs/robustness_lux.png` · committed
+- [x] **M2 vs M2-noface gap table**: P0 · CLOUD · H7:00–8:00 · `reports/metrics.json` → `docs/RESULTS.md` ·
+  the target from PLAN.md verification is M2-noface ≥ M2 − .05 (core 4); it fails on this simulator
+  (`docs/MODEL_CARD.md` §5).
 - [ ] **Live obscure-face**: the label holds and the narration switches to the occlusion clause: P1 ·
   LOCAL + YOU · H17–20 · `obscure_face=True` (code in A7)
 - [ ] **Live face-detection rate at 3 light levels**: P1 · LOCAL + YOU · S5 · `docs/BENCHMARKS.md` (or
   `docs/PERCEPTION.md`)
-- [ ] **MediaPipe model-card fairness evaluations cited**: P1 · CLOUD · H12:30–15:30 · `docs/MODEL_CARD.md`
+- [x] **MediaPipe model-card fairness evaluations cited**: P1 · CLOUD · H12:30–15:30 · `docs/MODEL_CARD.md` §7
 - [x] **Demographic validation listed as an explicit gap**: P0 · CLOUD · S1 · `docs/PRD.md` §1.3 (this
-  batch) · repeat it in `docs/MODEL_CARD.md`.
+  batch) · also in `docs/MODEL_CARD.md` §7.
 
 ### C4. Narrator table
 
@@ -412,7 +441,7 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
   CLOUD · H9:15–10:30 · `POST /api/mode` with `{"room_only": true}`, `valence/runtime/engine.py`,
   `tests/test_runtime.py::test_overlays_and_room_only`
 - [x] **TTL + session deletion implemented**: P1 · CLOUD · S1 · `valence/governance/audit.py`
-- [ ] **Same framing in the model card**: P1 · CLOUD · H12:30–15:30 · `docs/MODEL_CARD.md`
+- [x] **Same framing in the model card**: P1 · CLOUD · H12:30–15:30 · `docs/MODEL_CARD.md` §2
 - [ ] **Pitch slide**: P0 · YOU · H20–21 · slides (order in `docs/PRD.md` §4.5)
 
 ## D. Tests
@@ -434,6 +463,9 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
   short/missing windows): P0 · CLOUD · H4:00–5:15
 - [x] `tests/test_served.py` (SHAP additivity, override fires on frustrated_masked and not elsewhere,
   scripted scenarios track their script, counterfactual changes only the named feature): P0 · CLOUD · S3–S4
+- [x] `tests/test_scenarios.py` (every scenario, after a 2-min grace: the scripted state on ≥ 80% of ticks per
+  segment and person, the override on masked segments and nowhere else): P0 · CLOUD · 2026-10-18 · all 9 pass
+  with `8a78efc7` (cloud)
 - [x] `tests/conftest.py` (tests that fail only because a Mac-only package is missing are reported as
   skipped in the cloud): P0 · CLOUD · S2
 - [x] `tests/perception/`, 11 files (audio_features, calibration, debounce, edge_run, face_valence, hands,
@@ -441,7 +473,7 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
 - [x] `tests/narrator/`, 6 files (validator, templates, prompt, engine, service, fake_fact_sheets): P0 ·
   LOCAL · S4
 - [x] **torch + LightGBM in one process**, measured matrix of import orders and thread settings: P0 · LOCAL
-  · S1 (Step 0) · `docs/CONTRACT_REQUESTS.md` round 2 §1 · not yet copied into `docs/BENCHMARKS.md`.
+  · S1 (Step 0) · `docs/CONTRACT_REQUESTS.md` round 2 §1 · also in `docs/BENCHMARKS.md`.
 - [x] **Persistence scan run**: P0 · CLOUD + LOCAL · every push · `python -m valence.governance.persistence_scan`
   (0 violations at the snapshot)
 
@@ -460,9 +492,10 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
 - [ ] **API contract hardening**: every WS message validated against its JSON Schema; `explanation` carries
   its prediction's `event_id`; per-client queues stay bounded with no client connected: P0 · CLOUD · S2 ·
   extend `tests/test_contracts.py`, `tests/test_api.py`
-- [ ] **Negative control gate run**: the typing-capture replay predicts Frustrated/Tense on ≤ 20% of ticks;
-  ≥ 90% of live features fall inside the clip bounds: P0 · CLOUD · H10:30 gate · `make negative` · needs
-  the live capture (B).
+- [x] **Negative control gate run**: the typing-capture replay predicts Frustrated/Tense on ≤ 20% of ticks;
+  ≥ 90% of live features fall inside the clip bounds: P0 · CLOUD · H10:30 gate · `make negative` · passes with
+  `8a78efc7` (in-sample; the run-2 keyboard-gaze capture also passes; `docs/MODEL_CARD.md` §5); the clip-bounds
+  share is not reported as such (ARCHITECTURE §7.5 reports OOD counts per tick).
 - [ ] **Narrator adversarial set**: "91%", "she", "depressed", "high noise (45 dB)" (qualifier vs `level`),
   mask language when the face agrees, stale cached numbers: P0 · LOCAL · S4 · `tests/narrator/` ·
   unknown numbers, banned terms and mask terms are covered in `test_validator.py`; the qualifier and
@@ -489,15 +522,16 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
 - [x] `docs/CONTRACT_REQUESTS.md` (LOCAL) and `docs/CONTRACT_RESPONSES.md` (CLOUD): P0 · LOCAL + CLOUD ·
   S1–S2 · The edge's round-2 asks (libomp, derived purge kinds, `.gitignore`) were applied in `9f31355`;
   CONTRACT_RESPONSES.md does not record that yet.
-- [x] `docs/BENCHMARKS.md` (Apple M3 Max, 36 GB): P0 · LOCAL · Steps 0–1 · Still open: live-camera numbers,
-  live feature capture stats, the face-detection rate at 3 light levels, and a copy of the libomp matrix.
-- [ ] `docs/RESULTS.md`: P0 · CLOUD · H12:30–15:30
-- [ ] `docs/DEMO.md` (venue recalibration, judge-group reset, fallbacks): P0 · CLOUD · H12:30–15:30
-- [ ] `docs/GOVERNANCE.md` (honest limits; `purge.py` already points to it): P1 · CLOUD · H12:30–15:30
-- [ ] `docs/MODEL_CARD.md` (full simulator parameter table, claim wording, fairness citations,
+- [x] `docs/BENCHMARKS.md` (Apple M3 Max, 36 GB): P0 · LOCAL · Steps 0–1 · live-camera numbers, capture runs
+  1–3 and the libomp matrix are in. Still open: the face-detection rate at 3 light levels.
+- [x] `docs/RESULTS.md` (generated by `scripts/write_results.py`): P0 · CLOUD · H12:30–15:30
+- [x] `docs/DEMO.md` (venue recalibration and room baseline, judge-group reset, fallbacks, rollback): P0 · CLOUD
+  · H12:30–15:30
+- [x] `docs/GOVERNANCE.md` (honest limits; `purge.py` already points to it): P1 · CLOUD · H12:30–15:30
+- [x] `docs/MODEL_CARD.md` (full simulator parameter table, claim wording, fairness citations,
   Art. 5(1)(f)): P1 · CLOUD · H12:30–15:30
-- [ ] `docs/PERCEPTION.md`: P1 · LOCAL · H15:30–17:00
-- [ ] `docs/NARRATOR.md`: P1 · LOCAL · H15:30–17:00
+- [x] `docs/PERCEPTION.md`: P1 · LOCAL · H15:30–17:00
+- [x] `docs/NARRATOR.md`: P1 · LOCAL · H15:30–17:00
 - [ ] PDF exports of the updated docs: P2 · CLOUD · on request only
 
 ## F. Demo & submission
@@ -508,10 +542,13 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
 - [ ] **Feature freeze + tag `demo-v1`**: P0 · CLOUD · H17:00 · git tag
 - [x] **Lovable app in the repo**: P0 · YOU · started at H0 · `frontend/` (subtree merged in `8f2e105`) ·
   built from the v1 chat prompt.
-- [ ] **Lovable app updated to the v2 prompt**: states from `GET /api/states` (4 or 6, no hard-coded list),
+- [x] **Lovable app updated to the v2 prompt**: states from `GET /api/states` (4 or 6, no hard-coded list),
   `frame_w`/`frame_h`/`mirrored`, `source`/`simulated_fields` provenance, reset and room-only controls, the
   full governance counters: P0 · YOU · before H9:15–10:30 · `frontend/` (prompt in
-  `docs/FRONTEND_PROMPT.md`) · none of these appear in `frontend/src` at the snapshot.
+  `docs/FRONTEND_PROMPT.md`) · operator panel in `53fd480`: states and tiers from `hello.states` /
+  `GET /api/states` (Overwhelmed and Tense named and coloured), cards filled from `GET /api/state`, room
+  baseline card (item 14) with Capture 90 s / Reset, live / scenario / recording source controls with
+  speed and loop, demo reset, room-only, retention table; checked with Playwright against a replay API.
 - [ ] **Lovable connected to the live backend**: P0 · YOU · H9:15–10:30 · runs locally next to the backend
 - [ ] **Rehearsal 1**: live, Wi-Fi off: P0 · YOU · H17–20
 - [ ] **Rehearsal 2**: chaos (kill the narrator, bad camera, muted mic) → `status.degraded` + fallbacks while
@@ -534,6 +571,9 @@ Every figure here is v1: core 4 states, `noise_scale` 1.0, no M3. Regenerate the
   warm-up: P0 · YOU · venue
 - [ ] **10-min recalibration**: `POST /api/calibrate/room` (SPL offset, 2-point lux, noise floor) with phone
   meters: P0 · YOU · venue
+- [ ] **Capture the venue room baseline** after the recalibration, sitting neutral and quiet:
+  `POST /api/room/baseline {"seconds": 90}`, then `GET /api/room/baseline` reads `captured` (`docs/DEMO.md` §2):
+  P0 · YOU · venue
 - [ ] **Start the live pipeline at the table ≥ 20 min before judging**, so the window is real and not seeded
   (`make live`; never `--reload` with live sensors): P0 · YOU · venue
 - [ ] **Reset between judge groups**: `POST /api/demo/reset` (clears people, keeps room history): P0 · YOU ·
@@ -580,6 +620,8 @@ schemas are in `docs/API.md`. Owner CLOUD, synced at S2 unless noted.
   `prediction`; `data_quality` (`face_visible_frac`, `lux`, `ood_features`) on `prediction`
 - [x] **Session header**: P0 · `hello` (`contract_version`, `mode`, `room_only`, `states`,
   `feature_version`, `frame_w`, `frame_h`, `mirrored`)
+- [x] **Venue room baseline status**: P0 · `room_baseline` in `GET /api/health`, `GET /api/room/baseline`
+  (`mode` auto / capturing / captured, `db_median`, `db_iqr`, `lux_median`) · CLOUD · `bbd46a4`
 
 ### Inputs
 
@@ -590,6 +632,8 @@ schemas are in `docs/API.md`. Owner CLOUD, synced at S2 unless noted.
   with `{"enabled": true|false}`
 - [x] **Reset between visitors**: P0 · `POST /api/demo/reset`
 - [x] **Room-only mode**: P1 · `POST /api/mode` with `{"room_only": true|false}`
+- [x] **Capture room baseline (90 s) / Reset**: P0 · `POST /api/room/baseline` with `{"seconds": 90}`,
+  `POST /api/room/baseline/reset` · CLOUD · `bbd46a4`
 
 ## Drop order (from PLAN.md)
 

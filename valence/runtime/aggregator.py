@@ -1,8 +1,9 @@
 """Aggregator: perception observations (~10 Hz video, ~1 Hz audio) -> one TickRecord per person per tick.
 
-Also owns the presence-based break clock and near-field gating of room audio events:
-laughter and compliments only count when their audio block is clearly louder than the room's
-recent median, so other tables in a noisy hall do not register as social events at this desk.
+Also owns the presence-based break clock, the venue room baseline, and near-field gating of room audio
+events: laughter and compliments only count when their audio block is clearly louder than the room's
+baseline (or, before one exists, its recent median), so other tables in a noisy hall do not register as
+social events at this desk.
 """
 
 from __future__ import annotations
@@ -22,6 +23,10 @@ from valence.features.spec import withdrawal_flag
 
 ROOM = 0
 NEAR_FIELD_MIN_BLOCKS = 10
+NEAR_FIELD_BLOCKS = 3  # speech recognizers report a phrase 0-2 blocks after it ends: gate on the loudest recent block
+DRIFT_WINDOW_S = 300.0
+DRIFT_DB = 12.0  # room 5-min median this far above/below the baseline -> "re-capture the baseline"
+DRIFT_LUX_LOG2 = 1.0  # light halved or doubled
 
 
 @dataclass
@@ -34,6 +39,56 @@ class _PersonAcc:
     face_frames: int = 0
     motion: list[float] = field(default_factory=list)
     face: list[float] = field(default_factory=list)
+
+
+@dataclass
+class RoomBaseline:
+    """The venue's room level with the person sitting neutral: dB and lux medians (constants, RAM only).
+
+    ``auto`` collects from the start of a live session or recording; ``POST /api/room/baseline`` restarts
+    collection as an operator capture (``capturing`` -> ``captured``). Until ``target`` samples (~1 per
+    second per channel) exist, the running median is used, so room-relative features exist from the first tick.
+    """
+
+    target: int
+    mode: str = "auto"  # auto | capturing | captured
+    db: list[float] = field(default_factory=list)
+    lux: list[float] = field(default_factory=list)
+
+    def add_db(self, v: float) -> None:
+        if len(self.db) < self.target:
+            self.db.append(v)
+            self._settle()
+
+    def add_lux(self, v: float) -> None:
+        if len(self.lux) < self.target:
+            self.lux.append(v)
+            self._settle()
+
+    def _settle(self) -> None:
+        if self.mode == "capturing" and (len(self.db) >= self.target or (not self.db and len(self.lux) >= self.target)):
+            self.mode = "captured"
+
+    @property
+    def complete(self) -> bool:
+        return len(self.db) >= self.target
+
+    @property
+    def db_base(self) -> float:
+        return float(np.median(self.db)) if self.db else math.nan
+
+    @property
+    def lux_base(self) -> float:
+        return float(np.median(self.lux)) if self.lux else math.nan
+
+    def snapshot(self) -> dict:
+        def r(v: float, nd: int = 1) -> float | None:
+            return None if math.isnan(v) else round(v, nd)
+
+        iqr = float(np.subtract(*np.percentile(self.db, [75, 25]))) if len(self.db) >= 4 else math.nan
+        return {"mode": self.mode, "complete": self.complete, "target_samples": self.target,
+                "db_samples": len(self.db), "lux_samples": len(self.lux),
+                "db_median": r(self.db_base), "db_iqr": r(iqr), "lux_median": r(self.lux_base, 0)}
 
 
 @dataclass
@@ -72,6 +127,10 @@ class Aggregator:
         self.lux_override: float | None = None  # POST /api/sim/lux (SIMULATED)
         self.last_video_t = 0.0
         self.last_audio_t = 0.0
+        self.baseline = RoomBaseline(target=int(settings.room_baseline_s))
+        self._lux_sample_t = -math.inf
+        self._lux_hist: deque[tuple[float, float]] = deque()  # (t, lux) at ~1 Hz for the drift check
+        self._recent_db: deque[float] = deque(maxlen=NEAR_FIELD_BLOCKS)
 
     def _reset_tick(self) -> None:
         self._acc: dict[int, _PersonAcc] = {}
@@ -102,6 +161,12 @@ class Aggregator:
         self.last_video_t = time.monotonic()
         if not math.isnan(obs.lux):
             self._lux, self._lux_quality = obs.lux * self.lux_scale, obs.lux_quality
+            if obs.t - self._lux_sample_t >= 1.0:  # lux arrives per video frame; the baseline wants ~1 sample/s
+                self._lux_sample_t = obs.t
+                self.baseline.add_lux(self._lux)
+                self._lux_hist.append((obs.t, self._lux))
+                while self._lux_hist and self._lux_hist[0][0] < obs.t - DRIFT_WINDOW_S:
+                    self._lux_hist.popleft()
         self._max_people = max(self._max_people, len(obs.persons))
         boxes = {}
         for p in obs.persons:
@@ -127,8 +192,10 @@ class Aggregator:
         if not math.isnan(obs.db_spl):
             obs = replace(obs, db_spl=obs.db_spl + self.db_correction) if self.db_correction else obs
             self._db.append(obs.db_spl)
+            self.baseline.add_db(obs.db_spl)
+            self._recent_db.append(obs.db_spl)
         if obs.laughter_onsets or obs.compliment_hits:
-            if self._near_field(obs.db_spl):
+            if self._near_field(max(self._recent_db, default=obs.db_spl)):
                 self._laugh += obs.laughter_onsets
                 self._compl += obs.compliment_hits
             else:
@@ -139,10 +206,42 @@ class Aggregator:
                 self._block_db.popleft()
 
     def _near_field(self, db: float) -> bool:
-        if len(self._block_db) < NEAR_FIELD_MIN_BLOCKS or math.isnan(db):
+        if math.isnan(db):
+            return True
+        if self.baseline.complete:
+            return db >= self.baseline.db_base + self.s.near_field_db
+        if len(self._block_db) < NEAR_FIELD_MIN_BLOCKS:
             return True
         median = statistics.median(v for _, v in self._block_db)
         return db >= median + self.s.near_field_db
+
+    # --- venue room baseline ------------------------------------------------------------------------
+    def start_baseline(self, seconds: float | None = None, mode: str = "capturing") -> dict:
+        """Start a fresh baseline (``capturing`` from the operator, ``auto`` on a new source)."""
+        with self._lock:
+            self.baseline = RoomBaseline(target=int(seconds or self.s.room_baseline_s), mode=mode)
+            return self.baseline.snapshot()
+
+    def baseline_status(self) -> dict:
+        with self._lock:
+            return {**self.baseline.snapshot(), **self._drift_locked()}
+
+    def _drift_locked(self) -> dict:
+        """How far the room's last 5 minutes sit from the baseline (None until both exist)."""
+        out: dict = {"drift_db": None, "drift_lux_log2": None, "drifted": False}
+        if not self.baseline.complete:
+            return out
+        if self._block_db:
+            t_end = self._block_db[-1][0]
+            recent = [v for t, v in self._block_db if t >= t_end - DRIFT_WINDOW_S]
+            out["drift_db"] = round(statistics.median(recent) - self.baseline.db_base, 1)
+        base_lux = self.baseline.lux_base
+        if self._lux_hist and base_lux > 0:
+            med = statistics.median(v for _, v in self._lux_hist)
+            out["drift_lux_log2"] = round(math.log2(med / base_lux), 2) if med > 0 else None
+        out["drifted"] = bool((out["drift_db"] is not None and abs(out["drift_db"]) > DRIFT_DB)
+                              or (out["drift_lux_log2"] is not None and abs(out["drift_lux_log2"]) > DRIFT_LUX_LOG2))
+        return out
 
     # --- break clock ------------------------------------------------------------------------------
     def _seen(self, pid: int, wall: float) -> None:
@@ -190,9 +289,12 @@ class Aggregator:
             level = self.recent_level()
             if not math.isnan(level):
                 self.db_correction += spl_reference - level
+                self.baseline.db = [v + spl_reference - level for v in self.baseline.db]  # same units as live
             out["db_correction"] = self.db_correction
         if lux_reference is not None and not math.isnan(self._lux) and self._lux > 0:
-            self.lux_scale *= lux_reference / self._lux
+            factor = lux_reference / self._lux
+            self.lux_scale *= factor
+            self.baseline.lux = [v * factor for v in self.baseline.lux]
             out["lux_scale"] = self.lux_scale
         return out
 
@@ -237,7 +339,7 @@ class Aggregator:
             room = dict(
                 tick=tick, ts=wall, t_mono=t_mono, session_id=self.session_id, n_people=self._max_people,
                 source=self.source, ambient_db=leq, db_p90=p90, light_lux=lux,
-                lux_quality=self._lux_quality, laughter_count=self._laugh, compliments_count=self._compl, tod_h=tod_h,
+                lux_quality=self._lux_quality, room_db_base=self.baseline.db_base, room_lux_base=self.baseline.lux_base, laughter_count=self._laugh, compliments_count=self._compl, tod_h=tod_h,
             )
             people: list[TickRecord] = []
             participants = self._participants()

@@ -4,7 +4,9 @@ Loudness is the block's Leq: mean power -> dB SPL with the calibrated offset (th
 averages ``rms_power`` in the power domain; dB values are never averaged).
 YAMNet (AUDIO_CLIPS, allowlisted classes) runs synchronously on the block's last 0.975 s, so its
 laughter/speech scores belong to exactly this block; laughter onsets are debounced. Compliments come from Vosk with a restricted grammar (the phrases + "[unk]"), so
-no free transcript ever exists; recognized words never leave ``count_compliments``. Every
+no free transcript ever exists; recognized words never leave ``count_compliments``. A phrase counts only if
+its own words are louder than the room's recent floor (``PhraseLoudness``: 100 ms power scalars on the
+recognizer's clock), because in crowd babble the restricted grammar finds phrases at the crowd's level. Every
 block and the int16 copy Vosk reads are purged before ``process`` returns.
 """
 
@@ -19,7 +21,8 @@ from mediapipe.tasks.python.components.containers.audio_data import AudioData
 from valence.contracts import AudioObs
 from valence.perception import calibration
 from valence.perception.audio_features import (
-    YAMNET_ALLOWLIST, LaughterTracker, count_compliments, mean_power, power_to_db, vosk_grammar)
+    YAMNET_ALLOWLIST, LaughterTracker, PhraseLoudness, count_compliments, mean_power, power_to_db,
+    vosk_grammar)
 from valence.perception.gate import note_transcript_purged, purge_derived
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +41,7 @@ class AudioPerceiver:
             running_mode=mp_audio.RunningMode.AUDIO_CLIPS, category_allowlist=list(YAMNET_ALLOWLIST),
             max_results=len(YAMNET_ALLOWLIST)))
         self.recognizer = None
+        self.loudness = PhraseLoudness(SR)  # on the recognizer's clock: fed exactly the samples Vosk gets
         if compliments:
             import vosk
 
@@ -47,7 +51,10 @@ class AudioPerceiver:
             self.recognizer.SetWords(True)
 
     def close(self) -> None:
-        self.classifier.close()
+        try:
+            self.classifier.close()
+        except RuntimeError:  # MediaPipe's dispatcher already shut down at interpreter exit
+            pass
 
     def process(self, block: np.ndarray, t: float, wall: float, seq: int) -> AudioObs:
         power = mean_power(block)
@@ -67,10 +74,11 @@ class AudioPerceiver:
         if self.recognizer is not None:
             from vosk import _ffi
 
+            self.loudness.add(block)
             pcm = (np.clip(block, -1.0, 1.0) * 32767.0).astype(np.int16)
             view = _ffi.from_buffer(pcm)  # zero-copy, so the int16 copy can be purged too
             if self.recognizer.AcceptWaveform(view):
-                hits = sum(count_compliments(self.recognizer.Result()).values())
+                hits = sum(count_compliments(self.recognizer.Result(), near=self.loudness.is_near).values())
                 note_transcript_purged()
             del view
             purge_derived(pcm, "audio")

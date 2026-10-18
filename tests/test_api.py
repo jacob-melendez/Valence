@@ -69,3 +69,48 @@ def test_mic_failure_keeps_the_camera(client, monkeypatch):
     assert res["ok"] and res["edge_error"] is None and "mic is silent" in res["mic_error"]
     assert client.get("/api/health").json()["mic_error"]
     assert "mic" in client.get("/api/state").json()["status"]["degraded"]
+
+
+def test_room_baseline_endpoints(client):
+    assert client.post("/api/room/baseline", json={"seconds": 5}).status_code == 422
+    res = client.post("/api/room/baseline", json={"seconds": 60}).json()
+    assert res["ok"] and res["mode"] == "capturing" and res["target_samples"] == 60
+    assert client.get("/api/room/baseline").json()["mode"] == "capturing"
+    assert client.get("/api/health").json()["room_baseline"]["mode"] == "capturing"
+    assert client.post("/api/room/baseline/reset").json()["mode"] == "auto"
+
+
+def test_offline_needs_blocked_outbound_and_live_restart_realigns(client, monkeypatch):
+    """status.offline is the network's reality, not just env flags; a second go-live restarts the capture."""
+    import sys
+    import types
+
+    from valence.api import app as appmod
+
+    a = appmod.STATE
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("YOLO_OFFLINE", "1")
+    a.outbound_blocked = False  # e.g. MediaPipe telemetry could reach the internet
+    assert appmod.status(a).offline is False
+    a.outbound_blocked = True
+    assert appmod.status(a).offline is True
+    assert "network" in client.get("/api/health").json()
+
+    events = []
+
+    def fake_start(sink, *, video=True, audio=True, obscure_face=False):
+        events.append("start")
+        return lambda: events.append("stop")
+
+    monkeypatch.setitem(sys.modules, "valence.edge.run", types.SimpleNamespace(start=fake_start))
+    client.post("/api/live")
+    client.post("/api/live")
+    assert events == ["start", "stop", "start"]  # the running capture is stopped before re-aligning counters
+
+
+def test_room_only_switch_drops_stale_people(client):
+    a = __import__("valence.api.app", fromlist=["STATE"]).STATE
+    a.runtime.latest[7] = {"person_id": 7}
+    client.post("/api/mode", json={"room_only": True})
+    assert 7 not in a.runtime.latest
+    client.post("/api/mode", json={"room_only": False})

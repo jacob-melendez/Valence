@@ -1,17 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  LAYERS, STATES, STATE_DISPLAY, figureUrl, fmt, provenanceBadges, sendCommand, setSource, shownExplanation, stateName, useValence,
-  type EvalSummary, type PredictionMsg, type Scenario, type StateKey, type StateVectorMsg,
+  LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
+  shownExplanation, stateName, useValence,
+  type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 
-export const STATE_VAR: Record<StateKey, string> = {
+export const STATE_VAR: Record<StateKey | "Overwhelmed" | "Tense", string> = {
   Focused: "var(--state-focused)",
   Frustrated_Masked: "var(--state-frustrated)",
   Exhausted: "var(--state-exhausted)",
   Collaborative_Happy: "var(--state-happy)",
+  Overwhelmed: "var(--state-overwhelmed)",
+  Tense: "var(--state-tense)",
 };
-const stateColor = (id: string | null | undefined, fallback = "var(--primary)") =>
-  (id ? (STATE_VAR as Record<string, string | undefined>)[id] : undefined) ?? fallback;
+// Any further state the backend adds gets a colour by its position in the active state set.
+const EXTRA_VARS = ["var(--state-overwhelmed)", "var(--state-tense)", "var(--primary)", "var(--warn)"];
+const stateColor = (id: string | null | undefined, fallback = "var(--primary)") => {
+  if (!id) return fallback;
+  const known = (STATE_VAR as Record<string, string | undefined>)[id];
+  if (known) return known;
+  const i = getState().states.findIndex((x) => x.id === id);
+  return i >= 0 ? EXTRA_VARS[i % EXTRA_VARS.length] ?? fallback : fallback;
+};
 const pct = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—");
 /** The backend's display text for a prediction (e.g. "Frustrated", "Upbeat"); the state name if missing. */
 const labelText = (p: PredictionMsg) => p.label_display || stateName(p.label);
@@ -32,6 +42,10 @@ export function Header() {
       <div className="flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-sm">
         <span className={`h-3 w-3 rounded-full ${connColor} pulse-dot`} /> {connLabel}
       </div>
+      {baselineWarning(s) && (
+        <span data-testid="baseline-warning" title="Live sensors are read against an automatic baseline. Capture the room baseline (90 s) before judging."
+          className="rounded-md bg-warn px-3 py-2 font-mono text-sm font-bold text-primary-foreground">⚠ ROOM BASELINE NOT CAPTURED</span>
+      )}
       {provenanceBadges(s).map((b) => (
         <span key={b.label} title={b.title} data-testid="provenance-badge"
           className={`rounded-md px-3 py-2 font-mono text-sm font-bold ${b.tone === "warn" ? "bg-warn text-primary-foreground" : b.tone === "live" ? "bg-ok text-primary-foreground" : "border text-muted-foreground"}`}>
@@ -55,27 +69,27 @@ export function Header() {
   );
 }
 
-function Btn({ children, onClick, tone = "default", active }: { children: React.ReactNode; onClick: () => void; tone?: "default" | "danger" | "primary"; active?: boolean }) {
+function Btn({ children, onClick, tone = "default", active, disabled, small }: { children: React.ReactNode; onClick: () => void; tone?: "default" | "danger" | "primary"; active?: boolean; disabled?: boolean; small?: boolean }) {
   const cls = tone === "danger" ? "border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
     : tone === "primary" ? "border-primary text-primary hover:bg-primary hover:text-primary-foreground" : "hover:bg-accent";
-  return <button onClick={onClick} className={`rounded-md border px-4 py-2.5 text-base font-semibold transition-colors ${cls} ${active ? "ring-2 ring-ring" : ""}`}>{children}</button>;
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className={`rounded-md border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${small ? "px-3 py-1.5 text-sm" : "px-4 py-2.5 text-base"} ${cls} ${active ? "ring-2 ring-ring" : ""}`}>
+      {children}
+    </button>
+  );
 }
 
 export function Controls() {
   const s = useValence();
-  const scenarios: Scenario[] = ["full_demo", "focused", "frustrated_masked", "exhausted", "collaborative_happy"];
   return (
     <div className="flex flex-wrap items-center gap-3 border-b px-6 py-3">
       <Btn tone="primary" active={s.running === "running"} onClick={() => sendCommand({ kind: "control", action: "start" })}>▶ Start</Btn>
       <Btn active={s.running === "paused"} onClick={() => sendCommand({ kind: "control", action: "pause" })}>❚❚ Pause</Btn>
       <Btn tone="danger" active={s.running === "stopped"} onClick={() => sendCommand({ kind: "control", action: "stop" })}>■ Stop · Kill switch</Btn>
       <Btn onClick={() => sendCommand({ kind: "break" })}>☕ Log a break</Btn>
-      <select aria-label="Replay scenario" defaultValue=""
-        onChange={(e) => e.target.value && sendCommand({ kind: "replay", scenario: e.target.value as Scenario })}
-        className="rounded-md border bg-card px-3 py-2.5 text-base">
-        <option value="" disabled>Replay scenario…</option>
-        {scenarios.map((x) => <option key={x} value={x}>{x.replace(/_/g, " ")}</option>)}
-      </select>
+      <Btn onClick={() => sendCommand({ kind: "demo_reset" })}>↺ Demo reset</Btn>
+      <Toggle label="Room-only mode" on={s.roomOnly} onChange={(v) => sendCommand({ kind: "mode", room_only: v })} />
       <Toggle label="Simulate face hidden" on={s.sim.face_occlusion} onChange={(v) => sendCommand({ kind: "sim", which: "face_occlusion", enabled: v })} />
       <Toggle label="Simulate low light" on={s.sim.low_light} onChange={(v) => sendCommand({ kind: "sim", which: "low_light", enabled: v })} />
       {s.lastCommand && (
@@ -85,14 +99,122 @@ export function Controls() {
   );
 }
 
-function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ label, on, onChange, small }: { label: string; on: boolean; onChange: (v: boolean) => void; small?: boolean }) {
   return (
-    <button onClick={() => onChange(!on)} role="switch" aria-checked={on} className="flex items-center gap-2 text-base">
+    <button onClick={() => onChange(!on)} role="switch" aria-checked={on} aria-label={label} className={`flex items-center gap-2 ${small ? "text-sm" : "text-base"}`}>
       <span className={`relative h-6 w-11 rounded-full border transition-colors ${on ? "bg-warn" : "bg-muted"}`}>
         <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-foreground transition-all ${on ? "left-5.5" : "left-0.5"}`} />
       </span>
       {label}
     </button>
+  );
+}
+
+// ---------- Operator: source + room baseline ----------
+const selectCls = "min-w-0 rounded-md border bg-card px-3 py-1.5 text-sm";
+
+export function SourceControls() {
+  const s = useValence();
+  const [scenario, setScenario] = useState("full_demo");
+  const [recording, setRecording] = useState("");
+  const [speed, setSpeed] = useState<number>(1);
+  const [loop, setLoop] = useState(false);
+  const scenarios = s.scenarios.length ? s.scenarios : [{ name: "full_demo" }];
+  // The lists change with the source or backend: fall back to the first entry when the picked one is gone,
+  // so the select always shows what Replay sends.
+  const sc = scenarios.some((x) => x.name === scenario) ? scenario : (scenarios[0]?.name ?? "full_demo");
+  const rec = s.recordings.some((x) => x.name === recording) ? recording : (s.recordings[0]?.name ?? "");
+  // Re-posting /api/live while the camera runs re-aligns the frame counters under a running capture.
+  const liveRunning = s.status?.mode === "live" && !!s.status.camera && !s.edgeError;
+  return (
+    <div className="panel" data-testid="source-controls">
+      <div className="panel-title">Source</div>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn small tone="primary" active={s.status?.mode === "live"} disabled={liveRunning} onClick={() => sendCommand({ kind: "live" })}>
+            {liveRunning ? "● Live (camera + mic)" : "● Go live (camera + mic)"}
+          </Btn>
+          <span className="font-mono text-xs text-muted-foreground">mode: <span className="text-foreground" data-testid="backend-mode">{String(s.status?.mode ?? "—").toUpperCase()}</span></span>
+        </div>
+        {(s.edgeError || s.micError) && (
+          <div className="space-y-1 rounded-md border border-destructive bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive" data-testid="edge-errors">
+            {s.edgeError && <div>edge: {s.edgeError}</div>}
+            {s.micError && <div>mic: {s.micError} (running video-only)</div>}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-20 text-sm text-muted-foreground">Speed</span>
+          <div className="flex items-center gap-1 rounded-md border p-0.5 font-mono text-sm" role="group" aria-label="Replay speed">
+            {REPLAY_SPEEDS.map((v) => (
+              <button key={v} onClick={() => setSpeed(v)} aria-pressed={speed === v}
+                className={`rounded px-2.5 py-1 ${speed === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{v}×</button>
+            ))}
+          </div>
+          <Toggle small label="Loop" on={loop} onChange={setLoop} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-20 text-sm text-muted-foreground">Scenario</span>
+          <select aria-label="Replay scenario" value={sc} onChange={(e) => setScenario(e.target.value)} className={`${selectCls} flex-1`}>
+            {scenarios.map((x) => <option key={x.name} value={x.name}>{x.name.replace(/_/g, " ")}{typeof x.minutes === "number" ? ` · ${fmt(x.minutes, 0)} min` : ""}</option>)}
+          </select>
+          <Btn small onClick={() => sendCommand({ kind: "replay", scenario: sc, speed, loop })}>▶ Replay</Btn>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-20 text-sm text-muted-foreground">Recording</span>
+          <select aria-label="Replay recording" value={rec} onChange={(e) => setRecording(e.target.value)} disabled={!s.recordings.length} className={`${selectCls} flex-1`}>
+            {!s.recordings.length && <option value="">no recordings</option>}
+            {s.recordings.map((x) => <option key={x.name} value={x.name}>{x.name}{typeof x.bytes === "number" ? ` · ${fmt(x.bytes / 1024, 0)} KB` : ""}</option>)}
+          </select>
+          <Btn small disabled={!rec} onClick={() => rec && sendCommand({ kind: "replay_recording", name: rec, speed, loop })}>▶ Replay</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RoomBaselineCard() {
+  const s = useValence();
+  const b = s.baseline;
+  const progress = baselineProgress(b);
+  const capturing = b?.mode === "capturing";
+  const warn = baselineWarning(s);
+  const tone = b?.mode === "captured" ? "bg-ok" : capturing ? "bg-primary" : "bg-muted-foreground";
+  const stat = (k: string, v: string, id: string) => (
+    <div className="rounded-md bg-muted px-3 py-2">
+      <div className="text-xs text-muted-foreground">{k}</div>
+      <div className="font-mono text-xl font-bold" data-testid={id}>{v}</div>
+    </div>
+  );
+  return (
+    <div className="panel" data-testid="room-baseline">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="panel-title mb-0">Room baseline</span>
+        <span data-testid="baseline-mode" className={`rounded px-2 py-0.5 font-mono text-xs font-bold uppercase text-primary-foreground ${tone}`}>{b?.mode ?? "unknown"}</span>
+        {warn && <span data-testid="baseline-card-warning" className="rounded bg-warn px-2 py-0.5 font-mono text-xs font-bold text-primary-foreground">⚠ live · not captured</span>}
+      </div>
+      {!b ? <div className="text-muted-foreground">Baseline status unavailable</div> : (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            {stat("dB median", fmt(b.db_median), "baseline-db")}
+            {stat("dB IQR", fmt(b.db_iqr), "baseline-iqr")}
+            {stat("lux median", fmt(b.lux_median, 0), "baseline-lux")}
+          </div>
+          <div className="mt-3 flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Samples</span>
+            <div className="h-3 flex-1 overflow-hidden rounded bg-muted">
+              <div className={`h-full transition-all ${b.mode === "captured" ? "bg-ok" : "bg-primary"}`} style={{ width: `${Math.round(progress * 100)}%` }} />
+            </div>
+            <span className="font-mono" data-testid="baseline-progress">{b.db_samples}/{b.target_samples}{b.lux_samples !== b.db_samples ? ` · lux ${b.lux_samples}` : ""}</span>
+          </div>
+          {capturing && <p className="mt-2 text-sm text-warn">Sit neutral and quiet at the desk until the mode reads “captured”.</p>}
+          {b.mode === "auto" && <p className="mt-2 text-xs text-muted-foreground">Automatic: the first {b.target_samples} s of the session or recording{b.complete ? "" : " (filling)"}. Scenario replays use the simulator's own baseline.</p>}
+        </>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Btn small tone="primary" disabled={capturing} onClick={() => sendCommand({ kind: "baseline", seconds: 90 })}>◎ Capture 90 s</Btn>
+        <Btn small onClick={() => sendCommand({ kind: "baseline_reset" })}>Reset</Btn>
+      </div>
+    </div>
   );
 }
 
@@ -106,7 +228,8 @@ export function CameraView() {
   useEffect(() => {
     let stream: MediaStream | null = null;
     if (!navigator.mediaDevices?.getUserMedia) { setCam("off"); return; }
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+    // Ask for 16:9: the default 640x480 makes macOS switch the shared camera (and so the backend frame) to 4:3.
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
       .then((st) => { stream = st; if (videoRef.current) videoRef.current.srcObject = st; setCam("on"); })
       .catch(() => setCam("off"));
     return () => stream?.getTracks().forEach((t) => t.stop());
@@ -126,7 +249,8 @@ export function CameraView() {
         {s.persons.map((p) => {
           const pred = s.predictions[p.id];
           const color = stateColor(pred?.label);
-          const [b1, y1, b2, y2] = p.bbox;
+          // Boxes are normalized to the backend frame; the 16:9 view shows it like object-cover (4:3 is cropped).
+          const [b1, y1, b2, y2] = coverBox(p.bbox, s.frameW, s.frameH);
           // The preview is shown mirrored (selfie view), so unmirrored box coordinates are flipped to match (docs/API.md 4.2).
           const [x1, x2] = s.mirrored ? [b1, b2] : [1 - b2, 1 - b1];
           return (
@@ -219,14 +343,15 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
   const s = useValence();
   const color = stateColor(p.label);
   const probs = p.probabilities ?? {};
-  // Core states first, then any extra state the backend sends (e.g. the P1 states).
-  const keys: string[] = [...STATES, ...Object.keys(probs).filter((k) => !(STATES as string[]).includes(k))];
+  // The active state set (hello.states) in order, then any extra state the backend sends.
+  const active = s.states.map((x) => x.id);
+  const keys: string[] = [...active, ...Object.keys(probs).filter((k) => !active.includes(k))];
   const faceLabel = p.face_only?.label ?? null;
   const ex = shownExplanation(p, s.llm[p.person_id]);
   return (
     <div className="panel border-l-8" style={{ borderLeftColor: color }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="text-xl text-muted-foreground">Person #{p.person_id}</div>
+        <div className="text-xl text-muted-foreground">{p.person_id === 0 ? "Room (aggregate)" : `Person #${p.person_id}`}</div>
         <div className="font-mono text-xs text-muted-foreground">{p.event_id}{p.warming_up ? " · warming up" : ""}</div>
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-3">
@@ -352,7 +477,10 @@ export function StateVectors() {
 export function Timeline() {
   const s = useValence();
   const ids = [...new Set(s.history.map((h) => h.person_id))].sort();
-  const [pid, setPid] = useState(1);
+  const [sel, setPid] = useState(1);
+  // Follow the people currently streaming (room-only mode streams person 0 only), else whoever has history.
+  const live = Object.keys(s.predictions).map(Number).sort((a, b) => a - b);
+  const pid = live.length ? (live.includes(sel) ? sel : (live[0] ?? sel)) : ids.includes(sel) || !ids.length ? sel : (ids[0] ?? sel);
   const pts = s.history.filter((h) => h.person_id === pid);
   const tMax = pts[pts.length - 1]?.t ?? 0;
   const tMin = tMax - 900;
@@ -392,7 +520,7 @@ export function Timeline() {
       <div className="mt-2 flex flex-wrap gap-4 text-sm">
         {series.map((se) => <span key={se.key} className="flex items-center gap-1.5"><span className="h-1 w-5" style={{ background: se.color }} />{se.name}</span>)}
         <span className="text-muted-foreground">| bar = predicted state:</span>
-        {STATES.map((k) => <span key={k} className="flex items-center gap-1.5"><span className="h-3 w-3" style={{ background: STATE_VAR[k] }} />{STATE_DISPLAY[k]}</span>)}
+        {s.states.map((k) => <span key={k.id} className="flex items-center gap-1.5"><span className="h-3 w-3" style={{ background: stateColor(k.id, "var(--muted-foreground)") }} />{k.display}</span>)}
       </div>
       <div className="mt-1 flex justify-between font-mono text-xs text-muted-foreground"><span>−15 min</span><span>now</span></div>
     </div>
@@ -400,19 +528,53 @@ export function Timeline() {
 }
 
 // ---------- Retention ----------
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const cell = (v: unknown) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+const HEAD: Record<string, string> = { what: "What", where: "Where", how_long: "How long" };
+
+/** GET /api/retention: scalars as rows, `held` (rows of objects) as a table, `never_kept` (strings) as a list. */
 export function Retention() {
   const r = useValence().retention;
+  const entries = r ? Object.entries(r) : [];
+  const scalars = entries.filter(([, v]) => !Array.isArray(v) && !isRecord(v));
+  const lists = entries.filter(([, v]) => Array.isArray(v) || isRecord(v));
   return (
-    <div className="panel">
+    <div className="panel" data-testid="retention">
       <div className="panel-title">Data retention</div>
       {!r ? <div className="text-muted-foreground">Unavailable</div> : (
-        <div className="text-base">
-          {Object.entries(r).map(([k, v]) => (
-            <div key={k} className="flex justify-between gap-3 border-b py-1.5 last:border-0">
+        <div className="space-y-3 text-sm">
+          {scalars.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-3 border-b pb-1.5">
               <span className="text-muted-foreground">{k.replace(/_/g, " ")}</span>
-              <span className={`text-right font-mono font-semibold ${v === 0 ? "text-ok" : ""}`}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+              <span className={`text-right font-mono text-base font-semibold ${v === 0 ? "text-ok" : ""}`}>{cell(v)}</span>
             </div>
           ))}
+          {lists.map(([k, v]) => {
+            const rows = Array.isArray(v) ? v : [v];
+            const objs = rows.filter(isRecord);
+            if (objs.length === rows.length && objs.length > 0) {
+              const cols = [...new Set(objs.flatMap((o) => Object.keys(o)))];
+              return (
+                <div key={k}>
+                  <div className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">{k.replace(/_/g, " ")}</div>
+                  <table className="w-full" data-testid={`retention-${k}`}>
+                    <thead><tr className="text-left text-xs text-muted-foreground">{cols.map((c) => <th key={c} className="pb-1 pr-2 font-normal">{HEAD[c] ?? c.replace(/_/g, " ")}</th>)}</tr></thead>
+                    <tbody>{objs.map((o, i) => (
+                      <tr key={i} className="border-t align-top">{cols.map((c) => <td key={c} className={`py-1 pr-2 ${c === "what" ? "" : "font-mono text-xs"}`}>{cell(o[c])}</td>)}</tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              );
+            }
+            return (
+              <div key={k}>
+                <div className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">{k.replace(/_/g, " ")}</div>
+                <ul className="space-y-0.5" data-testid={`retention-${k}`}>
+                  {rows.map((x, i) => <li key={i} className="flex gap-2"><span className="text-ok">✓</span><span>{cell(x)}</span></li>)}
+                </ul>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -453,7 +615,7 @@ function AccuracyChart({ d }: { d: NonNullable<EvalSummary["accuracy_vs_history"
 
 function Confusion({ c }: { c: NonNullable<EvalSummary["confusion"]>[number] }) {
   const max = Math.max(...c.matrix.flat());
-  const short = { Focused: "Foc", Frustrated_Masked: "Fru", Exhausted: "Exh", Collaborative_Happy: "Hap" } as Record<string, string>;
+  const short = { Focused: "Foc", Frustrated_Masked: "Fru", Exhausted: "Exh", Collaborative_Happy: "Hap", Overwhelmed: "Ovw", Tense: "Ten" } as Record<string, string>;
   return (
     <div>
       <div className="mb-1 text-sm font-semibold">{c.name}</div>

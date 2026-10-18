@@ -2,14 +2,16 @@
 
 > **Every accuracy result in this card comes from simulated data.** Simulator v2 generated it under the behavioral
 > assumptions in §3 and [DATASET.md](DATASET.md). The results test the architecture. They say nothing about
-> accuracy on real people. The one real-data check (the negative control, §5) is in-sample. Claim wording:
+> accuracy on real people. The real-data checks (§5) are unlabeled replays of one person at one desk, and the
+> negative control is in-sample. Claim wording:
 > *"Under explicit, published behavioral assumptions, a temporal context model beats a face snapshot; in-the-wild
 > validation is future work."*
 
-Sources: `reports/metrics.json` (results, generated 2026-10-18 00:33:13, M3 merged in), `reports/m3_metrics.json`
-(M3), `artifacts/model_meta.json` (training run) and the code cited in each row. Regenerate with `make train`,
-`python -m valence.models.temporal`, then `make eval`. A new `artifacts/m2.txt` means a new version id and new
-numbers.
+Sources: `reports/metrics.json` (results, generated 2026-10-18 15:38:46, M3 merged in), `reports/m3_metrics.json`
+(M3), `artifacts/model_meta.json` (training run), `artifacts/legacy/model_meta.json` (the previous served model,
+kept for the venue-shift comparison and as a rollback) and the code cited in each row. Regenerate with
+`make train`, `python -m valence.models.temporal`, then `make eval`. A new `artifacts/m2.txt` means a new version
+id and new numbers.
 
 ## 1. Model details
 
@@ -17,24 +19,25 @@ numbers.
 |---|---|---|
 | Served model | **M2** = context history + face history. M0 (face snapshot) runs every tick as a shadow model | `valence/models/served.py` |
 | Algorithm | LightGBM gradient-boosted trees, `objective=multiclass`, softmax with a fitted temperature | `valence/models/train_ladder.py` |
-| Version id | `m2_lgbm@<sha8>`: the first 8 hex characters of the SHA-256 of `artifacts/m2.txt`. Exposed as `served` in `GET /api/models`, as `model` in `/api/health` and as `feature_version` in `hello`. Current: **`m2_lgbm@85874e97`** | `served.py` |
-| Trained | `2026-10-18 00:15:34` (`trained_at`), on the simulator refit to live capture run 1 (commit `e0ad762`), with modality dropout (§3) | `artifacts/model_meta.json` |
+| Version id | `m2_lgbm@<sha8>`: the first 8 hex characters of the SHA-256 of `artifacts/m2.txt`. Exposed as `served` in `GET /api/models`, as `model` in `/api/health` and as `feature_version` in `hello`. Current: **`m2_lgbm@8a78efc7`**. The previous served model, `m2_lgbm@85874e97` (absolute dB/lux, no venue variation in training), is kept in `artifacts/legacy/`; `VALENCE_ARTIFACTS_DIR=artifacts/legacy` serves it | `served.py` |
+| Trained | `2026-10-18 15:08:44` (`trained_at`), on the simulator refit to live capture run 1 (commit `e0ad762`) with a random venue per session (`bbd46a4`, §3), with modality dropout (§3) | `artifacts/model_meta.json` |
 | Training run | simulator v2, 300 sessions, seed 7, `noise_scale` 1.0 (untuned), state set `core`; M2-family face models get modality-dropout copies | `model_meta.json`, `make train`, `train_ladder.py` `face_dropout` |
 | Classes | Focused, Frustrated_Masked, Exhausted, Collaborative_Happy | `valence/contracts.py` `CORE_STATES` |
-| Input | 114 features computed from one person's rolling window plus the room's window (5 s ticks, up to 180 ticks = 15 min); M2 uses 110 of them. Served models read their feature lists from `model_meta.json` `feature_sets` | `valence/features/compute.py`, `served.py` |
+| Input | 123 features computed from one person's rolling window plus the room's window (5 s ticks, up to 180 ticks = 15 min); M2 uses 101 of them. No served model sees an absolute dB or lux level: room level enters relative to the venue baseline (`TickRecord.room_db_base` / `room_lux_base`, `POST /api/room/baseline`). Served models read their feature lists from `model_meta.json` `feature_sets` | `valence/features/compute.py`, `served.py` |
 | Output | calibrated probabilities, label, TreeSHAP attributions grouped into 4 layers, face-only reading, mask-override flag | `served.py`, `predictor.py` |
 | Hyperparameters | learning rate 0.05, 31 leaves, `min_data_in_leaf` 100, feature and bagging fraction 0.8, at most 800 rounds, early stop after 50, class weights n/(k·count), seed 7 | `train_ladder.py` `PARAMS` |
-| Rounds / temperature | M2 377 rounds, T = 0.954. M0 109 rounds, T = 0.903 | `model_meta.json` `summary` |
+| Rounds / temperature | M2 261 rounds, T = 0.934. M0 102 rounds, T = 0.882 | `model_meta.json` `summary` |
 | Calibration | one temperature per model, fitted by NLL on the calibration half (bounds 0.25–8) | `fit_temperature` |
 | Runtime | `predict` and `pred_contrib` with `num_threads=1`, because the torch + LightGBM libomp combination segfaults otherwise | `served.py`, [BENCHMARKS.md](BENCHMARKS.md) |
 | License | MIT | `LICENSE` |
 
-**Features (114, order in `model_meta.json` `feature_names`).** Missing values stay NaN, and LightGBM handles
+**Features (123, order in `model_meta.json` `feature_names`).** Missing values stay NaN, and LightGBM handles
 them natively.
 
 | Group | Features | Count | Explanation layer |
 |---|---|---|---|
-| Room levels: `db`, `lux` | `_now`; `_mean/_std/_slope/_max` over 1, 5 and 15 min; `_ewm_1m/_5m`; `_d1m15m` (1-min mean minus 15-min mean); `_rel_15m` (now minus the 15-min median). `_slope_1m` and `_std_1m` are computed but used by no model in the ladder (`NOISY_LIVE`: dominated by live transients) | 2 × 17 | Ambient Physics |
+| Room levels: `db`, `lux` | `_now`; `_mean/_std/_slope/_max` over 1, 5 and 15 min; `_ewm_1m/_5m`; `_d1m15m` (1-min mean minus 15-min mean); `_rel_15m` (now minus the 15-min median). `_slope_1m` and `_std_1m` are computed but used by no model in the ladder (`NOISY_LIVE`: dominated by live transients). The 18 absolute levels (`_now`, `_mean_*`, `_max_*`, `_ewm_*`; `ABS_ROOM`) are computed and quoted in explanations, but only the M2-abs ablation uses them | 2 × 17 | Ambient Physics |
+| Room relative to the venue baseline (`ROOM_REL`) | `db_room_now`, `db_room_mean_1m/_5m/_15m`, `db_room_max_5m`, `db_room_ewm_5m`: dB above `room_db_base`; `lux_room_now`, `lux_room_mean_5m/_15m`: log2(lux / `room_lux_base`). A loud hall is then this room's normal, not "loud" | 9 | Ambient Physics |
 | Person levels: `motion`, `slump`, `hih` | same 17 statistics per channel | 3 × 17 | Somatic & Social |
 | Events: `fist` (person), `laugh`, `compl` (room) | `_cnt_now`, `_cnt_1m/_5m/_15m`, `_since_s` (capped at 900 s) | 3 × 5 | Somatic & Social |
 | Social, time, fill | `withdraw_now`, `withdraw_frac_5m`, `n_people`; `hours_since_break`, `tod_sin`, `tod_cos`; `fill_ratio` | 7 | S&S; Time Dynamics; `fill_ratio` is never narrated |
@@ -46,31 +49,36 @@ them natively.
 |---|---|---|---|
 | M0 | `face_now`, `face_visible_now` | 2 | face-snapshot baseline; served as the shadow model |
 | M0t | the 7 face features | 7 | face history |
-| M1 | 9 context `_now` values, `n_people`, `hours_since_break`, `tod_sin`, `tod_cos` | 13 | context snapshot |
-| M2-noface | context features minus the 4 `NOISY_LIVE` ones, no face | 103 | ablation: how much the face adds |
-| M2-noabsdb † | M2 minus the 9 absolute dB levels (`db_now`, `_mean`, `_max`, `_ewm`) | 101 | ablation: per-session mic offset |
-| M2-notime † | M2 minus `hours_since_break`, `tod_sin`, `tod_cos` | 107 | ablation: operator-settable clock |
-| **M2** † | all 114 minus the 4 `NOISY_LIVE` | 110 | **served** |
-| M3 | GRU(64) + additive attention over 15 raw channels × 180 ticks | — | benchmark only (`valence/models/temporal.py`); §5 |
+| M1 | 9 context `_now` values (room level as `db_room_now`, `lux_room_now`), `n_people`, `hours_since_break`, `tod_sin`, `tod_cos` | 13 | context snapshot |
+| M2-noface | M2 minus the 7 face features | 94 | ablation: how much the face adds |
+| M2-abs † | the pre-baseline set: the 18 absolute room levels instead of the 9 room-relative ones (all 114 non-relative features minus the 4 `NOISY_LIVE`), trained on the same venue-randomized corpus | 110 | ablation: absolute vs room-relative levels (venue shift, §5) |
+| M2-notime † | M2 minus `hours_since_break`, `tod_sin`, `tod_cos` | 98 | ablation: operator-settable clock |
+| **M2** † | all 123 minus the 4 `NOISY_LIVE` and the 18 absolute room levels | 101 | **served** |
+| M3 | GRU(64) + additive attention over 15 raw channels × 180 ticks; the room channels are `db_room` = `ambient_db` − `room_db_base` and `lux_room` = log2(`light_lux` / `room_lux_base`) | — | benchmark only (`valence/models/temporal.py`); §5 |
 
 † Trained with modality dropout (§3): the M2-family models whose features include the face block. M0, M0t, M1,
 M2-noface and M3 are trained without it.
 
-**Serving path per tick.** (1) Compute the features. (2) Clip each feature to the training p1–p99
+**Serving path per tick.** (1) Compute the features, room level relative to the venue baseline carried on the
+`TickRecord` (captured on arrival or automatic, ARCHITECTURE §6.1); the absolute levels are kept for the driver
+text only. (2) Clip each feature to the training p1–p99
 (`artifacts/clip_bounds.json`); list as `data_quality.ood_features` only the features outside their OOD band
 (physical domain for bounded features, never for clock features, 50% of the training range beyond p1/p99 for
 db/lux/motion; ARCHITECTURE §7.5). (3) Compute softmax(z/T). If more than 3 features are OOD, use
 p ← 0.7·p + 0.3/k. (4) Run M0 when `face_now` is not NaN.
-(5) Compute TreeSHAP for the argmax class. (6) Smooth with `PersonSmoother`: an EMA (α 0.5) feeds the *label* only,
+(5) Compute TreeSHAP for the argmax class; a room-relative driver's text leads with the absolute level (§6).
+(6) Smooth with `PersonSmoother`: an EMA (α 0.5) feeds the *label* only,
 and a new label needs 2 consecutive ticks. The displayed confidence is the calibrated, unsmoothed probability of the
 shown label, documented as "sim-calibrated" (`contracts.py`). `warming_up` is set for the first 60 s of a window,
 and the override is blocked for the first 120 s.
 
-**6-state variant (P1: + Overwhelmed, Tense).** `artifacts/all/` (`m2_lgbm@4a4d8135`, `trained_at` 2026-10-18
-00:23:40, on the refit simulator with modality dropout, same 110-feature M2, 247 rounds, T = 0.960). Frustrated_Masked
-becomes mask-only (`mask_p` 0.92) and Tense takes unmasked frustration. **Not evaluated** with `evaluate.py` and not
-negative-controlled; the trainer's own mixed-length test macro-F1 (`artifacts/all/model_meta.json` `summary`, simulated)
-is M0 0.4614, M2-noface 0.5732, M2 0.7682. Serve with `VALENCE_STATE_SET=all VALENCE_ARTIFACTS_DIR=artifacts/all`.
+**6-state variant (P1: + Overwhelmed, Tense).** `artifacts/all/` (`m2_lgbm@3be2ee03`, `trained_at` 2026-10-18
+15:12:14, on the refit simulator with venue variation and modality dropout, same 101-feature room-relative M2,
+254 rounds, T = 0.942). Frustrated_Masked becomes mask-only (`mask_p` 0.92) and Tense takes unmasked frustration.
+**Not evaluated** with `evaluate.py` and not negative-controlled; the trainer's own mixed-length test macro-F1
+(`artifacts/all/model_meta.json` `summary`, simulated) is M0 0.4543, M2-noface 0.5659, M2 0.7671 (the previous
+`4a4d8135`: 0.4614, 0.5732, 0.7682). The `overwhelmed` and `tense` scenarios pass `tests/test_scenarios.py` with it.
+Serve with `VALENCE_STATE_SET=all VALENCE_ARTIFACTS_DIR=artifacts/all`.
 
 ## 2. Intended use
 
@@ -99,6 +107,14 @@ lags each person's own state, and events are Poisson counts per tick. Each tick 
 Full spec and scenarios: **[DATASET.md](DATASET.md)**. Motion, face and dB/lux noise scales were refit in `e0ad762`
 to live capture run 1 (one person at the demo Mac; live-vs-sim comparison in `reports/capture_vs_sim.json`).
 
+**Venue** (`bbd46a4`). Each session draws a hall level U(40, 75) dB, independent of every state, and power-sums it
+with the team's own state-driven level: `ambient = power_sum(venue, room_db) + mic offset + drift + noise`. It also
+draws the arrival baseline an operator would capture: `room_db_base = power_sum(venue, 48 dB neutral occupant) +
+mic offset + N(0, 1.5 dB)` and `room_lux_base = session lux × exp(N(0, 0.08))`. A loud hall alone is therefore never
+evidence of a state; loudness above the room's own baseline is. The venue and baseline draws use their own random
+stream (crc32 of the session id), so scripted scenarios are otherwise unchanged; scenarios keep a quiet room unless
+their YAML sets `venue_db` (`loud_venue`: 72 dB).
+
 **Per-state behavioral parameters** (`valence/sim/params.py` `STATE_PARAMS`; P1 states only with `state_set=all`):
 
 | Parameter | Focused | Frustrated_Masked | Exhausted | Collaborative_Happy | Overwhelmed (P1) | Tense (P1) |
@@ -119,8 +135,9 @@ to live capture run 1 (one person at the demo Mac; live-vs-sim comparison in `re
 | `group_affinity` / `solo_affinity` | 1.0 / 1.0 | 1.0 / 1.0 | 1.0 / 1.0 | 1.8 / 0.4 | 1.0 / 1.0 | 1.5 / 0.6 |
 | Break-rate multiplier (`generator.py`) | ×1 | ×1 | ×2 | ×1 | ×2 | ×1 |
 
-\* Not yet checked against live data: the keyboard-gaze, slump and audio captures are still wanted
-([CONTRACT_RESPONSES.md](CONTRACT_RESPONSES.md) round 4).
+\* Checked in part against capture runs 2–3, not refit (§5, `reports/capture_vs_sim.json`): slumping is
+detected, but a held slump moves far more live than the simulated Exhausted state (a perception artifact, §7);
+laughter and compliments are detected at the desk. Head-in-hands is still unchecked.
 
 **Session nuisance** (`params.py` `Nuisance`; ×ns marks terms that scale with `noise_scale`, which is 1.0 here):
 
@@ -129,7 +146,9 @@ to live capture run 1 (one person at the demo Mac; live-vs-sim comparison in `re
 | `mic_offset_db` | U(−12, +12) dB per session | |
 | dB jitter / drift | σ 1.2 dB per tick; AR(1) drift (×0.95 per tick, σ 0.5 dB); p90 = level + 1.5 + abs(N(0, 1)); +2 dB per laughter onset (at most 2) | ✓ |
 | Sound transients | 0.3 per min, +4 to +12 dB (30%: −0.5× that) for 2–8 ticks, state-independent | |
-| Lux | log-uniform 120–600 lux per session; ×0.85 from 22:00 to 06:00; lognormal tick jitter σ 0.015; AR(1) log drift (×0.98, σ 0.01) | jitter, drift ✓ |
+| Venue (`venue_db_range`) | U(40, 75) dB per session, state-independent, power-summed with the team's level; scenarios: none unless `venue_db` is set | |
+| Arrival baseline (`neutral_db`, `baseline_db_noise`, `baseline_lux_noise`) | dB: power_sum(venue, 48) + mic offset + N(0, 1.5); lux: session lux (×0.85 for a night start) × exp(N(0, 0.08)); own random stream per session | ✓ |
+| Lux | log-uniform 100–800 lux per session; ×0.85 from 22:00 to 06:00; lognormal tick jitter σ 0.015; AR(1) log drift (×0.98, σ 0.01) | jitter, drift ✓ |
 | Light transients | 0.5 per min, ×U(0.75, 1.3) for 2–12 ticks (auto-exposure), state-independent | |
 | `face_hidden_range` | session share U(0, 0.30), + 0.3 × head-in-hands fraction, cap 0.98 (Overwhelmed: the per-episode share instead) | |
 | `face_episode_sd` / `face_tick_sd` | 0.12 / 0.03; readable share of a tick's frames U(0.85, 1.0) | tick ✓ |
@@ -145,7 +164,8 @@ to live capture run 1 (one person at the demo Mac; live-vs-sim comparison in `re
 
 **Detector false positives (`params.py` `FP`).** Capture run 1 measured 0.0 fist onsets/min and 0% slump during
 3 min of typing, and 0 false onsets around 15 cued clenches ([BENCHMARKS.md](BENCHMARKS.md)); small non-zero rates
-are kept so one event is never certain. Laughter and compliment rates are not yet measured.
+are kept so one event is never certain. Capture run 3 counted 0 laughter or compliment events during its quiet
+baseline ([BENCHMARKS.md](BENCHMARKS.md)); the rates below were not changed.
 
 | `fist_per_min` | `slump_share` | `laugh_per_min` (room) | `compl_per_min` (room) |
 |---|---|---|---|
@@ -179,51 +199,72 @@ Class weights are computed on the augmented set. Early-stopping, calibration and
 | Episode age | Accuracy by seconds since the person entered the current true state |
 | Calibration | ECE over 10 equal-width bins of max probability, before (T = 1) and after temperature scaling |
 | Robustness | Degrades **only the face channel** at tick level; lux and context are untouched. Face dropout hides an extra share p of person-ticks. "Low light" adds face noise σ and an extra hidden share: relative light 0.5 → 0.15 / 0.10, 0.25 → 0.30 / 0.25, 0.1 → 0.45 / 0.45. |
+| Venue shift | The test sessions with a constant hall level of 60, 70 or 75 dB power-summed into `ambient_db`, `db_p90` and the arrival baseline `room_db_base` (`add_venue`); windows every 6 ticks with the full 15 min. Reports Focused misread as negative and macro-F1 for M2, M2-abs and the previous served M2 (`artifacts/legacy`, `85874e97`) |
 | Legacy mock | The original generator, 2,000 rows: train on the first 1,400 rows, test accuracy on the other 600, LightGBM 100 rounds |
 | Negative control (real data) | `valence/eval/negative_control.py`: replay a features-only typing capture through the served model; pass if Frustrated_Masked/Tense ≤ 20% of non-warm-up ticks |
-| **Not done** | The `noise_scale` sensitivity sweep (×0.5 / ×1.5; `tune_difficulty.py` not built), labeled live or in-the-wild data, an independent negative-control capture, the acted set, self-report labels |
+| **Not done** | The `noise_scale` sensitivity sweep (×0.5 / ×1.5; `tune_difficulty.py` not built), labeled live or in-the-wild data, a negative-control capture from another person or room, the acted set, self-report labels |
 
 ## 5. Metrics (simulated data, `reports/metrics.json`)
 
-These numbers evaluate the served artifact `m2_lgbm@85874e97` (`calibration_m2.temperature` 0.954 matches
-`model_meta.json`). The seven figures in `reports/figs/` carry the same 2026-10-18 00:33 timestamp as `metrics.json`.
+These numbers evaluate the served artifact `m2_lgbm@8a78efc7` (`calibration_m2.temperature` 0.934 matches
+`model_meta.json`). The eight figures in `reports/figs/` were regenerated with this `metrics.json` and committed
+with it in `bbd46a4` (`m3_attention.png` comes from the M3 run).
 
 **Ladder, headline set** (45 test sessions, up to 15 min of history; values exactly as in `metrics.json`):
 
 | Model | Macro-F1 | Balanced acc. | Recall Focused | Recall Frustrated_Masked | Recall Exhausted | Recall Collab./Happy | Focused misread as negative |
 |---|---|---|---|---|---|---|---|
-| M0 | 0.4255 | 0.4464 | 0.4356 | **0.1169** | 0.5993 | 0.6338 | **0.5587** |
-| M0t | 0.4910 | 0.5181 | 0.4964 | 0.1810 | 0.6107 | 0.7844 | 0.4961 |
-| M1 | 0.5631 | 0.5651 | 0.5681 | 0.4432 | 0.6949 | 0.5542 | 0.2598 |
-| M2-noface | 0.6939 | 0.6956 | 0.6647 | 0.6738 | 0.7796 | 0.6642 | 0.1927 |
-| M2-noabsdb † | 0.7992 | 0.8006 | 0.8066 | 0.7014 | 0.8515 | 0.8427 | 0.1817 |
-| M2-notime † | 0.7861 | 0.7876 | 0.7795 | 0.6868 | 0.8432 | 0.8408 | 0.2137 |
-| **M2** † | **0.8021** | 0.8031 | 0.8014 | **0.7082** | 0.8575 | 0.8452 | **0.1882** |
+| M0 | 0.4224 | 0.4442 | 0.4282 | **0.1125** | 0.6009 | 0.6350 | **0.5632** |
+| M0t | 0.4898 | 0.5171 | 0.4896 | 0.1810 | 0.6118 | 0.7860 | 0.5008 |
+| M1 | 0.5832 | 0.5846 | 0.5778 | 0.4778 | 0.7224 | 0.5604 | 0.2440 |
+| M2-noface | 0.6766 | 0.6785 | 0.6519 | 0.6312 | 0.7704 | 0.6604 | 0.1998 |
+| M2-abs † | 0.7944 | 0.7962 | 0.8034 | 0.6775 | 0.8521 | 0.8519 | 0.1844 |
+| M2-notime † | 0.7844 | 0.7863 | 0.7738 | 0.6715 | 0.8480 | 0.8519 | 0.2160 |
+| **M2** † | **0.7970** | 0.7991 | 0.8094 | **0.6796** | 0.8499 | 0.8577 | **0.1790** |
 
-Headline: Frustrated_Masked recall goes from 0.1169 (M0) to 0.7082 (M2), and "Focused misread as negative" from
-0.5587 to 0.1882. M2's 0.80 macro-F1 is below the plan's 0.85–0.92 difficulty band. It is reported as is, not
-tuned toward the band. M3 is not on this set (its mixed-history score is below).
+Headline: Frustrated_Masked recall goes from 0.1125 (M0) to 0.6796 (M2), and "Focused misread as negative" from
+0.5632 to 0.1790. M2's 0.797 macro-F1 is below the plan's 0.85–0.92 difficulty band. It is reported as is, not
+tuned toward the band. M3 is not on this set (its mixed-history score is below). The previous build
+(`85874e97`, `e28b37c`) scored M2 0.8021, Frustrated_Masked recall 0.7082 and Focused misread 0.1882, but on the
+simulator before the venue change (no hall noise, lux 120–600), so those are different test sessions; the venue-shift
+table below compares both models on the same sessions.
 
-**Ablations** (no CIs on this set; the history curve's 95% interval for M2 at 15 min spans about −0.015 / +0.018):
+**Ablations** (no CIs on this set; the history curve's 95% interval for M2 at 15 min spans about −0.016 / +0.021):
 
 | Comparison | Δ macro-F1 vs M2 | Reading |
 |---|---|---|
-| M2-noface | −0.1082 | The face adds about 0.11. The plan's check (M2-noface ≥ M2 − 0.05) **fails** on this simulator. |
-| M2-noabsdb | −0.0029 | Dropping the 9 absolute dB levels barely matters. The remaining features (relative and trend dB among them) carry the signal, which fits the ±12 dB per-session mic offset. |
-| M2-notime | −0.0160 | The time layer (including the operator-settable `hours_since_break`) contributes a little. Frustrated_Masked recall drops 0.7082 → 0.6868, and Focused misread rises 0.1882 → 0.2137. |
+| M2-noface | −0.1204 | The face adds about 0.12. The plan's check (M2-noface ≥ M2 − 0.05) **fails** on this simulator. |
+| M2-abs | −0.0026 | Absolute instead of room-relative levels makes almost no difference on the simulator's own rooms; the cost of absolute levels shows only in a loud hall (venue shift, below). |
+| M2-notime | −0.0126 | The time layer (including the operator-settable `hours_since_break`) contributes a little. Frustrated_Masked recall drops 0.6796 → 0.6715, and Focused misread rises 0.1790 → 0.2160. |
+
+**Venue shift** (`metrics.json` `venue_shift`, `reports/figs/venue_shift.png`): Focused misread as negative when the
+test sessions are mixed with constant hall noise (§4):
+
+| Model | Own room | +60 dB hall | +70 dB hall | +75 dB hall | Macro-F1, own room → +75 dB |
+|---|---|---|---|---|---|
+| **M2** (served, room-relative) | 0.1772 | 0.1781 | 0.1835 | 0.1872 | 0.7965 → 0.7961 |
+| M2-abs (absolute levels, same corpus) | 0.1814 | 0.1811 | 0.1908 | 0.1986 | 0.7925 → 0.7907 |
+| Previous served M2 (`85874e97`, `artifacts/legacy`) | 0.2077 | 0.2227 | 0.2586 | 0.2812 | 0.7863 → 0.7764 |
+
+The improvement is real but modest in size. From the session's own room to a +75 dB hall, the previous model's
+Focused misread rises by 7.4 points; the served model's by 1.0 point, nearly flat. M2-abs, trained on the same
+venue-randomized corpus but with absolute levels, rises by 1.7 points, so most of the gain over the previous model
+comes from training on varied venues and the room-relative features add a smaller part. The test adds hall noise
+the same way the training simulator does (a power sum into the room level and the baseline), so the flat curves of
+M2 and M2-abs are partly by construction; the real-data counterpart is the venue-mixed typing capture below.
 
 **Accuracy vs history** (macro-F1, session-bootstrap 95% CI; M3 is one run without bootstrap):
 
 | History | M0 | M0t | M1 | M2-noface | **M2** | M3 |
 |---|---|---|---|---|---|---|
-| 0 min | 0.4244 (0.4062–0.4439) | 0.3629 (0.3451–0.3807) | 0.5611 (0.5410–0.5815) | 0.5363 (0.5200–0.5499) | 0.6407 (0.6222–0.6558) | 0.6089 |
-| 1 min | 0.4241 (0.4053–0.4435) | 0.4714 (0.4486–0.4957) | 0.5601 (0.5401–0.5806) | 0.6296 (0.6142–0.6470) | 0.7425 (0.7228–0.7604) | 0.7248 |
-| 2 min | 0.4232 (0.4043–0.4417) | 0.4849 (0.4621–0.5090) | 0.5583 (0.5387–0.5792) | 0.6684 (0.6550–0.6860) | 0.7787 (0.7623–0.7948) | 0.7499 |
-| 5 min | 0.4229 (0.4035–0.4414) | 0.4872 (0.4644–0.5084) | 0.5578 (0.5390–0.5785) | 0.6852 (0.6657–0.7052) | 0.7945 (0.7772–0.8125) | 0.7632 |
-| 10 min | 0.4250 (0.4062–0.4430) | 0.4924 (0.4685–0.5160) | 0.5576 (0.5387–0.5780) | 0.6815 (0.6640–0.7013) | 0.7896 (0.7742–0.8049) | 0.7547 |
-| 15 min | 0.4246 (0.4059–0.4442) | 0.4922 (0.4684–0.5125) | 0.5599 (0.5419–0.5813) | 0.6784 (0.6593–0.6998) | 0.7888 (0.7736–0.8068) | 0.6992 |
+| 0 min | 0.4184 (0.4021–0.4334) | 0.3633 (0.3445–0.3816) | 0.5843 (0.5682–0.6050) | 0.5537 (0.5370–0.5702) | 0.6495 (0.6309–0.6652) | 0.6152 |
+| 1 min | 0.4182 (0.4009–0.4337) | 0.4703 (0.4474–0.4922) | 0.5841 (0.5678–0.6048) | 0.6348 (0.6176–0.6560) | 0.7456 (0.7275–0.7655) | 0.7331 |
+| 2 min | 0.4173 (0.3995–0.4328) | 0.4849 (0.4591–0.5075) | 0.5833 (0.5660–0.6039) | 0.6608 (0.6454–0.6781) | 0.7771 (0.7605–0.7940) | 0.7603 |
+| 5 min | 0.4170 (0.3974–0.4330) | 0.4852 (0.4617–0.5064) | 0.5828 (0.5653–0.6030) | 0.6748 (0.6591–0.6934) | 0.7910 (0.7765–0.8072) | 0.7696 |
+| 10 min | 0.4192 (0.4016–0.4346) | 0.4906 (0.4671–0.5126) | 0.5823 (0.5647–0.6027) | 0.6728 (0.6544–0.6936) | 0.7887 (0.7736–0.8065) | 0.7634 |
+| 15 min | 0.4186 (0.4003–0.4368) | 0.4889 (0.4683–0.5078) | 0.5827 (0.5653–0.6023) | 0.6685 (0.6506–0.6928) | 0.7839 (0.7677–0.8045) | 0.7091 |
 
-At 15 min the intervals of M2, M1 and M0 do not overlap. With one tick of history (0 min), M2 (0.6407) is 0.08
+At 15 min the intervals of M2, M1 and M0 do not overlap. With one tick of history (0 min), M2 (0.6495) is 0.07
 above M1.
 
 **Accuracy by episode age** (share correct, headline set). The first 30 s of an episode are weak for the context
@@ -231,63 +272,77 @@ models: context has not caught up yet, and M0 beats both M1 and M2 there.
 
 | Time in current state | n | M0 | M1 | M2 |
 |---|---|---|---|---|
-| 0–30 s | 1663 | **0.4402** | 0.2044 | **0.3620** |
-| 30–60 s | 1971 | 0.4257 | 0.2714 | 0.4972 |
-| 1–2 min | 3887 | 0.4494 | 0.4021 | 0.6771 |
-| 2–5 min | 9179 | 0.4484 | 0.6224 | 0.8658 |
-| 5+ min | 9795 | 0.4630 | 0.7270 | 0.9385 |
+| 0–30 s | 1663 | **0.4426** | 0.1948 | **0.3277** |
+| 30–60 s | 1971 | 0.4277 | 0.2648 | 0.4906 |
+| 1–2 min | 3887 | 0.4430 | 0.3998 | 0.6746 |
+| 2–5 min | 9179 | 0.4462 | 0.6423 | 0.8599 |
+| 5+ min | 9795 | 0.4611 | 0.7676 | 0.9396 |
 
 **Robustness, face channel only** (macro-F1, full windows; lux and context untouched; no CIs):
 
 | Extra face dropout | 0 | 0.25 | 0.5 | 0.75 | 1.0 |
 |---|---|---|---|---|---|
-| M0 | 0.4357 | 0.3902 | 0.3270 | 0.2484 | 0.1208 |
-| M0t | 0.4934 | 0.4733 | 0.4565 | 0.4218 | 0.0819 |
-| M2-noface | 0.6933 | 0.6933 | 0.6933 | 0.6933 | 0.6933 |
-| **M2** | 0.8025 | 0.7946 | 0.7852 | 0.7708 | **0.6870** |
+| M0 | 0.4308 | 0.3859 | 0.3222 | 0.2453 | 0.1208 |
+| M0t | 0.4946 | 0.4686 | 0.4568 | 0.4151 | 0.0819 |
+| M2-noface | 0.6795 | 0.6795 | 0.6795 | 0.6795 | 0.6795 |
+| **M2** | 0.7957 | 0.7892 | 0.7809 | 0.7676 | **0.6783** |
 
 | Relative light (face noise + hiding) | 1.0 | 0.5 | 0.25 | 0.1 |
 |---|---|---|---|---|
-| M0 | 0.4357 | 0.3807 | 0.3062 | 0.2539 |
-| M0t | 0.4934 | 0.4536 | 0.3418 | 0.2886 |
-| M2-noface | 0.6933 | 0.6933 | 0.6933 | 0.6933 |
-| **M2** | 0.8025 | 0.7702 | 0.7165 | **0.6770** |
+| M0 | 0.4308 | 0.3772 | 0.3091 | 0.2516 |
+| M0t | 0.4946 | 0.4537 | 0.3452 | 0.2918 |
+| M2-noface | 0.6795 | 0.6795 | 0.6795 | 0.6795 |
+| **M2** | 0.7957 | 0.7666 | 0.7226 | **0.6794** |
 
 M2 degrades gradually where M0 and M0t collapse. Modality dropout was added so that M2 does not fall below
-M2-noface when the face disappears. With the face **fully hidden** it is now 0.0063 below M2-noface (0.6870 vs
-0.6933), a near tie (this table has no CIs). At relative light 0.25 it stays above M2-noface (0.7165 vs 0.6933,
-+0.0232). At 0.1 it is still below (0.6770 vs 0.6933, −0.0163): very noisy face evidence still costs a little more
-than no face at all (§8). The training degradation resembles these test conditions (at 1.0 the hidden copies match
-the test input exactly), so part of this gain is by construction (§7).
+M2-noface when the face disappears. With the face **fully hidden** it is 0.0012 below M2-noface (0.6783 vs
+0.6795), a near tie (this table has no CIs). At relative light 0.25 it stays above M2-noface (0.7226 vs 0.6795,
++0.0431), and at 0.1 the two tie (0.6794 vs 0.6795). The training degradation resembles these test conditions (at
+1.0 the hidden copies match the test input exactly), so part of this gain is by construction (§7).
 
-**Calibration (M2).** T = 0.9541; ECE 0.0079 before and 0.0063 after temperature scaling. In every reliability
-bin from 0.4 to 1.0, accuracy is within 0.01 of confidence; the 0.3–0.4 bin (n = 310) is within 0.016. The
-0.2–0.3 bin has n = 5.
+**Calibration (M2).** T = 0.9338; ECE 0.0130 before and 0.0045 after temperature scaling. In every reliability
+bin from 0.4 to 1.0, accuracy is within 0.01 of confidence; in the 0.3–0.4 bin (n = 348) accuracy is 0.050 above
+confidence. The 0.2–0.3 bin has n = 8.
 
 **M3 (GRU + attention, benchmark; `reports/m3_metrics.json`).** Retrained on the current corpus and session split,
-on CPU, without modality dropout: 29,777 training windows (step 12, random lengths), at most 15 epochs, early stop on
-macro-F1 with patience 3, 343 s. Macro-F1 on mixed-history test windows 0.7532 (early-stopping set 0.7592); the
-nearest M2 figure is the trainer's own mixed-length test score, 0.7965 (`model_meta.json` `summary`). On the history
-windows above, M3 is below M2 at every length. Its curve peaks at 5 min (0.7632) and then drops to 0.6992 at 15 min,
-which suggests it is under-trained on long sequences within this budget; treat it as a lower bound. M2 stays the
-served model (its TreeSHAP attributions drive the explanations).
+on CPU, without modality dropout, with room-relative dB and lux channels like M2: 29,777 training windows (step 12,
+random lengths), at most 15 epochs, early stop on macro-F1 with patience 3, 715 s. Macro-F1 on mixed-history test
+windows 0.7594 (early-stopping set 0.7725); the nearest M2 figure is the trainer's own mixed-length test score,
+0.7911 (`model_meta.json` `summary`). On the history windows above, M3 is below M2 at every length. Its curve peaks
+at 5 min (0.7696) and then drops to 0.7091 at 15 min, which suggests it is under-trained on long sequences within
+this budget; treat it as a lower bound. M2 stays the served model (its TreeSHAP attributions drive the
+explanations).
 
 **Negative control (real data, not simulated).** One person, 3 min of quiet typing (`data/real/capture_typing.jsonl`,
 0 fist onsets, 0% slump). Gate: Frustrated_Masked/Tense ≤ 20% of ticks. Before the refit (`f69de179`):
 Frustrated_Masked 49%, Exhausted 35%, Collaborative 16%, Focused 0%, **fail**
-([CONTRACT_REQUESTS.md](CONTRACT_REQUESTS.md) round 3). Served `85874e97`: **Focused on 100%** of the 25 non-warm-up
-ticks, stress share 0, 0 mask overrides, **pass** (cloud, 2026-10-18: `python -m valence.eval.negative_control
-data/real/capture_typing.jsonl`). The simulator was refit to this same capture run, so the pass is **in-sample**: a
-consistency check, not validation.
+([CONTRACT_REQUESTS.md](CONTRACT_REQUESTS.md) round 3). Served `8a78efc7`: **Focused on 25/25** non-warm-up ticks,
+**pass** (cloud, 2026-10-18, corrected replay clock: `python -m valence.eval.negative_control
+data/real/capture_typing.jsonl`); the previous `85874e97` also read Focused on 25/25. The simulator was refit to this
+same capture run, so the pass is **in-sample**: a consistency check, not validation.
 
 **Replay clock correction (2026-10-18).** Offline replay used to start each break clock at the recording's own
 capture time while ticking on the current clock, so a capture replayed hours later read `hours_since_break` of
 about 8.5 h. Fixed in `valence/runtime/recording.py` (one synthetic clock per replay; `tests/test_runtime.py`
 asserts < 1 h). With the corrected clock, typing is unchanged (Focused 25/25, pass). The cued-fists capture
-(`capture_fists.jsonl`) reads **Focused on 23/25** non-warm-up ticks and Collaborative (shown as "Upbeat") on 2,
-not the "Frustrated 60%" reported earlier (CONTRACT_RESPONSES round 4): that figure came from the inflated break
-clock. Cued fists in a quiet room with a fresh break clock are not enough for M2 to read Frustrated; whether the
-full masked act (noise, smile and fists) is, needs the `golden_demo` capture.
+(`capture_fists.jsonl`) reads **Focused on 24/25** non-warm-up ticks and Collaborative (shown as "Upbeat") on 1 with
+the served `8a78efc7` (23/25 and 2 with `85874e97`), not the "Frustrated 60%" reported earlier (CONTRACT_RESPONSES
+round 4): that figure came from the inflated break clock. Cued fists in a quiet room with a fresh break clock are
+not enough for M2 to read Frustrated; whether the full masked act (noise, smile and fists) is, needs the
+`golden_demo` capture.
+
+**Capture runs 2–3 (real data, not simulated; Mac captures, served `8a78efc7`, corrected replay clock).** The
+simulator's scales were fit to run 1 only; runs 2–3 are a check against it (`reports/capture_vs_sim.json`;
+`capture_stats` also reports `db_room`, laughter and compliments):
+
+| Capture | Served M2 reads (non-warm-up ticks) | Scale check against the simulator |
+|---|---|---|
+| Keyboard gaze (run 2, typing while looking down) | **Focused 25/25** | Slump 0% under the fixed rule (run 1's nose-only rule: 93%); motion p50 0.022 sw/s (simulated Focused 0.024); face visible 100%; `db_room` p50 0.1 dB |
+| Slump (run 2, cued 20 s slumps with upright gaps) | Focused 26/26: cued, intermittent slumping for 3 min is not exhaustion | Slumping is detected (per-tick slump p10/p50/p90 0 / 0.27 / 1.0). Motion during a *held* slump is p50 0.101 sw/s, against 0.033 upright and 0.575 in transitions (simulated Exhausted ~0.012); face visible drops to 0.33 while slumped. This looks like a perception artifact (head keypoints jitter when the head drops) and is assigned to the edge session (§7) |
+| Audio (run 3, 45 s) | 0 scored ticks: shorter than the 60 s warm-up | Laughter detected under the new rule (≥ 0.05 for one result, off < 0.02, 4 s refractory; one ~5 s laugh counts 2 onsets); compliments 3/3; speech and laughter at the desk are +12–17 dB over the quiet baseline. The one laugh tick read face valence 0.977, the others 0.03–0.07. The face-only model reads Collaborative with probability ≥ 0.5 from face valence 0.4 up, so a sustained broad smile should drive the mask override, but a sustained forced-smile capture is still needed to confirm it live |
+| Typing with 65 or 72 dB of hall noise mixed into its audio blocks | **Focused 25/25** (the previous `85874e97` too) | On this capture the feared drift toward negative states did not show; the venue-shift evaluation above is the population-level evidence |
+
+The keyboard-gaze pass is on a capture the simulator was not fit to, but from the same person, desk and camera.
 
 **Legacy mock (why the data was rebuilt).** On the original i.i.d. generator (600 test rows), accuracy is
 face-only 0.6667, context-only 1.0000 and both 1.0000. The context columns encode the label, so that 100% says
@@ -300,10 +355,10 @@ nothing about the thesis.
 | Attributions | LightGBM TreeSHAP (`predict(pred_contrib=True)`), one row, raw-score (log-odds) space, computed on the clipped vector. `tests/test_served.py::test_shap_additivity` checks that contributions sum to the raw score (atol 1e-6). |
 | Class explained | The per-tick M2 argmax. The shown label comes from the smoother, so during the 2-tick hysteresis the layers can explain a different class than the one displayed. |
 | Layers | SHAP summed per layer: **Ambient Physics** (`db_`, `lux_`), **Time Dynamics** (`hours_since_break`, `tod_*`), **Somatic & Social** (motion, slump, head-in-hands, fists, laughter, compliments, withdrawal, `n_people`), **Facial Surface** (`face_*`). Sorted by contribution. `fill_ratio` is excluded (`valence/explain/explainer.py`). |
-| Drivers | Per layer, sorted by abs(SHAP), keeping **one driver per sensor channel** (so `motion_now` and `motion_ewm_1m` never both appear), at most 3 per layer. Each driver carries a display string with its only number, a `level` (high / elevated / normal / low, fixed thresholds in `describe.py`), an `effect` (supports / opposes, from the sign) and a `scope` (room / person). |
+| Drivers | Per layer, sorted by abs(SHAP), keeping **one driver per sensor channel** (so `motion_now` and `motion_ewm_1m` never both appear), at most 3 per layer. Each driver carries a display string with its only number, a `level` (high / elevated / normal / low, fixed thresholds in `describe.py`), an `effect` (supports / opposes, from the sign) and a `scope` (room / person). A room-relative driver leads with the absolute level, then the relative one: "average noise of 72 dB over the last 5 minutes, 6 dB above this room's baseline", "current noise of 70 dB, at this room's baseline", "180 lux, dimmer than this room's usual light" (log2 ratio ≤ −0.5 dimmer, ≥ 0.5 brighter, otherwise "about this room's usual light"). dB levels: high ≥ 8, elevated ≥ 4, low < −3 dB relative to the baseline (`_room_relative` in `describe.py`). |
 | Template text | Uses the top 3 supporting drivers. The face layer is excluded when the override is on or no face is visible. The text adds an out-of-range note when more than 3 features are out of distribution (`valence/explain/template.py`). |
 | **Mask override, as built** | Raw condition, evaluated only on ticks with a readable face: M0 reads **Collaborative_Happy**, M2 reads a non-positive state, M0 confidence ≥ 0.45, M2 confidence ≥ 0.70, and the summed face-layer SHAP toward M0's class inside M2 is > 0. Smoother: a tick counts only if M2's raw label equals the shown label. The override turns **on at ≥ 3 of the last 6 face-visible ticks** and **off at ≤ 1**. A tick without a face keeps the current state. The history resets when the shown label changes, and the override is blocked for the first 120 s of the window. Effect: the core-set display changes from "Frustrated" to "Frustrated / Masked Stress", and the template states that context corrected the facial mask. |
-| Override tests | `tests/test_served.py` asserts the override fires within 30 ticks of the masked segment in `frustrated_masked` and never in `focused`, `collaborative_happy` or `exhausted`. The plan's target was 6 ticks; the test allows 30. Passed with `85874e97` (cloud, 2026-10-18; in a replay the override first fired 8 ticks into the masked segment); re-run after any retrain. |
+| Override tests | `tests/test_served.py` asserts the override fires within 30 ticks of the masked segment in `frustrated_masked` and never in `focused`, `collaborative_happy` or `exhausted`. The plan's target was 6 ticks; the test allows 30. Passed with `8a78efc7` (cloud, 2026-10-18); re-run after any retrain. `tests/test_scenarios.py` runs every scenario: after a 2-min grace, ≥ 80% of ticks per segment and person carry the scripted state, masked segments show the override on at least half of their scored ticks, and no other segment shows it. All 9 pass with `8a78efc7` (and `3be2ee03` for `overwhelmed`, `tense`): `full_demo` Focused 100%, masked 100% (override on 77% of scored ticks), Collaborative 100%; `loud_venue` Focused 85%, masked 100% (override 100%); `frustrated_masked` override 94%. |
 | Counterfactual | `GET /api/explain/{event_id}/counterfactual?feature=&value=` re-runs M2 on the person's current window with one feature changed and tags it in `simulated_fields` |
 | Narrator | Optional local LLM (Qwen3-1.7B 4-bit, MLX, 127.0.0.1:8081). The fact sheet is validated strictly against the contract (`extra="forbid"`, else HTTP 422). Each draft must pass a deterministic, driver-bound validator: every number is a sheet number and, when bound to a driver, that driver's own; at least 2 of the top-3 supporting drivers are named and nothing outside the top-5; no other state, demographic or unmeasured signal. Up to 3 attempts within a 2.5 s deadline, else the template. The fixed system + few-shot prefix per state set is prefilled once into a prompt cache (`valence/narrator/engine.py`, `validator.py`, `prompt.py`; `c61bed2`). Otherwise outside the scope of this card. |
 
@@ -312,12 +367,15 @@ nothing about the thesis.
 | Topic | Limitation | Mitigation or status |
 |---|---|---|
 | **Simulated data, circularity risk** | The simulator encodes the hypothesis (context lags the state, the face is ambiguous), so a context model can win partly by construction. | `noise_scale` stays at 1.0, **untuned**: no knob was turned toward the headline, and the one knob scales face and context noise alike. The `e0ad762` refit changed scales to match live measurements, not results. The face gets a built-in head start, because it changes at once while context lags 1–4 min; the episode-age table reports this. The ablations show which inputs carry the result. On the original i.i.d. mock, context-only scores 1.0 accuracy, a perfect score that proves nothing; that is why v2 uses overlapping distributions. M0 and M1 are reported wherever they land. Modality dropout trains on hidden and degraded faces much like the robustness tests apply them, so the proof-3 gain is partly by construction. **Not done:** the sensitivity sweep. |
-| **Not validated in the wild** | No labeled real data exists. The acted set and self-reports have not been collected. The negative control passes only on the capture the simulator was refit to, and laughter, compliment, slump and head-in-hands scales are unchecked against live data. | Treat outputs as a demonstration of the pipeline, not a measurement of a person. |
+| **Not validated in the wild** | No labeled real data exists. The acted set and self-reports have not been collected. The negative control passes on the capture the simulator was refit to and on the run-2 keyboard-gaze capture, both from the same person and desk. Capture runs 2–3 checked the slump, laughter and compliment scales only in part (§5); head-in-hands is unchecked. | Treat outputs as a demonstration of the pipeline, not a measurement of a person. |
+| **Venue baseline** | The room-relative features assume the baseline is the room with the person sitting neutral: an arrival capture (`POST /api/room/baseline`) or, without one, the first 90 s of a live session or replayed recording, whatever happens in them. A baseline taken during a loud burst, or while the person is already agitated, shifts every room-relative feature (a too-loud baseline makes the room read quieter than it is). The simulator's arrival baseline has only N(0, 1.5 dB) error. | Capture on arrival, sitting neutral, and check `GET /api/room/baseline` (also in `/api/health`) before judging. The baseline is shown, audited as constants and reset on demand (`POST /api/room/baseline/reset`). |
+| **Held-slump motion** | Live, motion during a held slump is p50 0.101 sw/s against ~0.012 for simulated Exhausted (capture run 2): head keypoints appear to jitter when the head drops. A real slump can look restless rather than still, and the withdrawal rule (motion ≤ 0.02 sw/s) is unlikely to fire during it. | Assigned to the edge session (perception); the simulator was not changed. |
+| **Forced-smile scale** | Unconfirmed live. In capture run 3 the one laugh tick read face valence 0.977 and the other ticks 0.03–0.07; M0 reads Collaborative with probability ≥ 0.5 from 0.4 up, so a sustained broad smile should drive the override, but no sustained forced-smile capture exists. | Record one (or the `golden_demo` masked act) and replay it before relying on a live MASK OVERRIDE. |
 | **Upstream detector fairness** | This repo does **not measure** demographic performance for MediaPipe FaceLandmarker (blendshapes → face valence), GestureRecognizer (fists), YAMNet via MediaPipe AudioClassifier (laughter), Ultralytics YOLO26n-pose (people, posture, motion) or Vosk small-en-us 0.15 (compliments; English, restricted grammar). | Fairness evaluations, where they exist, are in the vendors' model cards: the MediaPipe model cards linked from each task's page in the MediaPipe Solutions docs, the Ultralytics docs, and the YAMNet model page. The anti-bias claim is narrowed to "decision stability when face evidence is missing or degraded" (§5), and demographic validation is an explicit gap. |
 | **Naive face valence** | Fixed blendshape weights (`mouthSmile` +1.0, `mouthFrown` −0.7, `browDown` −0.5, `noseSneer` −0.3, `mouthPress` −0.2), relative to the person's first 20 s of visible face. Posed and felt smiles read the same, by design (`valence/perception/face_valence.py`). Expression norms differ between people, and the simulator assumes an exact neutral baseline. | The face is one of four layers; the face-only degradations are in §5. |
-| **Context lag** | Room dB and light lag 2–4 min; behavior lags 1–2 min. In the first 30 s of a new episode, M2 is right 0.3620 of the time (M0 0.4402). `warming_up` covers only the first 60 s of a window, not a state change in the middle of one. | The shown label also waits for 2-tick hysteresis. Read transitions with caution. |
+| **Context lag** | Room dB and light lag 2–4 min; behavior lags 1–2 min. In the first 30 s of a new episode, M2 is right 0.3277 of the time (M0 0.4426). `warming_up` covers only the first 60 s of a window, not a state change in the middle of one. | The shown label also waits for 2-tick hysteresis. Read transitions with caution. |
 | **Operator-set fields** | `hours_since_break` can be reset (`POST /api/events/break`) or seeded (`/api/demo/seed`). Lux can be overridden (`/api/sim/lux`), events injected (`/api/sim/event`), and face occlusion or low light overlaid (`/api/sim/{overlay}`). | Every one of these is tagged in `simulated_fields` and audited. M2-notime measures how much the model relies on the clock (§5), and the counterfactual endpoint shows the effect on a single prediction. |
-| **Room-scope audio** | dB, laughter and compliments are shared by everyone present, so in a mixed room each person sees the same in-between level. Live, laughter and compliments count only at ≥ room median + 6 dB (near-field gate, `settings.near_field_db`). | Drivers carry `scope: room`, and narration must say "the room". Nothing is attributed to one person. |
+| **Room-scope audio** | dB, laughter and compliments are shared by everyone present, so in a mixed room each person sees the same in-between level. Live, laughter and compliments count only at ≥ venue baseline + 6 dB once the baseline is complete, and at ≥ the 15-min rolling median + 6 dB before that (near-field gate, `settings.near_field_db`). | Drivers carry `scope: room`, and narration must say "the room". Nothing is attributed to one person. |
 | **Light as a proxy** | Room light is linked to state (×0.65–×1.15) as a stand-in for confounds such as late-night work in dim rooms. A person's state does not change the lights. | The link is kept weak, and lux shifts are reported separately from face degradation. |
 | **Room-only mode** | Applies the person-trained M2 to the room aggregate row. `build_dataset.py` trains on person rows only. | Not evaluated. |
 | **Breaks inside training windows** | `build_dataset.py` groups by person id and does not split windows at breaks. Live, the window slot is keyed by display id: a returning person who gets the same Person #N (the smallest free id, `valence/perception/ids.py`) continues the old slot; one who gets another id starts cold. | Train/live mismatch only in the second case; not measured. |
@@ -326,10 +384,12 @@ nothing about the thesis.
 ## 8. Caveats and recommendations
 
 1. Read every number as "under the published simulator assumptions"; quote the claim wording above and nothing stronger.
-2. Before trusting live output, record the missing captures (keyboard gaze, slump, audio), check those scales,
-   and pass `make negative` on a capture the simulator was **not** fit to.
-3. Modality dropout brought M2 with no face to within 0.0063 of M2-noface (0.6870 vs 0.6933), but at relative
-   light 0.1 it is still 0.0163 below (§5). A fallback to M2-noface based on `face_visible_frac_5m` would close that. **Not built.**
+2. Before trusting live output, capture a sustained forced smile, have the edge fix the held-slump motion
+   artifact, check head-in-hands, and pass `make negative` on captures from other people and rooms (the run-2
+   keyboard-gaze pass is the same person and desk).
+3. Modality dropout brought M2 with no face to within 0.0012 of M2-noface (0.6783 vs 0.6795), and at relative
+   light 0.1 the two tie (0.6794 vs 0.6795) (§5). A fallback to M2-noface based on `face_visible_frac_5m` would gain
+   almost nothing on these numbers. **Not built.**
 4. Ignore the first minute after a state change; always show `warming_up`, `source`, `simulated_fields`, "sim-calibrated".
 5. Run the `noise_scale` sweep (×0.5 / ×1.5) before claiming that the model ordering holds beyond `noise_scale` 1.0.
 6. Evaluate `artifacts/all` (and run its negative control) before demoing Overwhelmed or Tense as anything more
@@ -338,3 +398,6 @@ nothing about the thesis.
    comparing it with M2 as an equal.
 8. Start any compliance review from room-only mode (`POST /api/mode`), which is not compliance; never deploy in
    workplaces or schools.
+9. At a new venue, capture the room baseline on arrival while sitting neutral (`POST /api/room/baseline`) before
+   reading any label. `VALENCE_ARTIFACTS_DIR=artifacts/legacy` rolls back to the previous model (`85874e97`), which
+   reads absolute levels and drifts toward negative states in a loud hall (§5 venue shift).

@@ -121,3 +121,73 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
   Please make the `--jsonl` recorder write participants only (box >= 0.55 x the tallest, the aggregator's rule).
 - **Frame counters:** a capture restart (pause/start) is detected when `VideoObs.frames_decoded` goes down and is
   handled with an offset; every source change re-aligns decoded/purged. Keep emitting the capture's own counter.
+
+## Round 7 (answers to CONTRACT_REQUESTS round 4, capture runs 2-3; new assignment in LOCAL_NEXT_TASKS.md)
+
+- **Venue room baseline: done as proposed.**
+  - `POST /api/room/baseline {"seconds": 90}` with the person sitting neutral. Read it back with
+    `GET /api/room/baseline`; `POST /api/room/baseline/reset` returns to automatic. `/api/health` shows it under
+    `room_baseline`. Details: API §7.4.12.
+  - Without a capture, the baseline is the first 90 s of a live session or recording.
+  - It is stored as two medians and an IQR, in RAM, and audited as constants.
+  - Near-field gating of laughter and compliments is now relative to it (baseline + 6 dB) once complete.
+  - Served models use `db_room_*` (dB above the baseline) and `lux_room_*` (log2 of the light ratio). The 18
+    absolute levels are no longer model inputs, but the text still quotes them: "average noise of 72 dB over the
+    last 5 minutes, 6 dB above this room's baseline".
+  - The simulator draws a venue of 40-75 dB per session, independent of state and power-summed with the team's own
+    level, plus a noisy arrival baseline.
+  - Retrained: core `m2_lgbm@8a78efc7` (macro-F1 0.797) and 6-state `3be2ee03` (0.767).
+  - **Venue shift** (Focused read as negative, from the session's own room to a +75 dB hall): served model
+    17.7% -> 18.7%; previous model 20.8% -> 28.1%.
+  - On your typing capture with 72 dB hall noise mixed into the audio, both models still read Focused 25/25, so that
+    capture showed no drift. The gain is at population level.
+  - Rollback: `VALENCE_ARTIFACTS_DIR=artifacts/legacy`.
+  - The env-switch fallback is no longer needed.
+- **Scale checks on runs 2-3** (`reports/capture_vs_sim.json`; `capture_stats` now also reports `db_room`, laughter
+  and compliments):
+  - Keyboard gaze: slump 0%, motion p50 0.022 (sim Focused 0.024); the model reads Focused 25/25.
+  - Slump: detected, but motion during *held* slumps is 0.101 sw/s against 0.033 upright (sim Exhausted ~0.012).
+    Please see P1-1.
+  - Audio: compliments 3/3 and laughter registers under the 0.05 rule. A long laugh counts twice (P1-4). Speech at
+    the desk is +12-17 dB over the quiet baseline.
+  - The single laugh tick read face valence 0.98. A *held* forced smile has not been measured yet, and the
+    face-only model needs about 0.4 to read Collaborative >= 0.5 (P0-3).
+- **Replay clock fix:** offline replays had started break clocks at the capture's own time. The round-4
+  "fists -> Frustrated 60%" was this bug; fists read Focused 24/25 with the corrected clock.
+- **Mic failure:** a failed mic no longer takes the camera down. The server retries video-only and reports
+  `mic_error` in `/api/health` and `/api/live`.
+- **Your files touched (minimal, to keep the shared suite green):**
+  - `valence/narrator/fake_fact_sheets.py`: `FEATURE_NAMES` excludes the new `ROOM_REL`, so the seeded fake
+    sheets stay byte-identical.
+  - `tests/narrator/test_fake_fact_sheets.py`: the vector assertion now matches.
+  - Your grammar on 354 new-style sheets: 0 template fallbacks.
+- **Next for you:** [LOCAL_NEXT_TASKS.md](LOCAL_NEXT_TASKS.md), P0-1 to P0-5, then P1.
+
+## Round 8 (answers to CONTRACT_REQUESTS rounds 5 and 6)
+
+- **Offline status (round 5 #1): done.** `status.offline` is now true only when the offline env flags are set **and**
+  an outbound probe fails (a TCP connect to 1.1.1.1:443, every 30 s, run in a thread). `/api/health` reports
+  `network: {sandboxed, outbound_blocked}`. **Please add `export VALENCE_SANDBOXED=1` in `run_demo.sh`** when
+  `SANDBOX` is on. GOVERNANCE gap 16 records Clearcut and your sandbox; PITCH and DEVPOST no longer say
+  "no internet sockets".
+- **Frontend (round 5 #2):** auto-connect when `?api=` is present, plus 4:3 box placement (1280x720 request and the
+  cover transform). Relayed to cloud session #2.
+- **Round 6:**
+  1. OOD over model inputs only (`cols2` ∪ `cols0`): **done**. Absolute levels and the other 22 unused features no
+     longer cost confidence in bright light.
+  2. Linear-lux spread features (`lux_std_*`, `lux_slope_*`, `lux_d1m15m`, `lux_rel_15m`): **not before the freeze**.
+     They are model inputs, so fixing them needs a retrain and a re-evaluation. Recorded as a known limit.
+  3. The light baseline samples lux at 1 Hz: **done**. It fills in ~90 s, not ~9 s.
+  4. Near-field gate: **done as you suggested**. It now uses the loudest of the last 3 blocks against baseline +
+     **3 dB** (`near_field_db` 6 -> 3), relying on your `PhraseLoudness` >= 4 dB floor for crowd speech.
+  5. Drift warning: **done**. When the room's 5-min median is more than 12 dB from the baseline, or the light changes
+     by more than x2, `status.degraded` gets `room_drift` and `GET /api/room/baseline` shows `drift_db`,
+     `drift_lux_log2` and `drifted`. Please make your launcher or runbook say "re-capture the room baseline" when you
+     see it.
+- **Also fixed** (from cloud #2's review):
+  - a second `POST /api/live` now restarts the capture, so `purge_gap` no longer sticks;
+  - the recording feeder joins on stop;
+  - `/api/governance/stats` reports one tick's decoded/purged pair;
+  - room-only switches clear stale people.
+- **Mask override check:** through the API, `full_demo`'s masked segment shows the override on 65 of 108
+  predictions and 0 in Focused. The "1 of 85" was `e2e_check` stopping at the first one (reworded).

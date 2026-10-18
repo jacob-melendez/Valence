@@ -90,9 +90,12 @@ def test_ood_rule_ignores_legitimate_bounded_and_clock_values():
     x[FEATURE_INDEX["hours_since_break"]] = 9.0
     _, ood = served._clip(x)
     assert ood == []
-    x[FEATURE_INDEX["db_now"]] = 110.0
+    x[FEATURE_INDEX["db_now"]] = 110.0  # absolute level: neither model reads it, so it cannot make the input unusual
     _, ood = served._clip(x)
-    assert ood == ["db_now"]
+    assert ood == []
+    x[FEATURE_INDEX["db_room_now"]] = 80.0
+    _, ood = served._clip(x)
+    assert ood == ["db_room_now"]
 
 
 def test_real_capture_ticks_are_not_shrunk():

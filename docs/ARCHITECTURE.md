@@ -16,7 +16,7 @@ Status legend used in tables: **exists** = the file is in the repo now (that alo
 pass); **planned** = this is the design the code will implement. Statuses are as of Saturday evening,
 2026-10-17; `docs/DELIVERABLES.md` is the live checklist. Where the implementation already differs from
 `docs/PLAN.md`, both are given and the difference is listed in section 16. No evaluation numbers are reported
-here (v1 figures exist in `reports/figs/`, uncommitted). Anything not measured is written as a target or as
+here (results: `reports/metrics.json`, `docs/RESULTS.md`, `docs/MODEL_CARD.md`). Anything not measured is written as a target or as
 "TBD — produced by `<script>`".
 
 ---
@@ -25,8 +25,10 @@ here (v1 figures exist in `reports/figs/`, uncommitted). Anything not measured i
 
 Valence runs entirely on one laptop. Edge perception reduces each video frame and audio block to a few numbers
 (counts, flags, levels, normalized boxes). The raw buffer is then zeroed by the purge gate. The runtime turns
-those numbers into one 5-second record per person and keeps the last 15 minutes in a rolling window. A
-LightGBM model reads 114 features (about 110 in the plan) from that window. A face-only model runs next to it as a baseline.
+those numbers into one 5-second record per person and keeps the last 15 minutes in a rolling window. It
+computes 123 features from that window (about 110 in the plan), and a LightGBM model reads 101 of them: room noise
+and light enter relative to a venue baseline captured on arrival, never as absolute dB or lux. A face-only model
+runs next to it as a baseline.
 SHAP contributions are grouped into the PRD's layers, a rule-based detector flags "context corrected the
 face", and the result is streamed to a local web UI. A small local LLM in a separate process rewrites the
 explanation, and a validator checks it against the facts. The internet is used only for one-time model
@@ -48,8 +50,10 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
 | `break_absent_min` | 10.0 | Absence that counts as a break (about 0.5 for demos) |
 | `person_drop_min` | 15.0 | Unobserved person slot is dropped after this long |
 | `db_cal_offset` | 94.0 | dBFS to approximate dB SPL until room calibration replaces it |
-| `near_field_db` | 6.0 | Laughter and compliments count only at room median + 6 dB or louder |
+| `near_field_db` | 3.0 | Laughter and compliments count only when the loudest of the last 3 blocks reaches the venue room baseline + 3 dB (before the baseline is complete, the 15-min room median + 6 dB) |
+| `room_baseline_s` | 90.0 | Samples per channel (~1 per second) for the automatic venue room baseline (section 6.1) |
 | `state_set` | `core` | `core` (4 states) or `all` (6 states) |
+| `artifacts_dir` | `artifacts` | Model artifacts; `artifacts/all` holds the 6-state models, `artifacts/legacy` the previous served M2 (rollback) |
 | `api_host`, `api_port` | 127.0.0.1, 8000 | FastAPI bind (loopback only) |
 | `narrator_url` | http://127.0.0.1:8081 | Narrator service |
 | `narrator_deadline_s` | 2.5 | After this, the template text stands |
@@ -84,8 +88,8 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
  ReplaySource: features JSONL ─────────►│                  (same sink; source = "replay")
                                         ▼
  RUNTIME (CLOUD: valence/runtime)
- Aggregator ─ ROOM slot:    Leq dB, p90, lux, laughter / compliments (near-field gated), n_people,
-            │               time of day
+ Aggregator ─ ROOM slot:    Leq dB, p90, lux, venue baseline (dB / lux medians), laughter / compliments
+            │               (near-field gated), n_people, time of day
             └ PERSON slots: fists, slump, head-in-hands, motion, withdrawal, face valence / visibility,
                             break clock (presence-based, one per person)
                     │ every 5 s (ticker thread)
@@ -94,7 +98,7 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
                     ▼
  RollingWindow: 180 ticks = 15 min per person; a new person inherits room history
                     ▼
- features_from_window (114; order in artifacts/model_meta.json) ─► clip to train p1–p99 (+ ood_features)
+ features_from_window (123; order in artifacts/model_meta.json) ─► clip to train p1–p99 (+ ood_features)
                     ▼
  M2 LightGBM (served)  +  M0 face-only shadow
                     ▼
@@ -170,18 +174,18 @@ through `docs/CONTRACT_REQUESTS.md`.
 | `valence/governance/persistence_scan.py` | C | AST scan for disk writes in raw-media paths, with documented `# persistence-ok:` exceptions | exists |
 | Retention summary | C | `GET /api/retention` and `retention_s` | exists (static summary in `valence/api/app.py`; no separate module) |
 | `valence/runtime/bus.py` | C | EventBus with bounded per-client queues (drop-oldest) | exists |
-| `valence/runtime/aggregator.py` | C | Room and person slots, near-field gate, per-person break clocks, calibration, simulated injections, TickRecord assembly, `room_record` | exists |
+| `valence/runtime/aggregator.py` | C | Room and person slots, venue room baseline (`RoomBaseline`), near-field gate, per-person break clocks, calibration, simulated injections, TickRecord assembly, `room_record` | exists |
 | `valence/runtime/engine.py` | C | Ticker (window, features, predictor, explainer, audit, `end_tick()`), scenario replay, live source, overlays, seeding, room-only. The plan's `ticker.py` and `replay.py` are both in this file. | exists |
 | `valence/runtime/recording.py` | C | Features-only JSONL replay: live feeder (camera/mic fallback) and deterministic offline replay (negative control) | exists |
 | `valence/sim/` | C | `generator.py` (v2), `params.py` (parameter table), `scenarios.py`, `legacy.py`; `tune_difficulty.py` | exist; `tune_difficulty.py` planned |
 | `valence/features/spec.py` | C | `SENSOR_SPEC` (units), channel tuples, `withdrawal_flag()`, `layer_of()` / `scope_of()` (the plan's `LAYER_MAP`) | exists |
-| `valence/features/compute.py` | C | `FEATURE_NAMES`, `FACE_FEATURES`, `FEATURE_SETS` (ladder), `features_from_window()` (the plan's `compute_features`) | exists |
+| `valence/features/compute.py` | C | `FEATURE_NAMES`, `FACE_FEATURES`, `ROOM_REL` (room-relative), `ABS_ROOM` (absolute levels, display only), `FEATURE_SETS` (ladder), `features_from_window()` (the plan's `compute_features`) | exists |
 | `valence/features/window.py` | C | `RollingWindow` (per-person windows + room slot) | exists |
 | `valence/features/build_dataset.py` | C | Training windows from simulated sessions | exists |
 | `valence/models/train_ladder.py` | C | M0 to M2 variants, calibration, clip bounds | exists |
 | `valence/models/predictor.py` | C | Predictor interface, EMA + hysteresis, mask-override hysteresis, warm-up, rule stub | exists |
 | `valence/models/served.py` | C | Served M2 with M0 shadow, clipping + `ood_features`, `pred_contrib` layers, override condition, counterfactual (the plan's `counterfactual.py`) | exists |
-| `valence/models/temporal.py` | C | M3 GRU benchmark | file present, uncommitted at the time of writing; results TBD |
+| `valence/models/temporal.py` | C | M3 GRU benchmark (room-relative dB and lux channels) | exists; results in `reports/m3_metrics.json` |
 | `valence/explain/describe.py` | C | Feature name + value → display text, unit, `level`, `scope`, layer | exists |
 | `valence/explain/explainer.py` | C | `build_layers`, `top_drivers`, `build_fact_sheet` | exists |
 | `valence/explain/template.py` | C | Instant template explanation | exists |
@@ -193,11 +197,11 @@ through `docs/CONTRACT_REQUESTS.md`.
 | `valence/narrator/` | L | `service.py` (:8081), `engine.py`, `prompt.py`, `schema.py`, `lexicon.py`, `validator.py`, `templates.py`, `fake_fact_sheets.py`, `evaluate.py`; own `.venv`. Planned: `grammar.py`, `build_data.py`, `lora.yaml` | Stage A drafts exist; LoRA pieces planned |
 | `scripts/` | C | `console.py`, `export_fact_sheets.py` (exist); `e2e_check.py`, `mem_soak.py`, `audit_verify.py` (planned) | mixed |
 | `scripts/` | L | `spikes/`, `download_models.sh`, `calibrate_spl.py`, `calibrate_lux.py` (exist); `overnight.sh` (planned) | mixed |
-| `scenarios/*.yaml` | C | focused, frustrated_masked, exhausted, collaborative_happy, overwhelmed, tense, context_blindness, full_demo | exist |
+| `scenarios/*.yaml` | C | focused, frustrated_masked, exhausted, collaborative_happy, overwhelmed, tense, context_blindness, full_demo, loud_venue (a 72 dB hall, `venue_db`) | exist |
 | `tests/` | C (L: `tests/perception`, `tests/narrator`) | Existing CLOUD tests: `test_purge.py`, `test_audit.py`, `test_logfilter.py`, `test_no_persistence_ast.py`, `test_contracts.py`, `test_api.py`, `test_runtime.py`, `test_feature_parity.py`, `test_served.py`. Planned: `test_window.py`, `test_e2e_replay.py` | partly exists |
 | `data/` | C: `sim/`, `narrator/fact_sheets_sim.jsonl` · L: `real/`, `narrator/{train,valid,test}.jsonl` | Features-only data | planned |
-| `artifacts/` | C | v1 models `m0.txt`, `m2.txt` (committed) and the other ladder models (local only), `model_meta.json` (temperatures, feature names and sets, states, seed), `clip_bounds.json`. The plan's `feature_spec.json` is not written; the feature order lives in `model_meta.json`. | exists (v1) |
-| `reports/` | C | `figs/*.png` (v1, uncommitted); `metrics.json` | figures exist; metrics TBD |
+| `artifacts/` | C | Served models `m0.txt`, `m2.txt` (committed) and the other ladder models (local only), `model_meta.json` (temperatures, feature names and sets, states, seed), `clip_bounds.json`. `artifacts/all/`: the 6-state models. `artifacts/legacy/`: the previous served M2 (`m2_lgbm@85874e97`, absolute dB/lux), kept as a rollback (`VALENCE_ARTIFACTS_DIR=artifacts/legacy`) and for the venue-shift comparison. The plan's `feature_spec.json` is not written; the feature order lives in `model_meta.json`. | exists |
+| `reports/` | C | `figs/*.png`, `metrics.json`, `m3_metrics.json`, `capture_vs_sim.json` | exist |
 
 ---
 
@@ -264,7 +268,7 @@ so recordings round-trip exactly.
 | Lux | Brightness regression → 10 s median at 1 Hz | — |
 | **`VideoPerceiver.process` end to end** | YOLO + alternating gesture/face crops + lux, 2 people, 1280×720 sample images | **45 ms / ~51 ms** |
 | Audio input | sounddevice, 16 kHz mono float32, blocksize 1600 (100 ms), device pinned by name ("MacBook Pro Microphone") | — |
-| Laughter | YAMNet AudioClassifier in `AUDIO_CLIPS` mode, run synchronously on each step's last 0.975 s, 6-class allowlist, `laughter_debouncer()` (on at ≥ 0.30 for 2 results, off below 0.15, 3 s refractory) | callback ~6 ms, 1 result/s (measured in `AUDIO_STREAM` mode) |
+| Laughter | YAMNet AudioClassifier in `AUDIO_CLIPS` mode, run synchronously on each step's last 0.975 s, 6-class allowlist, `laughter_debouncer()` (on at ≥ 0.05 for one result, off below 0.02, 4 s refractory; the planned ≥ 0.30 for 2 results never fired on the laptop mic, `docs/PERCEPTION.md`) | callback ~6 ms, 1 result/s (measured in `AUDIO_STREAM` mode) |
 | Compliments | Vosk small-en-us 0.15, restricted grammar (8 phrases + `[unk]`) | p50 0.84 ms, max 29 ms per 100 ms block |
 
 The loop budget is 100 ms at 10 Hz, so the measured ~45 ms leaves headroom. Live-camera numbers are still
@@ -300,10 +304,24 @@ The aggregator keeps one **room slot** and up to `max_tracks` **person slots**. 
 | `laughter_count`, `compliments_count` | Sum of `laughter_onsets` / `compliment_hits` from steps that pass the **near-field gate** |
 | `n_people` | Most people seen in one frame during the tick (≤ `max_tracks`) |
 | `tod_h` | Local time of day in hours [0, 24) |
+| `room_db_base`, `room_lux_base` | The venue room baseline (below): median dB and median lux; NaN until the first sample |
 
-**Near-field gate.** An audio step's laughter and compliment counts are kept only if that step's `db_spl` is
-at least the room's 15-minute median plus `near_field_db` (6 dB). This counts laughter and praise at the desk,
-not from the next table in a loud hall. Perception emits raw counts; gating happens only here.
+**Venue room baseline** (`RoomBaseline`). The served models never see absolute dB or lux; they read the room
+relative to this baseline (`db_room_*` = dB above it, `lux_room_*` = log2 of the light ratio; section 7.3), so a
+loud hall is this room's normal rather than evidence of a loud, frustrated room. `POST /api/room/baseline
+{"seconds": 90}` starts an operator capture on arrival, with the person sitting neutral (`seconds` in [10, 600],
+else 422): about one dB and one lux sample per second, kept as the median dB, the dB IQR and the median lux.
+Modes: `auto`, `capturing`, `captured`. Without a capture the baseline is automatic: the first `room_baseline_s`
+(90 s) of a live session or replayed recording. Until enough samples exist, the running median of what was
+collected is used, so the features exist from the first tick. `POST /api/live` keeps a captured baseline; a
+recording replay starts an automatic one; `POST /api/room/baseline/reset` returns to automatic; scenario replays
+carry the simulator's own baseline per tick. `GET /api/room/baseline` and `/api/health` (`room_baseline`) report
+it. It is held in RAM as constants only and audited as `room_baseline`, `room_baseline_captured` (the medians) and
+`room_baseline_reset`. `POST /api/calibrate/room` afterwards shifts the collected samples into the new units.
+Details: `docs/API.md` §7.4.12.
+
+**Near-field gate.** An audio step's laughter and compliment counts are kept only if the loudest of the last 3 audio blocks (recognizers report a phrase 0-2 blocks after it ends) is at least `settings.near_field_db` (3 dB) above the venue room baseline, or before the baseline is complete, the room's 15-minute median. This counts laughter and praise at the desk, not from the next table in a loud hall.
+Perception emits raw counts; gating happens only here.
 
 **Break clock.** One presence-based clock per person (implemented in `aggregator.py`, and the same rule the
 simulator uses, `docs/DATASET.md` 6.4). It starts when the person is first seen and resets when that person
@@ -326,7 +344,7 @@ Keyed by `track_id`.
 | `face_valence` | Median over the tick of visible-face frames; NaN when never visible |
 | `face_visible` | Fraction of the tick with a visible face |
 | `hours_since_break` | The person's break clock (above) |
-| `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if slumped ≥ 60% of the tick and motion ≤ 0.06 shoulder-widths/s, else 0 (0 when either is NaN). The simulator calls the same function. The original dataset defined it as "slumped over / isolated". P1 and early in the drop order. |
+| `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if slumped ≥ 60% of the tick and motion ≤ 0.02 shoulder-widths/s, else 0 (0 when either is NaN). The simulator calls the same function. The original dataset defined it as "slumped over / isolated". P1 and early in the drop order. |
 | `person_id`, `display_id` | `track_id` and "Person #N" |
 | `tick`, `ts`, `t_mono`, `session_id` | Tick bookkeeping |
 | `source`, `simulated_fields` | Provenance (section 12) |
@@ -384,11 +402,14 @@ length 1–180 ticks, so the model also learns to handle partly filled windows.
 | `tod_sin`, `tod_cos` | `tod_h` | room | Time Dynamics |
 | face (separate) | `face_valence`, `face_visible` | person | Facial Surface |
 
+The room-relative features also read `room_db_base` and `room_lux_base` from the room slot (section 6.1); they
+belong to the `db` / `lux` channels and the Ambient Physics layer.
+
 `SENSOR_SPEC` in `spec.py` records each channel's unit. A driver's `scope` (`room` or `person`) follows its
 channel's slot. That is what lets the narrator say "the room was loud" rather than attributing room noise to
 a person.
 
-### 7.3 Feature families (114 as implemented; order stored as `feature_names` in `artifacts/model_meta.json`)
+### 7.3 Feature families (123 as implemented; order stored as `feature_names` in `artifacts/model_meta.json`)
 
 | Family | Features | Count |
 |---|---|---|
@@ -397,14 +418,20 @@ a person.
 | Social | `withdraw_now`, `withdraw_frac_5m`, `n_people` | 3 |
 | Time and window | `hours_since_break`, `tod_sin`, `tod_cos`, `fill_ratio` | 4 |
 | Face (`FACE_FEATURES`) | `face_now`, `face_visible_now`, `face_mean_{1m,5m,15m}`, `face_std_5m`, `face_visible_frac_5m` | 7 |
-| **Total** | | **114** |
+| Room relative to the venue baseline (`ROOM_REL`) | `db_room_now`, `db_room_mean_{1m,5m,15m}`, `db_room_max_5m`, `db_room_ewm_5m` (dB above `room_db_base`); `lux_room_now`, `lux_room_mean_{5m,15m}` (log2 of lux / `room_lux_base`) | 9 |
+| **Total** | | **123** |
 
 Missing values stay NaN; LightGBM handles NaN natively. Face features are NaN when no face was visible.
 
+The served M2 uses 101 of them: all except the four 1-minute dB/lux slopes and spreads (`NOISY_LIVE`, dominated by
+live transients) and the 18 absolute room levels (`ABS_ROOM`: `db`/`lux` `_now`, `_mean_*`, `_max_*`, `_ewm_*`).
+The absolute levels are still computed: the explainer quotes them in the room drivers' text (section 9.3).
+
 Difference from `docs/PLAN.md` (which specified ~110: 12 event and 6 face features, `S_rel_sess`, order frozen
 in `artifacts/feature_spec.json`): the code adds `E_cnt_now` and `face_visible_now` (needed by the M1 and M0
-snapshots), makes the relative feature window-based (`S_rel_15m`), and stores the order in `model_meta.json`.
-`artifacts/feature_spec.json` has not been written.
+snapshots), makes the relative feature window-based (`S_rel_15m`), adds the 9 room-relative features (venue
+baseline, CONTRACT_REQUESTS round 4), and stores the order in `model_meta.json`. `artifacts/feature_spec.json` has
+not been written.
 
 ### 7.4 LAYER_MAP
 
@@ -428,7 +455,7 @@ input, so out-of-distribution reporting uses a separate band per feature (`ood_b
   head-in-hands levels in [0, 1]; event counts and `*_since_s` ≥ 0) are OOD only outside that domain;
 - clock and context features (`tod_sin`, `tod_cos`, `hours_since_break`, `n_people`, `fill_ratio`) never are;
 - the remaining db/lux/motion features are OOD only more than 50% of the training range beyond p1/p99
-  (e.g. `db_now` outside about 14–95 dB).
+  (e.g. `db_now` outside about 17–107 dB).
 
 Their names go to `data_quality.ood_features`. If more than 3 features are OOD, the served model pulls the
 probabilities 30% toward uniform, which lowers the confidence, and the template text says some readings are
@@ -438,13 +465,13 @@ face visible on every frame (1.0 vs a training p99 of 0.998) and morning times o
 
 ---
 
-## 8. Model ladder (`valence/models/`, v1 exists)
+## 8. Model ladder (`valence/models/`, exists)
 
 All models are trained on simulator v2 data (see `docs/DATASET.md`), split by session 70/15/15. No session
-should appear in two splits (a planned test checks this). The v1 artifacts were trained on the core 4 states,
-300 sessions, seed 7, at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`); they will be retrained
-after difficulty tuning and the capture-based simulator update. The validation split is halved: one half for early stopping, one half for calibration
-(temperature scaling).
+should appear in two splits (a planned test checks this). The served artifacts (`m2_lgbm@8a78efc7`) were trained
+on the core 4 states, 300 sessions, seed 7, at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`), on the
+simulator refit to live capture run 1 with a random venue (hall level) per session. The validation split is halved:
+one half for early stopping, one half for calibration (temperature scaling).
 
 LightGBM settings: 31 leaves, learning rate 0.05, up to 800 rounds, early stop 50, `min_data_in_leaf` 100,
 feature and bagging fractions 0.8, balanced class weights.
@@ -453,22 +480,25 @@ feature and bagging fractions 0.8, balanced class weights.
 |---|---|---|---|---|
 | M0 | Face snapshot (`face_now`, `face_visible_now`) | LightGBM | Context-blind face baseline | Yes, as the live shadow behind `face_only`; null when no face is visible |
 | M0t | Face history (the 7 `FACE_FEATURES`) | LightGBM | Does face history alone close the gap? | No (eval) |
-| M1 | Context snapshot: current value of each `CHANNELS` entry (`*_now`, `*_cnt_now`, time), no history | LightGBM | Context without time | No (eval) |
-| M2-noface | All non-face features | LightGBM | "Face is informative but not sufficient"; stability when the face is missing | No (eval) |
-| M2-noabsdB | M2 without absolute dB levels (`db_now`, `db_mean_*`, `db_max_*`, `db_ewm_*`; slope, std, trend and relative dB kept) | LightGBM | Robustness to mic calibration (the simulator applies a ±12 dB per-session mic offset; plan range 12–15 dB) | No (eval, P1) |
-| M2-notime | M2 without `hours_since_break`, `tod_sin`, `tod_cos` | LightGBM | Is time a shortcut? | No (eval, P1) |
-| **M2** | All 114 features (context + face history) | LightGBM | The served model | **Yes** |
-| M3 | Tick sequence | PyTorch GRU(64) + attention | Temporal benchmark (cloud CPU) | No (P1; `temporal.py` in progress) |
+| M1 | Context snapshot: current value of each `CHANNELS` entry (`*_now`, `*_cnt_now`, time; room level as `db_room_now`, `lux_room_now`), no history | LightGBM | Context without time | No (eval) |
+| M2-noface | M2 without the face features (94) | LightGBM | "Face is informative but not sufficient"; stability when the face is missing | No (eval) |
+| M2-abs | The pre-baseline set (110): the 18 absolute dB/lux levels instead of the 9 room-relative ones, trained on the same venue-randomized corpus | LightGBM | Absolute vs room-relative levels in a loud hall (venue shift) | No (eval, P1) |
+| M2-notime | M2 without `hours_since_break`, `tod_sin`, `tod_cos` (98) | LightGBM | Is time a shortcut? | No (eval, P1) |
+| **M2** | 101 features: context + face history, room level relative to the venue baseline (section 7.3) | LightGBM | The served model | **Yes** |
+| M3 | Tick sequence (room channels `db_room` = `ambient_db` − `room_db_base`, `lux_room` = log2 of `light_lux` / `room_lux_base`) | PyTorch GRU(64) + attention | Temporal benchmark (cloud CPU) | No (benchmark; `reports/m3_metrics.json`) |
 
 Acceptance targets from the plan (not results): M2 macro-F1 between 0.85 and 0.92 (the 0.92 ceiling is the
 anti-circularity criterion used to tune `noise_scale`); M2-noface ≥ M2 − 0.05 on the core 4 states; ECE drops
 after calibration; at 15 min of history, M2 > M1 > M0 with non-overlapping session-bootstrap 95% CIs.
-Results: TBD — produced by `valence/eval/evaluate.py` → `reports/metrics.json`, `reports/figs/*.png`.
+Results: `valence/eval/evaluate.py` → `reports/metrics.json`, `reports/figs/*.png`, summarized in
+`docs/RESULTS.md` and `docs/MODEL_CARD.md` §5 (including the venue-shift evaluation).
 
 Artifacts in `artifacts/`: one booster per model (`m0.txt`, `m2.txt`, ...); `model_meta.json` with the
 temperatures, feature names, feature sets, states and seed; `clip_bounds.json` (train p1–p99). `served.py`
 loads M2 and M0 only when `model_meta.json`'s `state_set` matches `settings.state_set`; otherwise the rule stub
-(`stub-rules`) is served and `status.degraded` lists `predictor:stub`.
+(`stub-rules`) is served and `status.degraded` lists `predictor:stub`. `artifacts/all/` holds the 6-state
+models (`VALENCE_STATE_SET=all VALENCE_ARTIFACTS_DIR=artifacts/all`); `artifacts/legacy/` holds the previous
+served M2 (`m2_lgbm@85874e97`, absolute dB/lux), served with `VALENCE_ARTIFACTS_DIR=artifacts/legacy` as a rollback.
 
 ---
 
@@ -479,7 +509,8 @@ The ticker runs this for each person on every completed tick. Target: features t
 
 ### 9.1 Features, clip, models
 
-1. Append the new `TickRecord` to the person's window, then `features_from_window(person, room)` → 114 floats.
+1. Append the new `TickRecord` to the person's window, then `features_from_window(person, room)` → 123 floats
+   (M2 reads 101; the absolute room levels are passed to the explainer for display only).
 2. Clip to p1–p99 and collect `ood_features` (§7.5: out-of-band features, not every clipped one).
 3. Run M2 and M0 (M0 on the face snapshot; skipped, giving a null `face_only`, when no face was visible this
    tick).
@@ -499,7 +530,8 @@ The ticker runs this for each person on every completed tick. Target: features t
 7. LightGBM `pred_contrib` (TreeSHAP; target < 5 ms) on M2. Take the predicted class's slice, sum
    contributions by layer (`layer_of`) into `Layer.contribution`, and keep up to 3 drivers per layer (one per
    sensor channel, strongest by absolute SHAP). Each `Driver` carries
-   `feature`, `display` (pre-formatted, e.g. "average noise of 72 dB over 15 minutes"), `value`, `unit`,
+   `feature`, `display` (pre-formatted, e.g. "average noise of 72 dB over the last 5 minutes, 6 dB above this
+   room's baseline": the absolute level first, then the room-relative one), `value`, `unit`,
    `shap`, `level` (`high|elevated|normal|low`), `effect` (`supports` if `shap` > 0, else `opposes`) and
    `scope` (`room|person`). `tests/test_served.py::test_shap_additivity` (exists) checks that contributions
    sum to the margin within 1e-6.
@@ -600,10 +632,11 @@ each client a bounded queue that drops the oldest message, so a slow or absent c
 
 REST (`/api`): `states`, `state`, `history?minutes=15`, `governance/stats`, `governance/audit?since=`,
 `governance/verify`, `retention`, `eval/summary`, `eval/figures/{name}.png`, `scenarios`, `recordings`,
-`models`, `health`, `narrator/health`, `explain/{event_id}/counterfactual?feature=&value=`; POST
-`control/{start|stop|pause}`, `live`, `events/break`, `replay/{scenario}`, `replay_recording/{name}`,
-`sim/{face_occlusion|low_light}`, `sim/event`, `sim/lux`, `demo/seed`, `demo/reset`, `calibrate/room`, `mode`,
-`label`. `live`, `recordings` and `replay_recording` are additions to the plan's list. CORS allows localhost
+`models`, `health`, `narrator/health`, `room/baseline`, `explain/{event_id}/counterfactual?feature=&value=`;
+POST `control/{start|stop|pause}`, `live`, `events/break`, `replay/{scenario}`, `replay_recording/{name}`,
+`sim/{face_occlusion|low_light}`, `sim/event`, `sim/lux`, `demo/seed`, `demo/reset`, `calibrate/room`,
+`room/baseline`, `room/baseline/reset`, `mode`, `label`. `live`, `recordings`, `replay_recording` and the
+`room/baseline` routes are additions to the plan's list. CORS allows localhost
 and the Lovable origins.
 
 ---
@@ -634,6 +667,7 @@ and the Lovable origins.
 | Audio block (100 ms) | audio worker | Until its analysis step consumes it, then zeroed |
 | Keypoints, blendshapes, recognizer text | perception locals | Within one processing call; never cross the gate |
 | Per-person baselines (face neutral, posture) | perception | Forgotten when the display id is released (3 s after loss) |
+| Venue room baseline (dB and lux samples → median dB, dB IQR, median lux) | aggregator (RAM) | Until reset, the next capture, a recording replay or process exit; the medians are audited as constants |
 | `VideoObs` / `AudioObs` | aggregator current-tick buffers | Until the tick closes (5 s) |
 | `TickRecord`s, features | RollingWindow (RAM) | 15 min; cleared by `demo/reset` or person drop |
 | Recent `state_vector` / `prediction` messages | `/api/history` buffer (RAM) | 1,440 messages (about 60 min for one person, 20 min for three) |
@@ -707,6 +741,10 @@ reports, and multiplies a lux scale by reference ÷ current estimate (one point 
 measurement is not implemented. The edge has its own calibration scripts (`scripts/calibrate_spl.py`,
 `scripts/calibrate_lux.py`).
 
+The venue room baseline (section 6.1, `POST /api/room/baseline`) is separate from calibration: calibration fixes
+the units, the baseline sets the room's normal level that the served models read the room against. Capture it on
+arrival, sitting neutral, after any recalibration (a later recalibration shifts the collected samples).
+
 ---
 
 ## 13. Fallbacks
@@ -747,7 +785,7 @@ is now measured on temporally structured data and surfaced through explicit mech
 
 | Original | New design |
 |---|---|
-| Mock rows: `facial_valence_snapshot` 0.4–0.8, `ambient_db` up to 85, `clenched_fists_count` > 0, `hours_since_break` > 3.5, drawn independently per row | Simulator v2: per-person semi-Markov states with dwell times, fatigue tilt after ~3 h, Poisson breaks, room dB that drifts toward occupants' states with a per-session mic offset, bursty fist events, face noise, 5–40% missing face. Frustrated_Masked face mean +0.45 (forced smile). |
+| Mock rows: `facial_valence_snapshot` 0.4–0.8, `ambient_db` up to 85, `clenched_fists_count` > 0, `hours_since_break` > 3.5, drawn independently per row | Simulator v2: per-person semi-Markov states with dwell times, fatigue tilt after ~3 h, Poisson breaks, room dB that drifts toward occupants' states with a per-session mic offset and a random hall level, bursty fist events, face noise, 5–40% missing face. Frustrated_Masked face mean +0.45 (forced smile). |
 | "Train a Decision Tree on the face column vs the full vector" | M0 (face snapshot) vs M2 (context + face history) LightGBM, with M0t, M1 and M2-noface as controls, compared at 0–15 min of history with bootstrap CIs. Headline: Frustrated_Masked recall, M0 vs M2 (TBD — produced by `valence/eval/evaluate.py`). |
 | `if predicted_state == "Frustrated_Masked" and face_prediction == "Happy"` | `MaskOverrideDetector` (9.4): confidence thresholds on both models, face-layer SHAP check, persistence over several ticks, blocked for the first 2 min. Sets `mask_override`; only then may the display read "Frustrated / Masked Stress" (core-4 phase) and the narrator use mask language. |
 | Explanation string interpolating raw row values (`ambient_db`, `hours_since_break`) | `FactSheet` built from SHAP drivers with `level`/`effect`/`scope` → instant template text → LLM narration that the validator checks against the sheet. "Context corrected the facial mask" appears only with `mask_override`. |

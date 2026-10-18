@@ -37,6 +37,8 @@
   --color-state-frustrated: var(--state-frustrated);
   --color-state-exhausted: var(--state-exhausted);
   --color-state-happy: var(--state-happy);
+  --color-state-overwhelmed: var(--state-overwhelmed);
+  --color-state-tense: var(--state-tense);
 }
 
 :root {
@@ -67,6 +69,8 @@
   --state-frustrated: oklch(0.68 0.2 30);
   --state-exhausted: oklch(0.8 0.15 80);
   --state-happy: oklch(0.82 0.17 150);
+  --state-overwhelmed: oklch(0.72 0.16 300);
+  --state-tense: oklch(0.74 0.18 350);
 }
 
 @layer base {

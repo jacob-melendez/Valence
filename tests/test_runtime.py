@@ -1,6 +1,7 @@
 import json
 import math
 
+import numpy as np
 import pytest
 
 from valence.config import Settings
@@ -229,3 +230,66 @@ def test_narrator_status_needs_two_failures_in_a_row():
     assert not c.healthy
     c._mark(True)
     assert c.healthy
+
+
+def test_room_baseline_capture_and_relative_gating():
+    """An arrival capture sets the venue baseline; records carry it and near-field gating uses it."""
+    agg = Aggregator(Settings(room_baseline_s=10), "t")
+    assert agg.baseline_status()["mode"] == "auto"
+    agg.start_baseline(10)
+    for i in range(12):
+        agg.push(AudioObs(t=float(i), wall=1000.0 + i, block_seq=i, db_spl=70.0 + (i % 3) - 1, rms_power=1.0))
+        agg.push(VideoObs(t=float(i), wall=1000.0 + i, frame_seq=i, lux=300.0, lux_quality=1.0))
+    snap = agg.baseline_status()
+    assert snap["mode"] == "captured" and snap["db_median"] == 70.0 and snap["lux_median"] == 300.0
+    # gate: the loudest of the last 3 blocks must reach baseline + 3 dB
+    agg.push(AudioObs(t=13.0, wall=1013.0, block_seq=13, db_spl=72.0, rms_power=1.0, laughter_onsets=1))  # max 72 < 73
+    agg.push(AudioObs(t=14.0, wall=1014.0, block_seq=14, db_spl=78.0, rms_power=1.0))  # the user's laugh...
+    agg.push(AudioObs(t=15.0, wall=1015.0, block_seq=15, db_spl=70.0, rms_power=1.0, laughter_onsets=1))  # ...reported late
+    room = agg.flush(1016.0, 16.0, 12.0)[0]
+    assert room.room_db_base == 70.0 and room.room_lux_base == 300.0
+    assert room.laughter_count == 1 and agg.gated_out == 1
+
+
+def test_room_relative_features_follow_the_baseline():
+    from valence.features.compute import FEATURE_INDEX, compute
+
+    n = 30
+    person = {f: np.full(n, 0.0) for f in ("motion_energy", "posture_slump", "head_in_hands_frac", "clenched_fists_count",
+                                          "social_withdrawal_flag", "n_people", "hours_since_break", "tod_h",
+                                          "face_valence", "face_visible")}
+    room = {"ambient_db": np.full(n, 72.0), "light_lux": np.full(n, 150.0), "laughter_count": np.zeros(n),
+            "compliments_count": np.zeros(n), "room_db_base": np.full(n, 66.0), "room_lux_base": np.full(n, 300.0)}
+    x = compute(person, room)
+    assert x[FEATURE_INDEX["db_room_now"]] == pytest.approx(6.0)
+    assert x[FEATURE_INDEX["lux_room_mean_5m"]] == pytest.approx(-1.0)  # half the baseline light
+    room["room_db_base"] = np.full(n, np.nan)  # no baseline yet: relative features are missing, not zero
+    assert math.isnan(compute(person, room)[FEATURE_INDEX["db_room_now"]])
+
+
+def test_recording_ticks_follow_playback_speed(runtime):
+    """At speed k each tick must still hold 5 s of the recording (the feeder and the ticker share the speed)."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "data" / "real" / "capture_typing.jsonl"
+    if not path.exists():
+        pytest.skip("capture not present")
+    runtime.use_recording(path, speed=10.0, loop=False)
+    try:
+        assert runtime.speed == 10.0 and runtime.feeder.speed == 10.0
+    finally:
+        runtime._stop_feeder()
+
+
+def test_lux_baseline_samples_at_1hz_and_drift_is_flagged():
+    agg = Aggregator(Settings(room_baseline_s=10), "t")
+    for i in range(50):  # 5 s of video at 10 Hz
+        agg.push(VideoObs(t=i / 10, wall=1000.0 + i / 10, frame_seq=i, lux=300.0, lux_quality=1.0))
+    assert 4 <= agg.baseline_status()["lux_samples"] <= 6
+    for i in range(12):
+        agg.push(AudioObs(t=float(i), wall=1000.0 + i, block_seq=i, db_spl=50.0, rms_power=1.0))
+    assert agg.baseline_status()["complete"] and not agg.baseline_status()["drifted"]
+    for i in range(12, 400):  # the hall gets 20 dB louder for several minutes
+        agg.push(AudioObs(t=float(i), wall=1000.0 + i, block_seq=i, db_spl=70.0, rms_power=1.0))
+    snap = agg.baseline_status()
+    assert snap["drifted"] and snap["drift_db"] == 20.0

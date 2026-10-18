@@ -19,7 +19,7 @@ import numpy as np
 
 from valence.contracts import TickRecord
 from valence.explain.explainer import build_layers
-from valence.features.compute import FEATURE_INDEX, FEATURE_NAMES, FEATURE_SETS, features_from_window
+from valence.features.compute import ABS_ROOM, FEATURE_INDEX, FEATURE_NAMES, FEATURE_SETS, features_from_window
 from valence.features.spec import layer_of
 from valence.models.predictor import PredictionOutput
 
@@ -84,13 +84,15 @@ class ServedPredictor:
         self.hi = np.array([clip.get(n, [-np.inf, np.inf])[1] for n in FEATURE_NAMES])
         band = np.array([ood_band(n, lo, hi) for n, lo, hi in zip(FEATURE_NAMES, self.lo, self.hi)])
         self.ood_lo, self.ood_hi = band[:, 0], band[:, 1]
+        used = set(self.cols2) | set(self.cols0)  # a feature neither model reads cannot make an input unusual
+        self.ood_used = np.array([n in used for n in FEATURE_NAMES])
         self.face_cols = np.array([layer_of(c) == "Facial Surface" for c in self.cols2])
 
     # --- core -----------------------------------------------------------------------------------
     def _clip(self, x: np.ndarray) -> tuple[np.ndarray, list[str]]:
         ok = ~np.isnan(x)
         clipped = np.where(ok, np.clip(x, self.lo, self.hi), x)
-        ood = [FEATURE_NAMES[i] for i in np.nonzero(ok & ((x < self.ood_lo) | (x > self.ood_hi)))[0]]
+        ood = [FEATURE_NAMES[i] for i in np.nonzero(ok & self.ood_used & ((x < self.ood_lo) | (x > self.ood_hi)))[0]]
         return clipped, ood
 
     def _m2(self, xc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -121,7 +123,8 @@ class ServedPredictor:
         names = self.cols2
         values = {n: float(x[FEATURE_INDEX[n]]) for n in names}
         contribs = {n: float(c) for n, c in zip(names, contrib[k, :-1]) if c != 0.0}
-        layers = build_layers(contribs, values, tod_h=tod_h)
+        absolute = {n: float(x[FEATURE_INDEX[n]]) for n in ABS_ROOM}
+        layers = build_layers(contribs, values, tod_h=tod_h, absolute=absolute)
         return PredictionOutput(
             label=label, confidence=float(p[k]), probabilities=dict(zip(self.states, map(float, p))),
             face_only_label=face_label, face_only_confidence=face_conf, layers=layers, raw_override=raw_override,

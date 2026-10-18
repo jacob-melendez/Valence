@@ -49,8 +49,30 @@ def _clock(tod_h: float) -> str:
     return f"{h:02d}:{int(round((tod_h - int(tod_h)) * 60)) % 60:02d}"
 
 
-def describe(feature: str, value: float | None, *, tod_h: float | None = None) -> Description | None:
-    """Return None for features that are never narrated (or have no value)."""
+def _room_relative(ch: str, stat: str, span: str, value: float, absolute: float | None, d) -> Description:
+    """Room level relative to the venue baseline; the display leads with the absolute level when known."""
+    known = absolute is not None and not math.isnan(absolute)
+    if ch == "db":
+        what = {"now": "current noise", "mean": "average noise", "max": "peak noise", "ewm": "recent noise"}[stat]
+        tail = "" if stat == "now" else f" over {span}"
+        delta = round(value)
+        rel = "at this room's baseline" if delta == 0 else \
+            f"{abs(delta)} dB {'above' if delta > 0 else 'below'} this room's baseline"
+        text = f"{what} of {round(absolute)} dB{tail}, {rel}" if known else f"{what} {rel}{tail}"
+        return d(text, "dB", _level(value, 8, 4, -3))
+    rel = "brighter than this room's usual light" if value >= 0.5 else \
+        "dimmer than this room's usual light" if value <= -0.5 else "about this room's usual light"
+    text = f"{round(absolute)} lux, {rel}" if known else f"light {rel}"
+    return d(text, "lux", _level(value, 1.0, 0.5, -0.5))
+
+
+def describe(feature: str, value: float | None, *, tod_h: float | None = None,
+             absolute: float | None = None) -> Description | None:
+    """Return None for features that are never narrated (or have no value).
+
+    ``absolute`` is the absolute level behind a room-relative feature (``db_room_mean_5m`` -> ``db_mean_5m``),
+    quoted in its display.
+    """
     if feature == "fill_ratio" or value is None or (isinstance(value, float) and math.isnan(value)):
         return None
     layer, scope = layer_of(feature), scope_of(feature)
@@ -76,6 +98,9 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
         return d(f"{feature} = {value:g}", "", "normal")
     ch, stat, win = m["ch"], m["stat"], m["win"]
     span = _span(win)
+
+    if ch in ("db", "lux") and stat.startswith("room_"):
+        return _room_relative(ch, stat.removeprefix("room_"), span, value, absolute, d)
 
     if ch in ("fist", "laugh", "compl"):
         noun = {"fist": "clenched-fist event", "laugh": "laughter event", "compl": "compliment"}[ch]

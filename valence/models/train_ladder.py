@@ -3,8 +3,8 @@
     python -m valence.models.train_ladder --sessions 300 --seed 7 --noise-scale 1.0 --state-set core
 
 Ladder (feature sets in valence/features/compute.py): m0 face snapshot, m0t face history, m1 context
-snapshot, m2_noface, m2_noabsdb, m2_notime and m2 (served). Splits are by session (70/15/15); the
-validation sessions are halved into an early-stopping half and a calibration half, and each model gets
+snapshot, m2_noface, m2_abs (absolute dB/lux ablation), m2_notime and m2 (served, room-relative). Splits are
+by session (70/15/15); the validation sessions are halved into an early-stopping half and a calibration half, and each model gets
 a softmax temperature fitted on the calibration half.
 """
 

@@ -1,0 +1,7 @@
+;; Valence demo processes: no outbound network except loopback (MediaPipe 1.x ships a Clearcut usage
+;; logger that posts to play.googleapis.com; this keeps it, and anything else, on the machine).
+;; Usage: sandbox-exec -f scripts/spikes/valence_offline.sb <command...>
+(version 1)
+(allow default)
+(deny network-outbound (remote ip "*:*"))
+(allow network-outbound (remote ip "localhost:*"))

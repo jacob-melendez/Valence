@@ -26,6 +26,9 @@ SERIES = {  # categorical slots 1-6 in fixed order (validated: light mode, adjac
     "m2_noface": "#eda100",
     "m0t": "#e87ba4",
     "m3": "#008300",
+    # venue-shift chart only
+    "m2_abs": "#eda100",
+    "legacy": "#eb6834",
 }
 NAMES = {
     "m2": "M2 context + face history (served)",
@@ -34,9 +37,12 @@ NAMES = {
     "m0t": "M0t face history",
     "m0": "M0 face snapshot",
     "m3": "M3 GRU sequence (benchmark)",
+    "m2_abs": "M2 with absolute dB/lux",
+    "legacy": "Previous served M2",
 }
 ORDER = ["m2", "m2_noface", "m3", "m1", "m0t", "m0"]
-SHORT = {"m2": "M2", "m2_noface": "M2 no face", "m3": "M3", "m1": "M1", "m0t": "M0t", "m0": "M0"}
+SHORT = {"m2": "M2", "m2_noface": "M2 no face", "m3": "M3", "m1": "M1", "m0t": "M0t", "m0": "M0",
+         "m2_abs": "M2 abs", "legacy": "previous"}
 
 
 def _axes(title: str, subtitle: str, size=(8.0, 4.6)):
@@ -136,6 +142,29 @@ def robustness_chart(series: dict[str, list], kind: str, path: Path) -> None:
     ax.set_xlabel(xlabel, color=TEXT_2, fontsize=9)
     ax.set_ylabel("macro-F1", color=TEXT_2, fontsize=9)
     ax.set_ylim(0, 1)
+    _finish(fig, ax, path)
+
+
+def venue_chart(series: dict[str, list], path: Path) -> None:
+    """Focused misread as a negative state as the venue gets louder (x: added hall noise, dB; 0 = none)."""
+    fig, ax = _axes("A loud hall is not a frustrated person",
+                    "Focused ticks read as a negative state when test sessions are mixed with venue noise")
+    ends = {}
+    venues = [p[0] for p in next(iter(series.values()))]
+    top = max(p[1] for pts in series.values() for p in pts)
+    for key in [k for k in ("m2", "m2_abs", "legacy") if k in series]:
+        xs = list(range(len(series[key])))  # evenly spaced venue levels
+        ys = [p[1] for p in series[key]]
+        _line(ax, xs, ys, key)
+        ends[key] = (xs[-1], ys[-1])
+    for key, y in _spread_labels({k: v[1] for k, v in ends.items()}, 0.025).items():
+        ax.annotate(f"{SHORT[key]}  {ends[key][1]:.0%}", (ends[key][0], y), xytext=(12, 0),
+                    textcoords="offset points", va="center", fontsize=8.5, color=TEXT, annotation_clip=False)
+    ax.set_xticks(range(len(venues)), ["own room" if v == 0 else f"+{v} dB hall" for v in venues])
+    ax.set_xlabel("venue noise mixed into the test sessions", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("Focused read as negative", color=TEXT_2, fontsize=9)
+    ax.set_ylim(0, max(0.4, round(top + 0.1, 1)))
+    ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
     _finish(fig, ax, path)
 
 

@@ -12,6 +12,7 @@ Spec: docs/DATASET.md. Parameters: valence/sim/params.py.
 from __future__ import annotations
 
 import math
+import zlib
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -54,10 +55,16 @@ class Script:
     lux_base: float | None = None
     mic_offset_db: float | None = None
     face_hidden: float | None = None
+    venue_db: float | None = None  # hall noise; None = a quiet team room (no venue term)
 
     @property
     def ticks(self) -> int:
         return int(round(sum(s.minutes for s in self.segments) * TICKS_PER_MIN))
+
+
+def power_sum(*levels_db: float) -> float:
+    """Level of incoherent sources together (dB)."""
+    return 10.0 * math.log10(sum(10.0 ** (v / 10.0) for v in levels_db))
 
 
 def _alpha(tau_min: float) -> float:
@@ -197,6 +204,14 @@ def simulate_session(
     h0s = (script.start_hours_since_break if script and script.start_hours_since_break
            else [rng.uniform(*nz.start_hours_since_break) for _ in range(n_people)])
     room_alpha = _alpha(rng.uniform(*nz.room_tau_min) * ns)
+    # Venue and arrival baseline come from their own stream, so adding them left every scripted scenario's
+    # other draws unchanged.
+    vrng = np.random.default_rng(zlib.crc32(session_id.encode()))
+    venue_db = (script.venue_db if script else float(vrng.uniform(*nz.venue_db_range)))
+    venue_terms = () if venue_db is None else (venue_db,)
+    base_db = power_sum(*venue_terms, nz.neutral_db) + mic_offset + float(vrng.normal(0.0, nz.baseline_db_noise * ns))
+    night0 = 1.0 if (start_hour >= 22 or start_hour < 6) else 0.0
+    base_lux = lux_base * (1.0 - 0.15 * night0) * float(np.exp(vrng.normal(0.0, nz.baseline_lux_noise * ns)))
 
     people = [_Person(rng, states, n_people, h0s[i % len(h0s)], nz, ns) for i in range(n_people)]
 
@@ -269,8 +284,8 @@ def simulate_session(
             light_mult = 1.0
         lux_drift = 0.98 * lux_drift + rng.normal(0.0, nz.lux_drift * ns)
         if audio_ok:
-            ambient = (room_db + mic_offset + db_drift + sound_bump + rng.normal(0.0, nz.db_noise * ns)
-                       + 2.0 * min(laughs, 2))
+            ambient = (power_sum(*venue_terms, room_db) + mic_offset + db_drift + sound_bump
+                       + rng.normal(0.0, nz.db_noise * ns) + 2.0 * min(laughs, 2))
             p90 = ambient + 1.5 + abs(rng.normal(0.0, 1.0 * ns)) + 1.5 * (laughs > 0)
         else:
             ambient = p90 = math.nan
@@ -280,6 +295,7 @@ def simulate_session(
             "tick": t, "ts": t * TICK_S, "t_mono": t * TICK_S, "session_id": session_id,
             "n_people": n_present, "source": "sim", "simulated_fields": [],
             "ambient_db": ambient, "db_p90": p90, "light_lux": lux, "lux_quality": 1.0,
+            "room_db_base": base_db, "room_lux_base": base_lux,
             "laughter_count": laughs, "compliments_count": compls, "tod_h": tod,
         }
 

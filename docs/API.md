@@ -219,9 +219,8 @@ It is sent every tick per person, just before the `prediction` for the same tick
 | `source` | string | Provenance of this person's latest tick (section 6) |
 | `simulated_fields` | string[] | Simulated or operator-set data inside this window (section 6) |
 
-"Near-field" means a laughter or compliment event counts only if its audio block is at least
-`settings.near_field_db` (6 dB) above the room's running median, so the next table in a loud hall does not
-count.
+"Near-field" means a laughter or compliment event counts only if the loudest of the last 3 audio blocks (recognizers report a phrase 0-2 blocks after it ends) is at least `settings.near_field_db` (3 dB) above the venue room baseline, or before the baseline is complete, the room's 15-minute median. The edge also requires each phrase
+to be at least 4 dB above its 30 s room floor, so crowd-level speech from the next table does not count.
 
 ```json
 {"type": "state_vector", "t": 1792276800.0, "person_id": 1, "ambient_db": 72.4, "light_lux": 210.0, "hours_since_break": 4.2, "time_of_day": "15:40", "clenched_fists_5m": 3, "compliments_15m": 0, "laughter_15m": 0, "posture_slump": 0.35, "head_in_hands": 0.0, "social_withdrawal": 0, "face_visible": true, "facial_valence": 0.62, "window_fill_min": 12.5, "source": "live", "simulated_fields": []}
@@ -257,17 +256,17 @@ and an instant template explanation.
 | `layers[].name` | `"Ambient Physics" \| "Time Dynamics" \| "Somatic & Social" \| "Facial Surface"` | The PRD's three context layers plus the face |
 | `layers[].contribution` | float | Sum of the attributions of all narratable features in the layer toward the predicted label (`fill_ratio` is never narrated and is left out): TreeSHAP in model-margin units for M2, linear terms for the stub. Positive supports the label, negative opposes it. The Facial Surface layer is kept even when it opposes, so a corrected mask stays visible. |
 | `layers[].drivers` | `Driver[]` | Up to 3 strongest drivers in the layer by absolute `shap`. They need not add up to `contribution`. |
-| `drivers[].feature` | string | Feature name, `<channel>_<stat>_<window>` (for example `db_mean_15m`, `fist_cnt_5m`, `face_now`, `hours_since_break`) |
-| `drivers[].display` | string | Pre-formatted text, for example `"average noise of 72 dB over 15 minutes"`. The only place numbers are formatted. |
+| `drivers[].feature` | string | Feature name, `<channel>_<stat>_<window>` (for example `db_room_mean_15m`, `fist_cnt_5m`, `face_now`, `hours_since_break`). The served model uses no absolute dB or lux level: its level features are relative to the room baseline (`db_room_*`, `lux_room_*`, §7.4.12), next to the shift-invariant `db_`/`lux_` `std_*`, `slope_*`, `d1m15m` and `rel_15m`. |
+| `drivers[].display` | string | Pre-formatted text, for example `"average noise of 72 dB over the last 15 minutes, 8 dB above this room's baseline"`. The only place numbers are formatted. |
 | `drivers[].value` | float \| null | Raw feature value |
 | `drivers[].unit` | string | Unit, for example `dB`, `lux`, `h`, `events`, `%`, `sw/s` (shoulder-widths/s), or `""` |
 | `drivers[].shap` | float | This feature's attribution |
-| `drivers[].level` | `"high" \| "elevated" \| "normal" \| "low"` | Where the value sits against fixed thresholds (for example noise: high ≥ 65 dB, elevated ≥ 58, low < 45) |
+| `drivers[].level` | `"high" \| "elevated" \| "normal" \| "low"` | Where the value sits against fixed thresholds (for example room noise `db_room_*`: high ≥ 8 dB above the baseline, elevated ≥ 4, low < −3) |
 | `drivers[].effect` | `"supports" \| "opposes"` | `supports` if `shap` ≥ 0 |
 | `drivers[].scope` | `"room" \| "person"` | `room` for noise, light, laughter, compliments and `n_people`; `person` otherwise. Text should phrase room drivers as "the room". |
 
 ```json
-{"type": "prediction", "event_id": "p1-000348", "t": 1792276800.0, "person_id": 1, "label": "Frustrated_Masked", "label_display": "Frustrated / Masked Stress", "confidence": 0.88, "probabilities": {"Focused": 0.04, "Frustrated_Masked": 0.88, "Exhausted": 0.05, "Collaborative_Happy": 0.03}, "face_only": {"label": "Collaborative_Happy", "confidence": 0.71}, "mask_override": true, "warming_up": false, "layers": [{"name": "Somatic & Social", "contribution": 0.41, "drivers": [{"feature": "fist_cnt_5m", "display": "3 clenched-fist events in the last 5 minutes", "value": 3.0, "unit": "events", "shap": 0.38, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Ambient Physics", "contribution": 0.22, "drivers": [{"feature": "db_mean_15m", "display": "average noise of 72 dB over 15 minutes", "value": 72.4, "unit": "dB", "shap": 0.22, "level": "high", "effect": "supports", "scope": "room"}]}, {"name": "Time Dynamics", "contribution": 0.15, "drivers": [{"feature": "hours_since_break", "display": "4.2 hours since the last break", "value": 4.2, "unit": "h", "shap": 0.15, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Facial Surface", "contribution": -0.18, "drivers": [{"feature": "face_now", "display": "smiling expression (valence +0.62)", "value": 0.62, "unit": "", "shap": -0.18, "level": "high", "effect": "opposes", "scope": "person"}]}], "data_quality": {"face_visible_frac": 0.9, "lux": 210.0, "ood_features": []}, "explanation": {"text": "Model predicted Frustrated / Masked Stress (88%) for Person #1. The face alone suggests Collaborative / Happy, but 3 clenched-fist events in the last 5 minutes, average noise of 72 dB over 15 minutes and 4.2 hours since the last break point the other way. Context corrected the facial mask.", "source": "template"}, "source": "live", "simulated_fields": []}
+{"type": "prediction", "event_id": "p1-000348", "t": 1792276800.0, "person_id": 1, "label": "Frustrated_Masked", "label_display": "Frustrated / Masked Stress", "confidence": 0.88, "probabilities": {"Focused": 0.04, "Frustrated_Masked": 0.88, "Exhausted": 0.05, "Collaborative_Happy": 0.03}, "face_only": {"label": "Collaborative_Happy", "confidence": 0.71}, "mask_override": true, "warming_up": false, "layers": [{"name": "Somatic & Social", "contribution": 0.41, "drivers": [{"feature": "fist_cnt_5m", "display": "3 clenched-fist events in the last 5 minutes", "value": 3.0, "unit": "events", "shap": 0.38, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Ambient Physics", "contribution": 0.22, "drivers": [{"feature": "db_room_mean_15m", "display": "average noise of 72 dB over the last 15 minutes, 8 dB above this room's baseline", "value": 8.4, "unit": "dB", "shap": 0.22, "level": "high", "effect": "supports", "scope": "room"}]}, {"name": "Time Dynamics", "contribution": 0.15, "drivers": [{"feature": "hours_since_break", "display": "4.2 hours since the last break", "value": 4.2, "unit": "h", "shap": 0.15, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Facial Surface", "contribution": -0.18, "drivers": [{"feature": "face_now", "display": "smiling expression (valence +0.62)", "value": 0.62, "unit": "", "shap": -0.18, "level": "high", "effect": "opposes", "scope": "person"}]}], "data_quality": {"face_visible_frac": 0.9, "lux": 210.0, "ood_features": []}, "explanation": {"text": "Model predicted Frustrated / Masked Stress (88%) for Person #1. The face alone suggests Collaborative / Happy, but 3 clenched-fist events in the last 5 minutes, average noise of 72 dB over the last 15 minutes, 8 dB above this room's baseline and 4.2 hours since the last break point the other way. Context corrected the facial mask.", "source": "template"}, "source": "live", "simulated_fields": []}
 ```
 
 When no face is visible, the same message has `"face_only": {"label": null, "confidence": null}`, the
@@ -307,7 +306,7 @@ Periodic system status, about 1 Hz.
 | `fps` | float | Processed video observations per second (perception rate; target 10, 0 in scenario replay) |
 | `loop_latency_ms` | float | Time the runtime took to process the last tick: windows, features, models, SHAP, messages |
 | `narrator` | `"ready" \| "fallback" \| "down"` | `ready`: the narrator answered its last health check or request. `fallback`: it did not, so template text is in use. `down` is reserved for a narrator that is known to be unreachable; the current runtime reports only `ready` or `fallback`. |
-| `offline` | bool | The offline settings (`HF_HUB_OFFLINE`, `YOLO_OFFLINE`) are set, so no library will try to download anything. It is a configuration check, not a network probe. Valence needs no network after the one-time model downloads. |
+| `offline` | bool | True only when the offline settings (`HF_HUB_OFFLINE`, `YOLO_OFFLINE`) are set **and** an outbound probe fails (a TCP connect to 1.1.1.1:443, every 30 s): the API process cannot reach the internet. `run_demo.sh` runs the API and narrator under a macOS sandbox that denies outbound network (loopback only) and exports `VALENCE_SANDBOXED=1`; `/api/health` `network` reports `sandboxed` and `outbound_blocked`. The sandbox exists because MediaPipe embeds usage telemetry (Clearcut, posting to play.googleapis.com) with no opt-out; unsandboxed, the live API process held 4 HTTPS connections to Google (`docs/BENCHMARKS.md`). |
 | `uptime_s` | float | Seconds since the runtime started |
 | `degraded` | string[] | Components not working normally. Current values: `camera`, `mic` (live mode with no recent observation), `narrator`, `predictor:stub` (trained model not loaded), `edge` (the perception runner failed to start). |
 | `purge_violation` | bool | `true` once any purge violation has occurred in this process (it stays set). Show it as an alarm. |
@@ -531,6 +530,9 @@ call injects data that is not sensed, so it is tagged in `simulated_fields` or `
 | POST | `/api/demo/seed` | Pre-fill room history | `demo_seed` | **yes**: `room_history`, `sim_seed`, optionally `hours_since_break` |
 | POST | `/api/demo/reset` | Forget all people, keep the room | `reset` | no |
 | POST | `/api/calibrate/room` | Venue calibration | `calibrate_room` | no (changes calibration, not data) |
+| POST | `/api/room/baseline` | Capture the venue room baseline | `room_baseline`, then `room_baseline_captured` | no (a measurement) |
+| GET | `/api/room/baseline` | Baseline status and values | — | — |
+| POST | `/api/room/baseline/reset` | Back to the automatic baseline | `room_baseline_reset` | no |
 | POST | `/api/mode` | Room-only on or off | `mode` | no |
 | POST | `/api/label` | Self-report label (P1) | `self_report` | no (never enters the model) |
 
@@ -632,7 +634,7 @@ Recomputes the hash chain over the whole session file.
 
 `ok: false` means an entry was edited, removed or reordered. In that case `entries` is the 1-based position
 of the first entry that fails, so the bad `seq` is `entries − 1`. The same check runs offline in
-`scripts/audit_verify.py` (planned). Errors: `503` only.
+`scripts/audit_verify.py` (`make audit-verify`; exit 0 intact, 1 tampered). Errors: `503` only.
 
 #### 7.3.7 `GET /api/retention`
 
@@ -667,7 +669,7 @@ degraded; and the negative control. In mock mode, the frontend shows placeholder
 Returns `image/png` from `reports/figs/{name}.png`. Names come from `figures` in `/api/eval/summary`, and
 any file present is served even while the summary reports `available: false`. v1 files present (uncommitted;
 core 4 states, untuned `noise_scale` 1.0): `accuracy_vs_history`, `acc_vs_episode_age`, `reliability`,
-`confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux`. Planned: `memory_flat` (60-min soak). Paths are confined to `reports/figs/`. An unknown name or a
+`confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux`. Also `venue_shift` and `memory_flat` (a 10-min offline soak from `scripts/mem_soak.py`; the 60-min live soak is not done). Paths are confined to `reports/figs/`. An unknown name or a
 traversal attempt gives `404 {"detail": "figure not found"}`. These are offline charts, never camera images.
 
 #### 7.3.10 `GET /api/scenarios`
@@ -697,8 +699,11 @@ by `valence/models/train_ladder.py`; do not rely on them in the UI.
 #### 7.3.12 `GET /api/health`
 
 ```json
-{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null, "mic_error": null}
+{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null, "mic_error": null,
+ "room_baseline": {"mode": "captured", "complete": true, "target_samples": 90, "db_samples": 90, "lux_samples": 90, "db_median": 68.4, "db_iqr": 2.1, "lux_median": 410.0}}
 ```
+
+`room_baseline` is the venue baseline (§7.4.12).
 
 `edge_error` is the reason the perception runner failed to start (missing module, camera permission), or
 `null`. `mic_error` is set when audio failed to start and the runner is running video-only (§7.4.2). `ok` is `true` whenever the server can answer. Use `status` and `degraded` for component health.
@@ -724,7 +729,7 @@ published.
 | Param | Type | Notes |
 |---|---|---|
 | `event_id` (path) | string | A `prediction.event_id`. The current implementation uses it only to select the person (`p<person_id>-...`) and re-runs on that person's **current** window. |
-| `feature` (query) | string | A feature name from the served model's feature spec (for example `hours_since_break`, `db_mean_15m`, `fist_cnt_5m`) |
+| `feature` (query) | string | A feature name from the served model's feature spec (for example `hours_since_break`, `db_room_mean_15m`, `fist_cnt_5m`) |
 | `value` (query) | float | New value for that feature |
 
 Response (`ServedPredictor.counterfactual` in `valence/models/served.py`). Labels are the unsmoothed
@@ -965,7 +970,36 @@ Calibration applies to new observations only. The window then mixes old and new 
 15 min, so calibrate first and call `POST /api/control/stop` then `start` before the real run. Audit:
 `calibrate_room` with the applied values. Measured values, not simulated.
 
-#### 7.4.12 `POST /api/label`
+#### 7.4.12 `POST /api/room/baseline`, `GET /api/room/baseline`, `POST /api/room/baseline/reset`
+
+The venue room baseline. The served models never see absolute dB or lux: they read the room *relative to this
+baseline* (`db_room_*` = dB above it, `lux_room_*` = log2 of the light ratio), so a loud hall is "this room's
+normal" instead of evidence of a loud, frustrated room. Explanations still quote the absolute level ("average
+noise of 72 dB over the last 5 minutes, 6 dB above this room's baseline"). Near-field gating of laughter and
+compliments uses it too (an event counts when the loudest of the last 3 blocks is `near_field_db` = 3 dB above the
+baseline). When the room's last 5 minutes drift more than 12 dB or a factor of 2 in light from the baseline, `status.degraded`
+shows `room_drift` and `GET /api/room/baseline` reports `drift_db`, `drift_lux_log2` and `drifted`: re-capture it.
+
+On arrival at the venue, with the person sitting neutral at the desk, start a capture:
+
+| Body field | Type | Default | Notes |
+|---|---|---|---|
+| `seconds` | float | `90` (`settings.room_baseline_s`) | Samples to collect per channel (about one audio block and one lux estimate per second). `422` outside [10, 600]. |
+
+Response: `{"ok": true, "mode": "capturing", "complete": false, "target_samples": 90, "db_samples": 0, ...}`.
+`GET /api/room/baseline` returns the same object; `mode` becomes `captured` once the dB channel has its samples
+(or the lux channel, if no audio arrives). Until then the running median of what has been collected is used.
+
+Without a capture the baseline is automatic (`mode: "auto"`): the first `room_baseline_s` seconds of a live
+session or of a replayed recording. `POST /api/live` keeps a captured baseline; a recording replay always starts
+an automatic one (its own room); `POST /api/room/baseline/reset` goes back to automatic. Scenario replays carry
+the simulator's own baseline per tick.
+
+The baseline is two medians and an IQR, held in RAM and never written to disk except as the audit entries
+`room_baseline` (seconds), `room_baseline_captured` (the medians) and `room_baseline_reset`. Calibrating with
+`POST /api/calibrate/room` afterwards shifts the collected baseline into the new units.
+
+#### 7.4.13 `POST /api/label`
 
 Self-report label (P1), used to compare live predictions against what the person reports. **It never
 changes a prediction or any model input.**
@@ -988,7 +1022,7 @@ The label, the time and that person's latest numeric `TickRecord` (no media) are
 `422 {"detail": "state must be one of [...]"}`, and a missing body gives `422`. Audit: `self_report` with
 `label` and `person_id`.
 
-#### 7.4.13 `GET /api/recordings` and `POST /api/replay_recording/{name}`
+#### 7.4.14 `GET /api/recordings` and `POST /api/replay_recording/{name}`
 
 The camera/mic fallback: replay a features-only JSONL recording (`data/real/<name>.jsonl`, written by
 `python -m valence.edge.run --jsonl`) through the live aggregator, with its original timing scaled by `speed`.
@@ -1002,7 +1036,7 @@ it is pushed, so break clocks start when the replayed person appears (not at the
 
 | Body field | Type | Default | Notes |
 |---|---|---|---|
-| `speed` | float | `1.0` | Playback speed, in (0, 1000] (`422` otherwise) |
+| `speed` | float | `1.0` | Playback speed, in (0, 1000] (`422` otherwise). Ticks run at the same speed, so each tick still holds 5 s of the recording. |
 | `loop` | bool | `true` | Restart at the end of the file |
 
 ```json
@@ -1130,7 +1164,7 @@ Note the null `face_only`, a room-scope driver that `opposes` at level `elevated
 at levels `high` and `low`.
 
 ```json
-{"event_id": "p1-000512", "person": "Person #1", "label": "Exhausted", "label_display": "Exhausted", "confidence": 0.81, "confidence_display": "81%", "probabilities": {"Focused": 0.09, "Frustrated_Masked": 0.07, "Exhausted": 0.81, "Collaborative_Happy": 0.03}, "window_fill_min": 15.0, "n_people": 1, "face_only": {"label": null, "confidence": null, "face_valence": null}, "face_visible": false, "mask_override": false, "layers": [{"name": "Time Dynamics", "contribution": 0.52, "drivers": [{"feature": "hours_since_break", "display": "5.6 hours since the last break", "value": 5.6, "unit": "h", "shap": 0.47, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Somatic & Social", "contribution": 0.44, "drivers": [{"feature": "slump_mean_5m", "display": "slumped 71% of the last 5 minutes", "value": 0.71, "unit": "%", "shap": 0.29, "level": "high", "effect": "supports", "scope": "person"}, {"feature": "motion_mean_5m", "display": "nearly still (motion 0.03)", "value": 0.03, "unit": "sw/s", "shap": 0.18, "level": "low", "effect": "supports", "scope": "person"}]}, {"name": "Ambient Physics", "contribution": 0.12, "drivers": [{"feature": "db_mean_15m", "display": "average noise of 41 dB over 15 minutes", "value": 41.3, "unit": "dB", "shap": 0.21, "level": "low", "effect": "supports", "scope": "room"}, {"feature": "lux_mean_5m", "display": "normal light (380 lux)", "value": 380.0, "unit": "lux", "shap": -0.09, "level": "elevated", "effect": "opposes", "scope": "room"}]}, {"name": "Facial Surface", "contribution": 0.01, "drivers": [{"feature": "face_visible_frac_5m", "display": "face visible 10% of the last 5 minutes", "value": 0.1, "unit": "%", "shap": 0.01, "level": "low", "effect": "supports", "scope": "person"}]}], "data_quality": {"face_visible_frac": 0.1, "lux": 380.0, "ood_features": []}}
+{"event_id": "p1-000512", "person": "Person #1", "label": "Exhausted", "label_display": "Exhausted", "confidence": 0.81, "confidence_display": "81%", "probabilities": {"Focused": 0.09, "Frustrated_Masked": 0.07, "Exhausted": 0.81, "Collaborative_Happy": 0.03}, "window_fill_min": 15.0, "n_people": 1, "face_only": {"label": null, "confidence": null, "face_valence": null}, "face_visible": false, "mask_override": false, "layers": [{"name": "Time Dynamics", "contribution": 0.52, "drivers": [{"feature": "hours_since_break", "display": "5.6 hours since the last break", "value": 5.6, "unit": "h", "shap": 0.47, "level": "high", "effect": "supports", "scope": "person"}]}, {"name": "Somatic & Social", "contribution": 0.44, "drivers": [{"feature": "slump_mean_5m", "display": "slumped 71% of the last 5 minutes", "value": 0.71, "unit": "%", "shap": 0.29, "level": "high", "effect": "supports", "scope": "person"}, {"feature": "motion_mean_5m", "display": "nearly still (motion 0.03)", "value": 0.03, "unit": "sw/s", "shap": 0.18, "level": "low", "effect": "supports", "scope": "person"}]}, {"name": "Ambient Physics", "contribution": 0.12, "drivers": [{"feature": "db_room_mean_15m", "display": "average noise of 41 dB over the last 15 minutes, 5 dB below this room's baseline", "value": -5.2, "unit": "dB", "shap": 0.21, "level": "low", "effect": "supports", "scope": "room"}, {"feature": "lux_room_mean_5m", "display": "380 lux, brighter than this room's usual light", "value": 0.6, "unit": "lux", "shap": -0.09, "level": "elevated", "effect": "opposes", "scope": "room"}]}, {"name": "Facial Surface", "contribution": 0.01, "drivers": [{"feature": "face_visible_frac_5m", "display": "face visible 10% of the last 5 minutes", "value": 0.1, "unit": "%", "shap": 0.01, "level": "low", "effect": "supports", "scope": "person"}]}], "data_quality": {"face_visible_frac": 0.1, "lux": 380.0, "ood_features": []}}
 ```
 
 When the face is visible, `face_only` is filled, for example

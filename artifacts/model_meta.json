@@ -123,7 +123,16 @@
     "face_mean_5m",
     "face_mean_15m",
     "face_std_5m",
-    "face_visible_frac_5m"
+    "face_visible_frac_5m",
+    "db_room_now",
+    "db_room_mean_1m",
+    "db_room_mean_5m",
+    "db_room_mean_15m",
+    "db_room_max_5m",
+    "db_room_ewm_5m",
+    "lux_room_now",
+    "lux_room_mean_5m",
+    "lux_room_mean_15m"
   ],
   "feature_sets": {
     "m0": [
@@ -140,8 +149,8 @@
       "face_visible_frac_5m"
     ],
     "m1": [
-      "db_now",
-      "lux_now",
+      "db_room_now",
+      "lux_room_now",
       "motion_now",
       "slump_now",
       "hih_now",
@@ -155,34 +164,16 @@
       "tod_cos"
     ],
     "m2_noface": [
-      "db_now",
-      "db_mean_1m",
-      "db_max_1m",
-      "db_mean_5m",
       "db_std_5m",
       "db_slope_5m",
-      "db_max_5m",
-      "db_mean_15m",
       "db_std_15m",
       "db_slope_15m",
-      "db_max_15m",
-      "db_ewm_1m",
-      "db_ewm_5m",
       "db_d1m15m",
       "db_rel_15m",
-      "lux_now",
-      "lux_mean_1m",
-      "lux_max_1m",
-      "lux_mean_5m",
       "lux_std_5m",
       "lux_slope_5m",
-      "lux_max_5m",
-      "lux_mean_15m",
       "lux_std_15m",
       "lux_slope_15m",
-      "lux_max_15m",
-      "lux_ewm_1m",
-      "lux_ewm_5m",
       "lux_d1m15m",
       "lux_rel_15m",
       "motion_now",
@@ -257,13 +248,31 @@
       "hours_since_break",
       "tod_sin",
       "tod_cos",
-      "fill_ratio"
+      "fill_ratio",
+      "db_room_now",
+      "db_room_mean_1m",
+      "db_room_mean_5m",
+      "db_room_mean_15m",
+      "db_room_max_5m",
+      "db_room_ewm_5m",
+      "lux_room_now",
+      "lux_room_mean_5m",
+      "lux_room_mean_15m"
     ],
-    "m2_noabsdb": [
+    "m2_abs": [
+      "db_now",
+      "db_mean_1m",
+      "db_max_1m",
+      "db_mean_5m",
       "db_std_5m",
       "db_slope_5m",
+      "db_max_5m",
+      "db_mean_15m",
       "db_std_15m",
       "db_slope_15m",
+      "db_max_15m",
+      "db_ewm_1m",
+      "db_ewm_5m",
       "db_d1m15m",
       "db_rel_15m",
       "lux_now",
@@ -363,34 +372,16 @@
       "face_visible_frac_5m"
     ],
     "m2_notime": [
-      "db_now",
-      "db_mean_1m",
-      "db_max_1m",
-      "db_mean_5m",
       "db_std_5m",
       "db_slope_5m",
-      "db_max_5m",
-      "db_mean_15m",
       "db_std_15m",
       "db_slope_15m",
-      "db_max_15m",
-      "db_ewm_1m",
-      "db_ewm_5m",
       "db_d1m15m",
       "db_rel_15m",
-      "lux_now",
-      "lux_mean_1m",
-      "lux_max_1m",
-      "lux_mean_5m",
       "lux_std_5m",
       "lux_slope_5m",
-      "lux_max_5m",
-      "lux_mean_15m",
       "lux_std_15m",
       "lux_slope_15m",
-      "lux_max_15m",
-      "lux_ewm_1m",
-      "lux_ewm_5m",
       "lux_d1m15m",
       "lux_rel_15m",
       "motion_now",
@@ -469,37 +460,28 @@
       "face_mean_5m",
       "face_mean_15m",
       "face_std_5m",
-      "face_visible_frac_5m"
+      "face_visible_frac_5m",
+      "db_room_now",
+      "db_room_mean_1m",
+      "db_room_mean_5m",
+      "db_room_mean_15m",
+      "db_room_max_5m",
+      "db_room_ewm_5m",
+      "lux_room_now",
+      "lux_room_mean_5m",
+      "lux_room_mean_15m"
     ],
     "m2": [
-      "db_now",
-      "db_mean_1m",
-      "db_max_1m",
-      "db_mean_5m",
       "db_std_5m",
       "db_slope_5m",
-      "db_max_5m",
-      "db_mean_15m",
       "db_std_15m",
       "db_slope_15m",
-      "db_max_15m",
-      "db_ewm_1m",
-      "db_ewm_5m",
       "db_d1m15m",
       "db_rel_15m",
-      "lux_now",
-      "lux_mean_1m",
-      "lux_max_1m",
-      "lux_mean_5m",
       "lux_std_5m",
       "lux_slope_5m",
-      "lux_max_5m",
-      "lux_mean_15m",
       "lux_std_15m",
       "lux_slope_15m",
-      "lux_max_15m",
-      "lux_ewm_1m",
-      "lux_ewm_5m",
       "lux_d1m15m",
       "lux_rel_15m",
       "motion_now",
@@ -581,75 +563,83 @@
       "face_mean_5m",
       "face_mean_15m",
       "face_std_5m",
-      "face_visible_frac_5m"
+      "face_visible_frac_5m",
+      "db_room_now",
+      "db_room_mean_1m",
+      "db_room_mean_5m",
+      "db_room_mean_15m",
+      "db_room_max_5m",
+      "db_room_ewm_5m",
+      "lux_room_now",
+      "lux_room_mean_5m",
+      "lux_room_mean_15m"
     ]
   },
   "temperatures": {
-    "m0": 0.9031212789759472,
-    "m0t": 0.9672659421854932,
-    "m1": 0.8984838582611243,
-    "m2_noface": 0.9615705981635821,
-    "m2_noabsdb": 0.9362279857932745,
-    "m2_notime": 0.9504035690044854,
-    "m2": 0.9540511783755271
+    "m0": 0.8815927309306114,
+    "m0t": 0.9384299892617921,
+    "m1": 0.8875503371196805,
+    "m2_noface": 0.9381122718903352,
+    "m2_abs": 0.9158380140483984,
+    "m2_notime": 0.9597345175994814,
+    "m2": 0.9337935497303738
   },
   "summary": {
     "m0": {
-      "test_macro_f1": 0.4225,
-      "rounds": 109,
+      "test_macro_f1": 0.4153,
+      "rounds": 102,
       "features": 2,
-      "temperature": 0.903
+      "temperature": 0.882
     },
     "m0t": {
-      "test_macro_f1": 0.4899,
-      "rounds": 123,
+      "test_macro_f1": 0.4902,
+      "rounds": 109,
       "features": 7,
-      "temperature": 0.967
+      "temperature": 0.938
     },
     "m1": {
-      "test_macro_f1": 0.5656,
-      "rounds": 75,
+      "test_macro_f1": 0.5868,
+      "rounds": 81,
       "features": 13,
-      "temperature": 0.898
+      "temperature": 0.888
     },
     "m2_noface": {
-      "test_macro_f1": 0.6878,
-      "rounds": 217,
-      "features": 103,
-      "temperature": 0.962
+      "test_macro_f1": 0.6748,
+      "rounds": 151,
+      "features": 94,
+      "temperature": 0.938
     },
-    "m2_noabsdb": {
-      "test_macro_f1": 0.7934,
-      "rounds": 312,
-      "features": 101,
-      "temperature": 0.936
+    "m2_abs": {
+      "test_macro_f1": 0.7878,
+      "rounds": 269,
+      "features": 110,
+      "temperature": 0.916
     },
     "m2_notime": {
-      "test_macro_f1": 0.7795,
-      "rounds": 312,
-      "features": 107,
-      "temperature": 0.95
+      "test_macro_f1": 0.7778,
+      "rounds": 356,
+      "features": 98,
+      "temperature": 0.96
     },
     "m2": {
-      "test_macro_f1": 0.7965,
-      "rounds": 377,
-      "features": 110,
-      "temperature": 0.954
+      "test_macro_f1": 0.7911,
+      "rounds": 261,
+      "features": 101,
+      "temperature": 0.934
     }
   },
-  "trained_at": "2026-10-18 00:15:34",
+  "trained_at": "2026-10-18 15:08:44",
   "modality_dropout": {
     "m0": false,
     "m0t": false,
     "m1": false,
     "m2_noface": false,
-    "m2_noabsdb": true,
+    "m2_abs": true,
     "m2_notime": true,
     "m2": true
   },
   "modality_dropout_rates": {
     "face_hidden": 0.3,
     "face_degraded": 0.2
-  },
-  "modality_dropout_note": "recorded after training: these models were trained by train_ladder.py with face dropout for M2-family models (commit 38b9850 onward); later trainings record it directly"
+  }
 }

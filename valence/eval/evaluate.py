@@ -32,7 +32,8 @@ from valence.sim.legacy import generate_legacy
 
 HISTORY_TICKS = {0: 1, 1: 12, 2: 24, 5: 60, 10: 120, 15: 180}
 LADDER = ["m0", "m0t", "m1", "m2_noface", "m2"]
-VARIANTS = ["m2_noabsdb", "m2_notime"]
+VARIANTS = ["m2_abs", "m2_notime"]
+VENUES_DB = [0, 60, 70, 75]  # hall noise mixed into test sessions (0 = none)
 NEG_STATES = {"Frustrated_Masked", "Exhausted", "Tense", "Overwhelmed"}
 
 
@@ -90,6 +91,25 @@ def degrade_face(df: pd.DataFrame, *, dropout: float = 0.0, extra_sd: float = 0.
     out.loc[people, "face_valence"] = face
     out.loc[people, "face_visible"] = vis
     return out
+
+
+def add_venue(df: pd.DataFrame, venue_db: float) -> pd.DataFrame:
+    """Mix a constant hall level into every room level, including the arrival baseline (incoherent sum)."""
+    if not venue_db:
+        return df
+    out = df.copy()
+    for col in ("ambient_db", "db_p90", "room_db_base"):
+        out[col] = 10.0 * np.log10(np.power(10.0, out[col] / 10.0) + 10.0 ** (venue_db / 10.0))
+    return out
+
+
+def legacy_model(path: Path) -> tuple[lgb.Booster, list[str]] | None:
+    """The previous served M2 (absolute dB/lux, trained without venue variation), if kept for comparison."""
+    meta_path = path / "model_meta.json"
+    if not meta_path.exists():
+        return None
+    meta = json.loads(meta_path.read_text())
+    return lgb.Booster(model_file=str(path / "m2.txt")), meta["feature_sets"]["m2"]
 
 
 def legacy_result(seed: int) -> dict[str, float]:
@@ -208,7 +228,27 @@ def main() -> None:
     style.robustness_chart(rob["face_dropout"], "face_dropout", figs / "robustness_face_dropout.png")
     style.robustness_chart(rob["low_light"], "low_light", figs / "robustness_lux.png")
 
-    # 4) legacy mock data ------------------------------------------------------------------------------
+    # 4) venue shift: Focused misread as negative as the hall gets louder ---------------------------------
+    venue_models = {k: v for k, v in models.items() if k in ("m2", "m2_abs")}
+    legacy = legacy_model(artifacts / "legacy") if meta["state_set"] == "core" else None
+    shift: dict[str, list] = {}
+    for venue in VENUES_DB:
+        Xv, mv = build(add_venue(test_df, venue), step=6, seed=14, fixed_len=180)
+        yv = mv["label"].map(s2i).to_numpy()
+        foc = yv == s2i["Focused"]
+        neg = [s2i[s] for s in NEG_STATES if s in s2i]
+        raws = predict(venue_models, Xv)
+        if legacy is not None:
+            raws["legacy"] = legacy[0].predict(Xv[legacy[1]], raw_score=True, num_threads=1)
+        for n, raw in raws.items():
+            pred = raw.argmax(1)
+            shift.setdefault(n, []).append({"venue_db": venue, "focused_misread_as_negative": round(float(np.isin(pred[foc], neg).mean()), 4),
+                                            "macro_f1": round(float(f1_score(yv, pred, average="macro")), 4)})
+    metrics["venue_shift"] = shift
+    style.venue_chart({n: [(r["venue_db"], r["focused_misread_as_negative"]) for r in rows] for n, rows in shift.items()},
+                      figs / "venue_shift.png")
+
+    # 5) legacy mock data ------------------------------------------------------------------------------
     metrics["legacy_mock"] = legacy_result(meta["seed"])
     metrics["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     metrics["disclosure"] = ("All results are on simulator data generated under the published behavioral assumptions "

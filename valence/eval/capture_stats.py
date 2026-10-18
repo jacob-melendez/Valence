@@ -22,8 +22,13 @@ from valence.runtime.aggregator import Aggregator
 from valence.runtime.recording import iter_obs
 from valence.sim.generator import simulate_corpus
 
-CHANNELS = ["ambient_db", "light_lux", "motion_energy", "posture_slump", "head_in_hands_frac", "clenched_fists_count",
-            "face_valence", "face_visible", "n_people"]
+CHANNELS = ["ambient_db", "db_room", "light_lux", "motion_energy", "posture_slump", "head_in_hands_frac",
+            "clenched_fists_count", "laughter_count", "compliments_count", "face_valence", "face_visible", "n_people"]
+
+
+def with_room_db(df: pd.DataFrame) -> pd.DataFrame:
+    """dB relative to the venue baseline (what the served models see), next to the absolute level."""
+    return df.assign(db_room=df["ambient_db"] - df["room_db_base"])
 
 
 def capture_ticks(path: Path, tick_s: float = 5.0) -> pd.DataFrame:
@@ -36,7 +41,7 @@ def capture_ticks(path: Path, tick_s: float = 5.0) -> pd.DataFrame:
             rows += [r.to_dict() for r in agg.flush(boundary, boundary, 12.0)]
             boundary += tick_s
         agg.push(obs)
-    df = pd.DataFrame(rows)
+    df = with_room_db(pd.DataFrame(rows))
     return df.astype({c: float for c in CHANNELS if c in df}, errors="ignore")
 
 
@@ -52,7 +57,7 @@ def describe(values: pd.Series) -> dict:
 def main() -> None:
     specs = [a.split(":") for a in sys.argv[1:]] or [["data/real/capture_typing.jsonl", "Focused"]]
     sim = simulate_corpus(30, 99)
-    sim_people = sim[sim["person_id"] != 0]
+    sim_people = with_room_db(sim[sim["person_id"] != 0])
     report = {}
     for path, state in specs:
         cap = capture_ticks(Path(path))

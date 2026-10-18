@@ -102,7 +102,14 @@ class Nuisance:
     light_events_per_min: float = 0.5
     light_event_mult: tuple[float, float] = (0.75, 1.3)
     light_event_ticks: tuple[int, int] = (2, 12)
-    lux_range: tuple[float, float] = (120.0, 600.0)  # session baseline, log-uniform
+    lux_range: tuple[float, float] = (100.0, 800.0)  # session baseline, log-uniform
+    # Venue: background noise of the hall around the team (power-summed with the team's own level), drawn
+    # independently of every state, so loudness alone is never evidence of a state. The baseline the room
+    # features are relative to is what an arrival capture would measure: venue + a neutral person.
+    venue_db_range: tuple[float, float] = (40.0, 75.0)
+    neutral_db: float = 48.0  # a neutral occupant's own level (the Focused room target)
+    baseline_db_noise: float = 1.5  # measurement spread of the arrival capture, dB
+    baseline_lux_noise: float = 0.08  # log-lux spread of the arrival capture
     face_hidden_range: tuple[float, float] = (0.0, 0.30)  # per-session share of unreadable ticks
     face_episode_sd: float = 0.12  # between-episode spread of the episode's mean expression
     face_tick_sd: float = 0.03  # live neutral face: tick-to-tick ~0.001-0.01 (baseline-relative median)

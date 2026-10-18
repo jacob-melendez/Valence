@@ -47,6 +47,9 @@ class JsonlFeeder:
 
     def stop(self) -> None:
         self._stop.set()
+        # Join so no stale recorded frame is pushed after the next source re-aligns the frame counters.
+        if self._thread.is_alive() and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2.0)
 
     def _run(self) -> None:
         while not self._stop.is_set():

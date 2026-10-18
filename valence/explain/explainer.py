@@ -21,17 +21,20 @@ def build_layers(
     *,
     tod_h: float | None = None,
     drivers_per_layer: int = 3,
+    absolute: dict[str, float] | None = None,
 ) -> list[Layer]:
     """Sum attributions per layer; keep each layer's strongest narratable drivers.
 
     Positive attribution supports the predicted label, negative opposes it. Layers are ordered by
     contribution, strongest support first; the Facial Surface layer is kept even when it opposes, so
-    a corrected mask stays visible.
+    a corrected mask stays visible. ``absolute`` maps feature names to values for the absolute room levels
+    quoted next to room-relative features (defaults to ``values``).
     """
     per_layer: dict[str, list[Driver]] = defaultdict(list)
     totals: dict[str, float] = defaultdict(float)
+    ref = values if absolute is None else absolute  # absolute levels behind room-relative features
     for feature, shap in contribs.items():
-        desc = describe(feature, values.get(feature), tod_h=tod_h)
+        desc = describe(feature, values.get(feature), tod_h=tod_h, absolute=ref.get(feature.replace("_room", "")))
         if desc is None:
             continue
         totals[desc.layer] += shap
