@@ -32,3 +32,7 @@ negative:        ## negative control on the live typing capture
 	$(PY) -m valence.eval.negative_control data/real/capture_typing*.jsonl --expect Focused
 
 smoke: test scan ## pre-demo check
+
+.PHONY: e2e
+e2e:             ## pre-demo end-to-end check: own replay server, or API=http://127.0.0.1:8000 for a running one
+	$(PY) scripts/e2e_check.py $(if $(API),--api $(API),--start)
