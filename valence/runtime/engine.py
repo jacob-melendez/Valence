@@ -288,8 +288,10 @@ class Runtime:
         for r in records:
             self.window.append(r)
         purge = self.gate.end_tick()
+        # Replayed recordings carry the original capture's frame counter; this process decoded no frames.
+        decoded = self.aggregator.frames_decoded if self.source.label == "live" else purge.purged.get("video", 0)
         self.bus.publish(Governance(
-            t=wall, tick=self._tick_i, frames_decoded=self.aggregator.frames_decoded,
+            t=wall, tick=self._tick_i, frames_decoded=decoded,
             frames_purged=purge.purged.get("video", 0), audio_blocks_purged=purge.purged.get("audio", 0),
             transcripts_purged=purge.transcripts_purged, violations=purge.violations,
             live_raw_buffers=purge.live_raw_buffers, audit_hash=self.audit.last_hash[:16],
