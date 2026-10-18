@@ -47,8 +47,12 @@ def verify_file(path: Path, head: str | None = None) -> Verdict:
     """Recompute the chain over ``path``, like ``AuditLog.verify()``, but say where and why it breaks."""
     prev = GENESIS
     n = 0
-    with Path(path).open(encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
+    with Path(path).open("rb") as f:
+        for lineno, raw in enumerate(f, start=1):
+            try:
+                line = raw.decode("utf-8")
+            except UnicodeDecodeError:  # the log only ever writes UTF-8 JSON: a bad byte is an edit
+                return Verdict(path, False, n, lineno, "not valid UTF-8", prev)
             if not line.strip():
                 continue  # AuditLog.entries() skips blank lines too
             try:
@@ -100,8 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     paths = args.paths or [os.environ.get("VALENCE_AUDIT_DIR", "var/audit")]
     files, errors = collect(paths)
-    if args.head is not None:
-        head = args.head.strip().lower()
+    head = None if args.head is None else args.head.strip().lower()
+    if head is not None:
         if len(head) < 16 or any(c not in "0123456789abcdef" for c in head):
             errors.append("--head must be at least 16 hex characters")
         elif len(files) != 1:
@@ -111,21 +115,22 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         return 2
 
-    tampered = 0
+    tampered = unreadable = 0
     for path in files:
         try:
-            v = verify_file(path, args.head)
-        except (OSError, UnicodeDecodeError) as exc:
+            v = verify_file(path, head)
+        except OSError as exc:  # keep checking the other files
             print(f"ERROR {path}: {exc}", file=sys.stderr)
-            return 2
+            unreadable += 1
+            continue
         if v.ok:
             print(f"OK       {path}: {v.entries} entries checked, chain intact (head {v.head[:16]})")
         else:
             tampered += 1
             at = f"line {v.line}" if v.line else "end of file"
             print(f"TAMPERED {path}: {at}: {v.reason}; {v.entries} entries verified before it")
-    print(f"{len(files) - tampered}/{len(files)} audit file(s) intact")
-    return 1 if tampered else 0
+    print(f"{len(files) - tampered - unreadable}/{len(files)} audit file(s) intact")
+    return 1 if tampered else 2 if unreadable else 0
 
 
 if __name__ == "__main__":
