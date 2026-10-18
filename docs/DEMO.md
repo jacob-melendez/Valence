@@ -50,7 +50,7 @@ A=http://127.0.0.1:8000; R=http://127.0.0.1:8001; J='content-type: application/j
 | T-24 | **Room baseline** (table below), after the T-26 recalibration: still sitting neutral, run `curl -s -X POST $A/api/room/baseline -H "$J" -d '{"seconds": 90}'`, then stay neutral and quiet for 90 s (no noise source yet). Check `curl -s $A/api/room/baseline \| jq '{mode, complete, db_median, db_iqr, lux_median}'` says `"mode": "captured"` before judging. |
 | T-22 | **T4 replay API:** `VALENCE_MODE=replay VALENCE_SCENARIO=context_blindness VALENCE_SPEED=20 .venv/bin/python -m uvicorn valence.api.app:app --port 8001`. **T5:** `.venv/bin/python scripts/console.py --url ws://127.0.0.1:8001/ws/events`. |
 | T-21 | **T6 frontend:** `cd frontend && npm run dev`. Set its backend URL to `http://127.0.0.1:8000`; `localhost` can resolve to `::1` and fail. |
-| T-20 | **Wi-Fi off.** Check `curl -s $A/api/state \| jq .status.offline` returns `true`. That field only checks the env vars, so also check the radio icon and `lsof -nP -p $(pgrep -f 'app:app --port 8000')`: network entries should be loopback only (`127.0.0.1:8000`, its local clients, connections to `:8081`). |
+| T-20 | **Wi-Fi off.** Check `curl -s $A/api/state \| jq .status.offline` returns `true`. It is true only when the offline env vars are set and an outbound probe fails; `curl -s $A/api/health | jq .network` should show `sandboxed: true` (launched by `run_demo.sh`). Also check `lsof -nP -p $(pgrep -f 'app:app --port 8000')`: network entries should be loopback only (`127.0.0.1:8000`, its local clients, connections to `:8081`). |
 | T-19…T-3 | The window fills (180 ticks × 5 s = 15 min from T-28). Run the §7 checklist. Pre-open the 4 pitch charts from `reports/figs/` in Preview, in pitch order: `accuracy_vs_history`, `confusion_m0_vs_m2`, `robustness_face_dropout`, `robustness_lux` (and `venue_shift` for the loud-hall question, §6). |
 | T-3 | **Start the masked act:** noise from a phone or speaker at about 65–70 dB at the desk, a smile, and fist clenches (details in §3). |
 
@@ -234,11 +234,13 @@ curl -s -X POST $A/api/demo/reset                                           # fo
    - Edge: 45–57 ms/frame at 10.0 Hz live; YOLO 20.7 ms p50 live (`docs/BENCHMARKS.md`).
    - Labels update per 5 s tick with EMA and 2-tick hysteresis, so they lag behavior by design.
      `status.loop_latency_ms` shows the tick cost.
-   - Narrator: Qwen3-1.7B took 536 ms for 55 tokens in the standalone LLM spike (`docs/BENCHMARKS.md`). The p95
-     with YOLO running is not measured,
-     and the 2.5 s deadline falls back to the template.
+   - Narrator: the shipped LoRA narrator's p95 is 1904 ms with YOLO running (300-sheet A/B, `docs/NARRATOR.md`),
+     under the 2.5 s deadline; past it, the explanation falls back to the template.
 9. **"What leaves the device?"**
-   - Nothing. Both services bind to loopback, the offline vars are set, and the demo runs with Wi-Fi off.
+   - No camera, mic or feature data. Both services bind to loopback and `run_demo.sh` runs them in a macOS sandbox that
+     denies outbound network. We found that MediaPipe embeds usage telemetry to Google with no opt-out; the sandbox
+     blocks it, and `status.offline` reports a live outbound probe. Don't say "fully offline" unless the Wi-Fi-off
+     rehearsal was done.
    - No endpoint accepts images or audio. The WebSocket carries normalized boxes, labels and numbers, never
      pixels or keypoints.
    - Caveats: no authentication, `/ws/events` does not check `Origin`, and the frontend's camera preview is the
@@ -290,7 +292,7 @@ curl -s -X POST $A/api/demo/reset                                           # fo
 | `--obscure-face` is a CLI flag of `python -m valence.edge.run` only. The API starts the edge with `obscure_face=False` and has no endpoint or env var for it. | Live proof 3 uses `POST /api/sim/face_occlusion` (SIMULATED) or a sheet of paper held in front of the face (keep your hands away from your head, or head-in-hands fires). Running the CLI alongside `make live` opens the camera twice. |
 | `scripts/e2e_check.py`, `scripts/mem_soak.py`, `scripts/audit_verify.py`, hybrid mode | Not built. No 60-min soak or memory chart exists. |
 | 2-point lux fit and noise floor in `/api/calibrate/room` | Not built (one-point lux, additive dB only). |
-| Narrator p95 with YOLO running, LoRA | Not measured / not shipped (`--adapter` exists, no adapter is shipped). The prompt-only narrator (strict fact sheet, driver-bound validator, cached prompt prefix; `c61bed2`) or the template is what runs. |
+| Narrator p95 with YOLO running, LoRA | Measured and shipped: p95 1904 ms with YOLO running, first-try pass 93.3% vs 75.3% prompt-only (300 sheets, `docs/NARRATOR.md`, `engine.SHIP = "lora"`). On the room-relative wording, first-try pass is 87.3% (NARRATOR.md); the validator and template fallback still guard every number. |
 | Negative control (`make negative`) | Passes on the served `8a78efc7`: Focused on 25/25 non-warm-up ticks of `data/real/capture_typing.jsonl` (cloud, 2026-10-18, corrected replay clock), but in-sample: the simulator was refit to that capture run. The run-2 keyboard-gaze capture (not used for the refit) also reads Focused 25/25, same person and desk. With the corrected replay clock (MODEL_CARD §5), the cued-fists capture reads Focused on 24/25 ticks (Upbeat on 1), so fists alone do not make the flip: rehearse the full masked act (noise, smile and fists) and confirm on a `golden_demo` replay. Re-run after any retrain and quote only the latest result. |
 | Forced smile not confirmed live | No sustained forced-smile capture exists. In capture run 3 the one laugh tick read face valence 0.977 (other ticks 0.03–0.07), and M0 reads Collaborative with probability ≥ 0.5 from 0.4 up, so a sustained broad smile should drive the override, but a live MASK OVERRIDE is unconfirmed: keep the `frustrated_masked` replay ready (§3). |
 | Acting Exhausted live by slumping | The cued-slump capture (run 2) reads Focused on 26/26 ticks: intermittent slumping is not exhaustion, and a held slump moves ~0.10 sw/s live (head keypoints jitter), far from the simulated ~0.012, so withdrawal (motion ≤ 0.02 sw/s) is unlikely to fire. Show Exhausted by replay (`exhausted`, `context_blindness`), not live. |

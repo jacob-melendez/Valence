@@ -8,7 +8,7 @@ follows its §4.
 > 2. Masked frustration caught **68% vs 11%**; Focused misread **18% vs 56%** (simulated) `[H2]` `[H3]`.
 > 3. It **is** emotion recognition in the Act's sense; the opt-in is "a data-protection courtesy, not an Art. 5(1)(f) exemption".
 > 4. Raw media is never written; the decision log is deleted at session end `[G4]` `[G10]`.
-> 5. "**Sandboxed, no outbound network**" (we blocked MediaPipe's telemetry), never "fully offline" `[P13]`.
+> 5. "**Sandboxed, no outbound network**" (we found and blocked MediaPipe's telemetry), never "fully offline" `[P13]`.
 > 6. Real data: one person, every capture so far reads Focused. Demographics not validated. Not clinical.
 
 ## Legality and ethics
@@ -27,8 +27,7 @@ prohibition applied, consent would not lift it."
 *Avoid:* "consent makes it legal".
 
 **3. "Is this surveillance?"**
-It's built against it: no identity, no embeddings or matching, ephemeral ids, frames dropped after feature
-extraction. "Not for employers, schools, proctoring or productivity scoring." The timeline is "pseudonymous, not
+Built against it: no identity, embeddings or matching; ephemeral ids; frames dropped after feature extraction. "Not for employers, schools, proctoring or productivity scoring." The timeline is "pseudonymous, not
 anonymous", so it stays in RAM and is deleted.
 *Avoid:* "anonymous"; "room-only mode makes work use OK": "It reduces exposure; it does not make workplace or
 classroom use lawful." `[G9]`
@@ -36,14 +35,14 @@ classroom use lawful." `[G9]`
 ## Validity
 
 **4. "How do you know it works on real people?"**
-We don't yet; it's our first limit. Trained and scored on simulated data only; real-data checks are one person at
+Not yet; it's our first limit. Trained and scored on simulated data only; real-data checks are one person at
 one desk, about 25 ticks each, and every capture so far reads Focused.
 *Proof:* typing 25/25, in-sample `[D1]`; fists alone 24/25 `[D2]`; cued slump 26/26 (`docs/MODEL_CARD.md` §5).
 *Avoid:* "real data validates it"; "the live demo proves accuracy" `[D11]`.
 
 **5. "You wrote the simulator. Doesn't context win by construction?"**
-Partly, and the results slides say so. The assumptions are published, the noise knob stayed untuned at 1.0 for face
-and context alike, and context still loses to the face in a new state's first 30 seconds. We dropped the original
+Partly; every results slide says so. The assumptions are published, the one noise knob stayed untuned at 1.0
+across face and context, and context still loses to the face in a new state's first 30 seconds. We dropped the original
 mock because context alone scored 100%.
 *Proof:* 32.8% vs 44.3% `[E1]`; `[LM1]`. Sensitivity sweep not done.
 
@@ -68,27 +67,27 @@ decoded equal frames purged, zero violations.
 *Avoid:* replay counters as proof `[G2]`; the scan is a lint, not a proof.
 
 **9. "Does anything leave the laptop?"**
-The API, which owns camera and mic, and the narrator run in a macOS sandbox denying outbound network except
-loopback. That's how we caught MediaPipe's built-in telemetry: unsandboxed, 4 HTTPS connections to Google;
+The launcher runs the API, which owns camera and mic, and the narrator in a macOS sandbox that denies outbound
+network except loopback. That's how we caught MediaPipe's built-in telemetry: unsandboxed, 4 HTTPS connections to Google;
 sandboxed, none.
 *Proof:* `docs/BENCHMARKS.md` "Live demo smoke".
 *Avoid:* "fully offline", "Wi-Fi off" `[P13]`. Outside the launcher, the gap reopens.
 
 **10. "`del frame` isn't erasure."**
-Agreed. Every frame and audio block is zero-filled in place after features are extracted; any survivor at tick end
-is a violation. Copies inside native libraries, like GPU caches, are out of reach, and documented.
+Agreed: every frame and audio block is zero-filled in place after feature extraction, and survivors count as
+violations. Copies inside native libraries, like GPU caches, are out of reach; we document that.
 *Proof:* `[G1]`, `docs/GOVERNANCE.md` §3.5. *Avoid:* "frames are erased everywhere".
 
 **11. "Isn't the emotion log the sensitive part?"**
 Yes: inferred states "may count as health data (Art. 9); Valence treats them as sensitive." The log holds labels,
-confidences and layer sums, no text or arrays, hash-chained, deleted at session end.
+confidences and layer sums, no transcripts or arrays, hash-chained, deleted at session end.
 *Proof:* `[G3]`; 24 h crash backstop, unlink is not a secure erase `[G4]`. *Avoid:* "tamper-proof"; say "tamper-evident".
 
 ## Model
 
 **12. "Why LightGBM?"**
 101 tabular features, often with the face or mic missing: boosted trees handle missing values natively, run on one
-laptop thread, and give exact TreeSHAP attributions that we sum into four layers.
+laptop thread, and give exact TreeSHAP attributions, summed into four layers.
 *Proof:* a GRU-with-attention benchmark scored 0.759, below LightGBM at every history length (simulated; likely under-trained) `[L7]`.
 
 **13. "Why not a bigger model, or a better face model?"**
@@ -136,13 +135,13 @@ atypical affect; the simulator assumes an exact neutral baseline. Not clinical e
 Its drafts can, so they aren't trusted. A small local LLM sees only the fact sheet, never pixels; a validator checks
 every number, state and driver, and failures fall back to a template within 2.5 s.
 *Proof:* first try 93.3% vs 75.3% `[P6]` (300 sheets, ±3 points); 0 invented numbers in raw attempts `[P7]`; p95 1.9 s, AC power `[P8]`.
-*Avoid:* "it can't make things up" (room-relative wording: raw invented-number rate 0.009, `docs/NARRATOR.md`); say "passes our validator".
+*Avoid:* "it can't make things up" (newer wording: 0.009 raw invented-number rate, `docs/NARRATOR.md`); say "passes our validator".
 
 ## Product and next steps
 
 **21. "Who is this for?"**
-Consented self-monitoring outside work and education: your laptop, your data, a reason for every call. Others should
-copy the pattern: features-only boundary, purge counters, hash-chained log, sandbox.
+Consented self-monitoring outside work and education: your laptop, your data, a reason for every call. The reusable
+part: features-only boundary, purge counters, hash-chained log, sandbox.
 *Avoid:* employers, schools, proctoring, productivity scoring.
 
 **22. "What's next?"**
