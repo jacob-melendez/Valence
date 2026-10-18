@@ -219,9 +219,8 @@ It is sent every tick per person, just before the `prediction` for the same tick
 | `source` | string | Provenance of this person's latest tick (section 6) |
 | `simulated_fields` | string[] | Simulated or operator-set data inside this window (section 6) |
 
-"Near-field" means a laughter or compliment event counts only if its audio block is at least
-`settings.near_field_db` (6 dB) above the room's running median, so the next table in a loud hall does not
-count.
+"Near-field" means a laughter or compliment event counts only if the loudest of the last 3 audio blocks (recognizers report a phrase 0-2 blocks after it ends) is at least `settings.near_field_db` (3 dB) above the venue room baseline, or before the baseline is complete, the room's 15-minute median. The edge also requires each phrase
+to be at least 4 dB above its 30 s room floor, so crowd-level speech from the next table does not count.
 
 ```json
 {"type": "state_vector", "t": 1792276800.0, "person_id": 1, "ambient_db": 72.4, "light_lux": 210.0, "hours_since_break": 4.2, "time_of_day": "15:40", "clenched_fists_5m": 3, "compliments_15m": 0, "laughter_15m": 0, "posture_slump": 0.35, "head_in_hands": 0.0, "social_withdrawal": 0, "face_visible": true, "facial_valence": 0.62, "window_fill_min": 12.5, "source": "live", "simulated_fields": []}
@@ -977,7 +976,9 @@ The venue room baseline. The served models never see absolute dB or lux: they re
 baseline* (`db_room_*` = dB above it, `lux_room_*` = log2 of the light ratio), so a loud hall is "this room's
 normal" instead of evidence of a loud, frustrated room. Explanations still quote the absolute level ("average
 noise of 72 dB over the last 5 minutes, 6 dB above this room's baseline"). Near-field gating of laughter and
-compliments uses it too (an event counts only `near_field_db` = 6 dB above the baseline).
+compliments uses it too (an event counts when the loudest of the last 3 blocks is `near_field_db` = 3 dB above the
+baseline). When the room's last 5 minutes drift more than 12 dB or a factor of 2 in light from the baseline, `status.degraded`
+shows `room_drift` and `GET /api/room/baseline` reports `drift_db`, `drift_lux_log2` and `drifted`: re-capture it.
 
 On arrival at the venue, with the person sitting neutral at the desk, start a capture:
 

@@ -23,6 +23,10 @@ from valence.features.spec import withdrawal_flag
 
 ROOM = 0
 NEAR_FIELD_MIN_BLOCKS = 10
+NEAR_FIELD_BLOCKS = 3  # speech recognizers report a phrase 0-2 blocks after it ends: gate on the loudest recent block
+DRIFT_WINDOW_S = 300.0
+DRIFT_DB = 12.0  # room 5-min median this far above/below the baseline -> "re-capture the baseline"
+DRIFT_LUX_LOG2 = 1.0  # light halved or doubled
 
 
 @dataclass
@@ -124,6 +128,9 @@ class Aggregator:
         self.last_video_t = 0.0
         self.last_audio_t = 0.0
         self.baseline = RoomBaseline(target=int(settings.room_baseline_s))
+        self._lux_sample_t = -math.inf
+        self._lux_hist: deque[tuple[float, float]] = deque()  # (t, lux) at ~1 Hz for the drift check
+        self._recent_db: deque[float] = deque(maxlen=NEAR_FIELD_BLOCKS)
 
     def _reset_tick(self) -> None:
         self._acc: dict[int, _PersonAcc] = {}
@@ -154,7 +161,12 @@ class Aggregator:
         self.last_video_t = time.monotonic()
         if not math.isnan(obs.lux):
             self._lux, self._lux_quality = obs.lux * self.lux_scale, obs.lux_quality
-            self.baseline.add_lux(self._lux)
+            if obs.t - self._lux_sample_t >= 1.0:  # lux arrives per video frame; the baseline wants ~1 sample/s
+                self._lux_sample_t = obs.t
+                self.baseline.add_lux(self._lux)
+                self._lux_hist.append((obs.t, self._lux))
+                while self._lux_hist and self._lux_hist[0][0] < obs.t - DRIFT_WINDOW_S:
+                    self._lux_hist.popleft()
         self._max_people = max(self._max_people, len(obs.persons))
         boxes = {}
         for p in obs.persons:
@@ -181,8 +193,9 @@ class Aggregator:
             obs = replace(obs, db_spl=obs.db_spl + self.db_correction) if self.db_correction else obs
             self._db.append(obs.db_spl)
             self.baseline.add_db(obs.db_spl)
+            self._recent_db.append(obs.db_spl)
         if obs.laughter_onsets or obs.compliment_hits:
-            if self._near_field(obs.db_spl):
+            if self._near_field(max(self._recent_db, default=obs.db_spl)):
                 self._laugh += obs.laughter_onsets
                 self._compl += obs.compliment_hits
             else:
@@ -211,7 +224,24 @@ class Aggregator:
 
     def baseline_status(self) -> dict:
         with self._lock:
-            return self.baseline.snapshot()
+            return {**self.baseline.snapshot(), **self._drift_locked()}
+
+    def _drift_locked(self) -> dict:
+        """How far the room's last 5 minutes sit from the baseline (None until both exist)."""
+        out: dict = {"drift_db": None, "drift_lux_log2": None, "drifted": False}
+        if not self.baseline.complete:
+            return out
+        if self._block_db:
+            t_end = self._block_db[-1][0]
+            recent = [v for t, v in self._block_db if t >= t_end - DRIFT_WINDOW_S]
+            out["drift_db"] = round(statistics.median(recent) - self.baseline.db_base, 1)
+        base_lux = self.baseline.lux_base
+        if self._lux_hist and base_lux > 0:
+            med = statistics.median(v for _, v in self._lux_hist)
+            out["drift_lux_log2"] = round(math.log2(med / base_lux), 2) if med > 0 else None
+        out["drifted"] = bool((out["drift_db"] is not None and abs(out["drift_db"]) > DRIFT_DB)
+                              or (out["drift_lux_log2"] is not None and abs(out["drift_lux_log2"]) > DRIFT_LUX_LOG2))
+        return out
 
     # --- break clock ------------------------------------------------------------------------------
     def _seen(self, pid: int, wall: float) -> None:

@@ -166,6 +166,8 @@ def status(a: App) -> Status:
         degraded.append("edge")
     if rt._gap_ticks >= 3:
         degraded.append("purge_gap")
+    if rt.mode == "live" and rt.aggregator.baseline_status()["drifted"]:
+        degraded.append("room_drift")  # re-capture the room baseline (POST /api/room/baseline)
     stats = gate.stats()
     return Status(
         mode=rt.mode if rt.mode in ("live", "replay", "hybrid") else "replay", camera=camera, mic=mic,

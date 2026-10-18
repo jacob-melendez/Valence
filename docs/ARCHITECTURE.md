@@ -50,7 +50,7 @@ Every value can be overridden with a `VALENCE_<NAME>` environment variable.
 | `break_absent_min` | 10.0 | Absence that counts as a break (about 0.5 for demos) |
 | `person_drop_min` | 15.0 | Unobserved person slot is dropped after this long |
 | `db_cal_offset` | 94.0 | dBFS to approximate dB SPL until room calibration replaces it |
-| `near_field_db` | 6.0 | Laughter and compliments count only at the venue room baseline + 6 dB or louder (before the baseline is complete, the 15-min room median + 6 dB) |
+| `near_field_db` | 3.0 | Laughter and compliments count only when the loudest of the last 3 blocks reaches the venue room baseline + 3 dB (before the baseline is complete, the 15-min room median + 6 dB) |
 | `room_baseline_s` | 90.0 | Samples per channel (~1 per second) for the automatic venue room baseline (section 6.1) |
 | `state_set` | `core` | `core` (4 states) or `all` (6 states) |
 | `artifacts_dir` | `artifacts` | Model artifacts; `artifacts/all` holds the 6-state models, `artifacts/legacy` the previous served M2 (rollback) |
@@ -320,9 +320,7 @@ it. It is held in RAM as constants only and audited as `room_baseline`, `room_ba
 `room_baseline_reset`. `POST /api/calibrate/room` afterwards shifts the collected samples into the new units.
 Details: `docs/API.md` §7.4.12.
 
-**Near-field gate.** An audio step's laughter and compliment counts are kept only if that step's `db_spl` is
-at least the venue baseline plus `near_field_db` (6 dB) once the baseline is complete, and before that the room's
-15-minute median plus 6 dB. This counts laughter and praise at the desk, not from the next table in a loud hall.
+**Near-field gate.** An audio step's laughter and compliment counts are kept only if the loudest of the last 3 audio blocks (recognizers report a phrase 0-2 blocks after it ends) is at least `settings.near_field_db` (3 dB) above the venue room baseline, or before the baseline is complete, the room's 15-minute median. This counts laughter and praise at the desk, not from the next table in a loud hall.
 Perception emits raw counts; gating happens only here.
 
 **Break clock.** One presence-based clock per person (implemented in `aggregator.py`, and the same rule the

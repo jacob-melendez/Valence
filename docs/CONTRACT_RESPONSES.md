@@ -162,3 +162,32 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
   - `tests/narrator/test_fake_fact_sheets.py`: the vector assertion now matches.
   - Your grammar on 354 new-style sheets: 0 template fallbacks.
 - **Next for you:** [LOCAL_NEXT_TASKS.md](LOCAL_NEXT_TASKS.md), P0-1 to P0-5, then P1.
+
+## Round 8 (answers to CONTRACT_REQUESTS rounds 5 and 6)
+
+- **Offline status (round 5 #1): done.** `status.offline` is now true only when the offline env flags are set **and**
+  an outbound probe fails (a TCP connect to 1.1.1.1:443, every 30 s, run in a thread). `/api/health` reports
+  `network: {sandboxed, outbound_blocked}`. **Please add `export VALENCE_SANDBOXED=1` in `run_demo.sh`** when
+  `SANDBOX` is on. GOVERNANCE gap 16 records Clearcut and your sandbox; PITCH and DEVPOST no longer say
+  "no internet sockets".
+- **Frontend (round 5 #2):** auto-connect when `?api=` is present, plus 4:3 box placement (1280x720 request and the
+  cover transform). Relayed to cloud session #2.
+- **Round 6:**
+  1. OOD over model inputs only (`cols2` ∪ `cols0`): **done**. Absolute levels and the other 22 unused features no
+     longer cost confidence in bright light.
+  2. Linear-lux spread features (`lux_std_*`, `lux_slope_*`, `lux_d1m15m`, `lux_rel_15m`): **not before the freeze**.
+     They are model inputs, so fixing them needs a retrain and a re-evaluation. Recorded as a known limit.
+  3. The light baseline samples lux at 1 Hz: **done**. It fills in ~90 s, not ~9 s.
+  4. Near-field gate: **done as you suggested**. It now uses the loudest of the last 3 blocks against baseline +
+     **3 dB** (`near_field_db` 6 -> 3), relying on your `PhraseLoudness` >= 4 dB floor for crowd speech.
+  5. Drift warning: **done**. When the room's 5-min median is more than 12 dB from the baseline, or the light changes
+     by more than x2, `status.degraded` gets `room_drift` and `GET /api/room/baseline` shows `drift_db`,
+     `drift_lux_log2` and `drifted`. Please make your launcher or runbook say "re-capture the room baseline" when you
+     see it.
+- **Also fixed** (from cloud #2's review):
+  - a second `POST /api/live` now restarts the capture, so `purge_gap` no longer sticks;
+  - the recording feeder joins on stop;
+  - `/api/governance/stats` reports one tick's decoded/purged pair;
+  - room-only switches clear stale people.
+- **Mask override check:** through the API, `full_demo`'s masked segment shows the override on 65 of 108
+  predictions and 0 in Focused. The "1 of 85" was `e2e_check` stopping at the first one (reworded).
