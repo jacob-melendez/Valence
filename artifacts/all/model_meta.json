@@ -589,7 +589,7 @@
   "temperatures": {
     "m0": 0.9414468091452404,
     "m2_noface": 0.9482286266444622,
-    "m2": 0.9764510086945583
+    "m2": 0.9602541341164699
   },
   "summary": {
     "m0": {
@@ -605,11 +605,11 @@
       "temperature": 0.948
     },
     "m2": {
-      "test_macro_f1": 0.7756,
-      "rounds": 192,
+      "test_macro_f1": 0.7682,
+      "rounds": 247,
       "features": 110,
-      "temperature": 0.976
+      "temperature": 0.96
     }
   },
-  "trained_at": "2026-10-18 00:06:33"
+  "trained_at": "2026-10-18 00:23:40"
 }

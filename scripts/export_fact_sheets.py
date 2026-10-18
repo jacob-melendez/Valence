@@ -34,6 +34,9 @@ class Capture:
     def request(self, sheet, person_id) -> None:
         self.sheets.append(sheet)
 
+    def clear_cache(self) -> None:  # NarratorClient interface; nothing cached here
+        pass
+
 
 def face_condition(sheet) -> str:
     if not sheet.face_visible or sheet.face_only.label is None:
