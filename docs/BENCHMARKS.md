@@ -174,3 +174,20 @@ matches its 1.000 s row. B' gives the 1.000 s row above at 0.98, 0.999, 1.000 an
 `active` for about 2 s after a laugh ends, and onset latency does not change. (The old rule's double count is also
 cadence-dependent: its re-onset 4 blocks later only cleared the 4 s refractory when the blocks were at least 1.000 s apart.)
 The first probe laugh phase (6-11) scored 0.00 every second, so no debouncer can count it. That miss is in the detector.
+
+## Live demo smoke (P0-1, 2026-10-18, `FRONTEND=1 /bin/bash scripts/spikes/run_demo.sh`)
+
+| | unsandboxed | sandboxed (`valence_offline.sb`, default now) |
+|---|---|---|
+| edge / mic | up / up | up / up |
+| video FPS | 10.0 | 10.2 |
+| predictions / explanations in 90 s | 18 / 5 (llm 3, retry 1, template 1) | 34 / 10 (llm 9, retry 1) |
+| frames_decoded = frames_purged, purge_gap, violations | 1950 = 1950, 0, 0 | 1099 = 1099, 0, 0 |
+| venue baseline step | captured 42.1 dB / 309 lux | skipped (BASELINE=0) |
+| **external network from the API process** | **4 established HTTPS connections to Google** (MediaPipe Clearcut) | **none established**; a one-time startup burst of 64 unconnected sockets (refused with EPERM) was gone 2 min later; fds flat at 379 |
+
+MediaPipe 1.1.1 (also 1.0.0 and 0.10.35) embeds `ClearcutLoggingClient` posting usage logs to
+`https://play.googleapis.com/log`, with no opt-out. `run_demo.sh` therefore runs the narrator and the API under
+`sandbox-exec -f scripts/spikes/valence_offline.sb` (deny network-outbound except loopback). Camera, mic, MPS, MLX and
+the localhost API/narrator/WebSocket traffic all work inside it. The frontend dev server is not sandboxed (it never
+sees camera or mic data).
