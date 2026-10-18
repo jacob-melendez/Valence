@@ -24,7 +24,7 @@ from sklearn.metrics import f1_score
 
 from valence.contracts import STATE_SETS
 from valence.features.build_dataset import build
-from valence.features.compute import FEATURE_NAMES, FEATURE_SETS
+from valence.features.compute import FACE_FEATURES, FEATURE_NAMES, FEATURE_SETS
 from valence.sim.generator import simulate_corpus
 
 PARAMS = dict(objective="multiclass", learning_rate=0.05, num_leaves=31, min_data_in_leaf=100,
@@ -56,11 +56,38 @@ def class_weights(y: np.ndarray, k: int) -> np.ndarray:
     return w[y]
 
 
+FACE_MEANS = ["face_now", "face_mean_1m", "face_mean_5m", "face_mean_15m"]
+FACE_VIS = ["face_visible_now", "face_visible_frac_5m"]
+
+
+def face_dropout(X: pd.DataFrame, y: np.ndarray, seed: int, hidden: float = 0.30, degraded: float = 0.20):
+    """Modality dropout: extra training copies with the face block missing or degraded (low light).
+
+    Context + face models otherwise rarely see fully hidden or noisy faces and lean on the face; with these
+    copies they learn to fall back to context when face evidence is gone (proof 3).
+    """
+    rng = np.random.default_rng(seed)
+    n = len(X)
+    hid = X.iloc[rng.choice(n, int(hidden * n), replace=False)].copy()
+    hid[FACE_MEANS + ["face_std_5m"]] = np.nan
+    hid[FACE_VIS] = 0.0
+    deg = X.iloc[rng.choice(n, int(degraded * n), replace=False)].copy()
+    for c in FACE_MEANS:
+        deg[c] = np.clip(deg[c] + rng.normal(0, 0.25, len(deg)), -1, 1)
+    deg["face_std_5m"] = deg["face_std_5m"] + 0.2
+    deg[FACE_VIS] = deg[FACE_VIS].to_numpy() * rng.uniform(0.3, 0.8, (len(deg), 1))
+    y_h = y[X.index.get_indexer(hid.index)]  # labels follow their source rows
+    y_d = y[X.index.get_indexer(deg.index)]
+    return pd.concat([X, hid, deg], ignore_index=True), np.concatenate([y, y_h, y_d])
+
+
 def train_one(X: pd.DataFrame, y: np.ndarray, split: Split, cols: list[str], k: int,
-              rounds: int = 800, params: dict | None = None) -> lgb.Booster:
+              rounds: int = 800, params: dict | None = None, augment_face: bool = False) -> lgb.Booster:
     p = {**PARAMS, **(params or {}), "num_class": k}
-    dtrain = lgb.Dataset(X.loc[split.train, cols], y[split.train], weight=class_weights(y[split.train], k),
-                         free_raw_data=False)
+    Xt, yt = X.loc[split.train].reset_index(drop=True), y[split.train]
+    if augment_face:
+        Xt, yt = face_dropout(Xt, yt, seed=p["seed"])
+    dtrain = lgb.Dataset(Xt[cols], yt, weight=class_weights(yt, k), free_raw_data=False)
     dval = lgb.Dataset(X.loc[split.early, cols], y[split.early], reference=dtrain)
     return lgb.train(p, dtrain, num_boost_round=rounds, valid_sets=[dval],
                      callbacks=[lgb.early_stopping(50, verbose=False)])
@@ -117,7 +144,8 @@ def main() -> None:
     for name in args.models.split(","):
         cols = FEATURE_SETS[name]
         t1 = time.time()
-        booster = train_one(X, y, split, cols, k)
+        uses_face = name.startswith("m2") and bool(set(cols) & set(FACE_FEATURES))
+        booster = train_one(X, y, split, cols, k, augment_face=uses_face)
         temps[name] = fit_temperature(booster.predict(X.loc[split.calib, cols], raw_score=True), y[split.calib])
         booster.save_model(str(out / f"{name}.txt"))
         summary[name] = {"test_macro_f1": round(macro_f1(booster, X.loc[split.test], y[split.test], cols), 4),

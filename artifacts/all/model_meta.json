@@ -159,8 +159,6 @@
     "m2_noface": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -176,8 +174,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -266,8 +262,6 @@
       "fill_ratio"
     ],
     "m2_noabsdb": [
-      "db_std_1m",
-      "db_slope_1m",
       "db_std_5m",
       "db_slope_5m",
       "db_std_15m",
@@ -276,8 +270,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -375,8 +367,6 @@
     "m2_notime": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -392,8 +382,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -488,8 +476,6 @@
     "m2": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -505,8 +491,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -603,29 +587,29 @@
     ]
   },
   "temperatures": {
-    "m0": 1.0062002883140628,
-    "m2_noface": 0.9975155271839212,
-    "m2": 0.9840537905350023
+    "m0": 0.9414468091452404,
+    "m2_noface": 0.9482286266444622,
+    "m2": 0.9764510086945583
   },
   "summary": {
     "m0": {
-      "test_macro_f1": 0.3341,
-      "rounds": 94,
+      "test_macro_f1": 0.4614,
+      "rounds": 99,
       "features": 2,
-      "temperature": 1.006
+      "temperature": 0.941
     },
     "m2_noface": {
-      "test_macro_f1": 0.6936,
-      "rounds": 313,
-      "features": 107,
-      "temperature": 0.998
+      "test_macro_f1": 0.5732,
+      "rounds": 110,
+      "features": 103,
+      "temperature": 0.948
     },
     "m2": {
-      "test_macro_f1": 0.7861,
-      "rounds": 206,
-      "features": 114,
-      "temperature": 0.984
+      "test_macro_f1": 0.7756,
+      "rounds": 192,
+      "features": 110,
+      "temperature": 0.976
     }
   },
-  "trained_at": "2026-10-17 23:31:36"
+  "trained_at": "2026-10-18 00:06:33"
 }

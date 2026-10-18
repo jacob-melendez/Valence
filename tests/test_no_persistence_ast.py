@@ -42,3 +42,18 @@ def test_reads_are_allowed():
 def test_repository_has_no_persistence_in_raw_media_paths():
     violations = scan_repo(REPO)
     assert violations == [], "\n".join(map(str, violations))
+
+
+def test_scanner_catches_aliases_low_level_writes_and_copies():
+    src = (
+        "from cv2 import imwrite as w\n"
+        "from numpy import save\n"
+        "import os, shutil\n"
+        "w('x.png', frame)\n"
+        "save('f.npy', frame)\n"
+        "os.write(fd, frame.tobytes())\n"
+        "f = os.fdopen(fd, 'wb')\n"
+        "shutil.copy('a', 'b')\n"
+    )
+    found = scan_source(src, "perception/x.py", allow_text_writes=False)
+    assert [v.line for v in found] == [4, 5, 6, 7, 8], [str(v) for v in found]

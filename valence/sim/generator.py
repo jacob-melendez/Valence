@@ -85,6 +85,8 @@ class _Person:
         self.lag = None  # lagged behavior vector
         self.slump_on = 0
         self.hih_on = 0
+        self.log_motion: float | None = None
+        self.still = 0
         self.burst = 1.0
         self.episode_hidden: float | None = None
 
@@ -208,6 +210,10 @@ def simulate_session(
 
     room_db = EMPTY_ROOM_DB
     room_lux_mult = 1.0
+    db_drift = 0.0
+    lux_drift = 0.0
+    sound_bump, sound_left = 0.0, 0
+    light_mult, light_left = 1.0, 0
     rows: list[dict[str, Any]] = []
     for t in range(n_ticks):
         # 1) hidden states
@@ -246,12 +252,30 @@ def simulate_session(
         compl_rate = sum(b["compl_rate"] for b in behaviors) + FP["compl_per_min"]
         laughs = int(rng.poisson(laugh_rate / TICKS_PER_MIN)) if audio_ok else 0
         compls = int(rng.poisson(compl_rate / TICKS_PER_MIN)) if audio_ok else 0
+        db_drift = 0.95 * db_drift + rng.normal(0.0, nz.db_drift * ns)
+        if sound_left > 0:
+            sound_left -= 1
+        elif rng.random() < nz.sound_events_per_min / TICKS_PER_MIN:
+            sound_bump = rng.uniform(*nz.sound_event_db) * (1 if rng.random() < 0.7 else -0.5)
+            sound_left = int(rng.integers(nz.sound_event_ticks[0], nz.sound_event_ticks[1] + 1))
+        if sound_left == 0:
+            sound_bump = 0.0
+        if light_left > 0:
+            light_left -= 1
+        elif rng.random() < nz.light_events_per_min / TICKS_PER_MIN:
+            light_mult = rng.uniform(*nz.light_event_mult)
+            light_left = int(rng.integers(nz.light_event_ticks[0], nz.light_event_ticks[1] + 1))
+        if light_left == 0:
+            light_mult = 1.0
+        lux_drift = 0.98 * lux_drift + rng.normal(0.0, nz.lux_drift * ns)
         if audio_ok:
-            ambient = room_db + mic_offset + rng.normal(0.0, nz.db_noise * ns) + 2.0 * min(laughs, 2)
-            p90 = ambient + 2.0 + abs(rng.normal(0.0, 2.0 * ns)) + 1.5 * (laughs > 0)
+            ambient = (room_db + mic_offset + db_drift + sound_bump + rng.normal(0.0, nz.db_noise * ns)
+                       + 2.0 * min(laughs, 2))
+            p90 = ambient + 1.5 + abs(rng.normal(0.0, 1.0 * ns)) + 1.5 * (laughs > 0)
         else:
             ambient = p90 = math.nan
-        lux = lux_base * (1.0 - 0.15 * night) * room_lux_mult * float(np.exp(rng.normal(0.0, 0.08 * ns)))
+        lux = (lux_base * (1.0 - 0.15 * night) * room_lux_mult * light_mult
+               * float(np.exp(lux_drift + rng.normal(0.0, nz.lux_noise * ns))))
         base = {
             "tick": t, "ts": t * TICK_S, "t_mono": t * TICK_S, "session_id": session_id,
             "n_people": n_present, "source": "sim", "simulated_fields": [],
@@ -270,9 +294,15 @@ def simulate_session(
             # People cover their faces when they laugh: laughter in the room pulls head-in-hands up.
             hih_share = b["hih_p"] + (0.35 if laughs and person.state == "Collaborative_Happy" else 0.0)
             person.hih_on = _two_state(rng, person.hih_on, hih_share, switch=0.35 if laughs else 0.15)
-            slump = person.slump_on * rng.uniform(0.7, 1.0) + (1 - person.slump_on) * rng.uniform(0.0, 0.15)
+            slump = rng.uniform(0.7, 1.0) if person.slump_on else (rng.uniform(0.0, 0.1) if rng.random() < 0.15 else 0.0)
             hih = person.hih_on * rng.uniform(0.5, 1.0)
-            motion = b["motion"] * float(np.exp(rng.normal(0.0, 0.4 * ns))) * (0.7 if person.slump_on else 1.0)
+            person.still = _two_state(rng, person.still, nz.still_share, switch=nz.still_switch)
+            mult = (0.7 if person.slump_on else 1.0) * (nz.still_motion_mult if person.still else 1.0)
+            target = math.log(max(b["motion"] * mult, 1e-4))
+            if person.log_motion is None:
+                person.log_motion = target
+            person.log_motion += nz.motion_ar * (target - person.log_motion) + rng.normal(0.0, nz.motion_noise * ns)
+            motion = float(math.exp(person.log_motion))
             if person.episode_hidden is not None:  # the episode's share already is "hands over the face"
                 hidden = person.episode_hidden
             else:
@@ -281,7 +311,7 @@ def simulate_session(
             if face_ok:
                 low_light = max(0.0, (nz.low_light_lux - lux) / nz.low_light_lux) * 0.35
                 face = float(np.clip(rng.normal(person.episode_face, nz.face_tick_sd * ns + low_light), -1, 1))
-                face_vis = float(rng.uniform(0.6, 1.0))
+                face_vis = float(rng.uniform(*nz.face_visible_range))
             else:
                 face, face_vis = math.nan, 0.0
             if not video_ok:

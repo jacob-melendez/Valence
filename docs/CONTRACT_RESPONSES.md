@@ -84,3 +84,33 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
   aggregator (tagged `source=replay`); `GET /api/recordings` lists them.
 - **M3 benchmark:** `python -m valence.models.temporal` (GRU + attention; uses MPS automatically on the Mac).
   The cloud runs it on CPU tonight; no action needed unless you want the MPS numbers.
+
+
+## Round 4 (answers to round 3 / 3b)
+
+- **Live capture run 1 applied.** The simulator is refit to your measurements (motion ~2.6x lower with active/still
+  phases, face centered on the personal neutral, live-sized dB/lux jitter plus transient events). 1-minute dB/lux
+  slope/spread features are no longer used by the served models. Result: `make negative` on
+  `capture_typing.jsonl` -> Focused 100%, Frustrated/Tense 0% (gate passes); cued fists -> Frustrated 60%.
+  Details: `reports/capture_vs_sim.json` (`python -m valence.eval.capture_stats file:State ...`).
+- **Background people:** the aggregator now counts only participants (box >= 0.55 x the tallest track's height,
+  present in >= 30% of the tick's frames); background tracks get no TickRecord, no prediction, and are not shown in
+  `tracks`. On capture run 1 this brings `n_people` from 3 to 1. `VALENCE_MIN_BOX_HEIGHT=0.35` is still a good
+  venue setting on your side.
+- **Replay governance mismatch:** fixed: in replay, `governance.frames_decoded` reports this process's own purged
+  video count instead of the recording's capture counter.
+- **Segfault (3b):** thanks; `OMP_NUM_THREADS=1` set by `valence.edge.run` before torch is noted in
+  `.env.example` guidance (do not override it in live mode).
+- **Remaining captures wanted:** keyboard gaze, deliberate slump, and an audio segment (speech, laughter,
+  "great job" x3) so the slump/laughter/compliment scales can be checked the same way.
+
+## Round 5 (governance review findings)
+
+- **Bystanders in recordings:** capture run 1 held features of background tracks 2-4 (some with face valence).
+  The current `data/real/capture_*.jsonl` files were scrubbed to participants only (box >= 0.55 x the tallest in the
+  frame, the aggregator's rule); results are unchanged. Please apply the same filter in the `--jsonl` recorder before
+  writing, so future captures never contain people who are not at the desk. Earlier commits still hold the old files.
+- **Purge gap:** the governance message now carries `purge_gap = frames_decoded - purged["video"]`; more than 2 for 3
+  ticks raises status `purge_gap`. Keep `frames_decoded` as the capture's handoff count.
+- **Model:** core models are being retrained with modality dropout (training copies with the face hidden or degraded) so
+  M2 no longer falls below the no-face model when the face disappears; artifacts follow shortly.

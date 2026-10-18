@@ -51,7 +51,11 @@ FEATURE_INDEX = {n: i for i, n in enumerate(FEATURE_NAMES)}
 _ABS_DB = [n for n in FEATURE_NAMES if n.startswith("db_") and n.split("_")[1] in ("now", "mean", "max", "ewm")]
 SNAPSHOT = ["db_now", "lux_now", "motion_now", "slump_now", "hih_now", "fist_cnt_now", "laugh_cnt_now",
             "compl_cnt_now", "withdraw_now", "n_people", "hours_since_break", "tod_sin", "tod_cos"]
-CONTEXT = [n for n in FEATURE_NAMES if n not in FACE_FEATURES]
+# 1-minute dB/lux slopes and spreads are dominated by transients live (typing starting, doors, webcam
+# auto-exposure): computed and shown, but not used by the served context models (live capture run 1).
+NOISY_LIVE = ["db_slope_1m", "db_std_1m", "lux_slope_1m", "lux_std_1m"]
+CONTEXT = [n for n in FEATURE_NAMES if n not in FACE_FEATURES and n not in NOISY_LIVE]
+_M2 = [n for n in FEATURE_NAMES if n not in NOISY_LIVE]
 
 # Feature sets of the model ladder (docs/PLAN.md "Model ladder").
 FEATURE_SETS: dict[str, list[str]] = {
@@ -59,9 +63,9 @@ FEATURE_SETS: dict[str, list[str]] = {
     "m0t": FACE_FEATURES,
     "m1": SNAPSHOT,
     "m2_noface": CONTEXT,
-    "m2_noabsdb": [n for n in FEATURE_NAMES if n not in _ABS_DB],
-    "m2_notime": [n for n in FEATURE_NAMES if n not in ("hours_since_break", "tod_sin", "tod_cos")],
-    "m2": FEATURE_NAMES,
+    "m2_noabsdb": [n for n in _M2 if n not in _ABS_DB],
+    "m2_notime": [n for n in _M2 if n not in ("hours_since_break", "tod_sin", "tod_cos")],
+    "m2": _M2,
 }
 
 

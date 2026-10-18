@@ -54,6 +54,11 @@ class NarratorClient:
             self._pending[sheet.person] = (sheet, person_id)  # replaces any stale request for this person
             self._cv.notify()
 
+    def clear_cache(self) -> None:
+        self._cache.clear()
+        with self._cv:
+            self._pending.clear()
+
     def check_health(self) -> bool:
         try:
             self.healthy = httpx.get(f"{self.url}/health", timeout=1.0).status_code == 200

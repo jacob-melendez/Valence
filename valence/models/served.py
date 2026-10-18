@@ -46,12 +46,15 @@ class ServedPredictor:
         self.m0 = lgb.Booster(model_file=str(artifacts / "m0.txt"))
         self.t2 = float(meta["temperatures"]["m2"])
         self.t0 = float(meta["temperatures"]["m0"])
-        self.idx2 = np.array([FEATURE_INDEX[c] for c in FEATURE_SETS["m2"]])
-        self.idx0 = np.array([FEATURE_INDEX[c] for c in FEATURE_SETS["m0"]])
+        # Feature sets come from the trained artifact, so code changes cannot silently misalign a model.
+        self.cols2 = meta["feature_sets"]["m2"]
+        self.cols0 = meta["feature_sets"]["m0"]
+        self.idx2 = np.array([FEATURE_INDEX[c] for c in self.cols2])
+        self.idx0 = np.array([FEATURE_INDEX[c] for c in self.cols0])
         clip = json.loads((artifacts / "clip_bounds.json").read_text())
         self.lo = np.array([clip.get(n, [-np.inf, np.inf])[0] for n in FEATURE_NAMES])
         self.hi = np.array([clip.get(n, [-np.inf, np.inf])[1] for n in FEATURE_NAMES])
-        self.face_cols = np.array([layer_of(c) == "Facial Surface" for c in FEATURE_SETS["m2"]])
+        self.face_cols = np.array([layer_of(c) == "Facial Surface" for c in self.cols2])
 
     # --- core -----------------------------------------------------------------------------------
     def _clip(self, x: np.ndarray) -> tuple[np.ndarray, list[str]]:
@@ -85,7 +88,7 @@ class ServedPredictor:
         raw_override = None if face_label is None else bool(
             face_label in POSITIVE and label not in POSITIVE and face_conf >= M0_MIN_CONF and p[k] >= M2_MIN_CONF
             and face_push_for_m0_class > 0)
-        names = FEATURE_SETS["m2"]
+        names = self.cols2
         values = {n: float(x[FEATURE_INDEX[n]]) for n in names}
         contribs = {n: float(c) for n, c in zip(names, contrib[k, :-1]) if c != 0.0}
         layers = build_layers(contribs, values, tod_h=tod_h)
