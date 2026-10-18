@@ -141,11 +141,13 @@ def main() -> None:
     k = len(states)
     summary = {}
     temps = {}
+    dropout = {}
     for name in args.models.split(","):
         cols = FEATURE_SETS[name]
         t1 = time.time()
         uses_face = name.startswith("m2") and bool(set(cols) & set(FACE_FEATURES))
         booster = train_one(X, y, split, cols, k, augment_face=uses_face)
+        dropout[name] = uses_face
         temps[name] = fit_temperature(booster.predict(X.loc[split.calib, cols], raw_score=True), y[split.calib])
         booster.save_model(str(out / f"{name}.txt"))
         summary[name] = {"test_macro_f1": round(macro_f1(booster, X.loc[split.test], y[split.test], cols), 4),
@@ -159,6 +161,7 @@ def main() -> None:
         "states": list(states), "state_set": args.state_set, "sessions": args.sessions, "seed": args.seed,
         "noise_scale": args.noise_scale, "feature_names": FEATURE_NAMES, "feature_sets": FEATURE_SETS,
         "temperatures": temps, "summary": summary, "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "modality_dropout": dropout, "modality_dropout_rates": {"face_hidden": 0.30, "face_degraded": 0.20},
     }
     (out / "model_meta.json").write_text(json.dumps(meta_out, indent=2))
     (out / "clip_bounds.json").write_text(json.dumps(clip, indent=1))

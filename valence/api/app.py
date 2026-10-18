@@ -242,7 +242,9 @@ def governance_stats() -> dict[str, Any]:
     a = state()
     s = gate.stats()
     return {
-        "frames_decoded": a.runtime.aggregator.frames_decoded, "frames_purged": s.purged.get("video", 0),
+        "frames_decoded": a.runtime.aggregator.frames_decoded if a.runtime.source.label == "live"
+        else a.runtime.frames_purged,
+        "frames_purged": a.runtime.frames_purged, "frames_purged_process": s.purged.get("video", 0),
         "audio_blocks_purged": s.purged.get("audio", 0), "derived_buffers_purged": {
             k: v for k, v in s.purged.items() if k.endswith("_derived")}, "freed": s.freed, "unzeroable": s.unzeroable,
         "transcripts_purged": s.transcripts_purged, "violations": s.violations,

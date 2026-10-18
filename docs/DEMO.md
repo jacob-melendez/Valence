@@ -1,7 +1,7 @@
 # Valence demo runbook
 
-For the solo builder, Sunday judging (TrojanHacks @ USC 2026, AI Data Governance track). Every model number
-below is from `reports/metrics.json` and is measured on **simulated data** (45 held-out simulator sessions,
+For the solo builder, Sunday judging (TrojanHacks @ USC 2026, AI Data Governance track). Every accuracy number
+below except the negative control (§8) is from `reports/metrics.json` and is measured on **simulated data** (45 held-out simulator sessions,
 `noise_scale` 1.0, untuned), so it tests the architecture and says nothing about real-world accuracy. Say
 "on simulated data" every time you quote one.
 
@@ -42,7 +42,7 @@ A=http://127.0.0.1:8000; R=http://127.0.0.1:8001; J='content-type: application/j
 | T-29 | **T1 narrator:** `set -a; source .env; set +a; .venv/bin/python -m valence.narrator.service` (from `valence/narrator/.venv` if you built that venv; `.venv` also has mlx-lm via `requirements-mac.txt`). Wait for the `narrator model ready` log line (measured load 1.2 s + warm-up 4.0 s). |
 | T-28 | **T2 live API:** `set -a; source .env; set +a; caffeinate -dims make live`. Check `curl -s $A/api/health`: `"mode": "live"`, `"model": "m2_lgbm@..."`, `"edge_error": null`. |
 | T-27 | **T3 console:** `make console`. Governance lines should scroll every 5 s. |
-| T-26 | **Venue recalibration** (table below), then `curl -s -X POST $A/api/control/stop` and `curl -s -X POST $A/api/control/start` so the window does not mix old and new calibration. |
+| T-26 | **Venue recalibration** (table below). Do **not** follow it with `control/stop` + `control/start`: each edge start opens a new capture whose frame counter restarts at 0, while `frames_purged` counts for the whole process, so proof 1's counter pair would stop matching (`docs/GOVERNANCE.md` §3.4). Ticks from before the calibration leave the 15-min window by T-11 anyway. |
 | T-25 | Sit down with a **neutral face, upright, for 20 s**. Face valence and slump are measured against your own first 20 s (`docs/PERCEPTION.md`). Do not leave the frame for more than 3 s from now on: perception releases your display id and recomputes both baselines from your next 20 s on return. The window slot and break clock are keyed by display id, so they continue if you come back as the same Person #N (`docs/GOVERNANCE.md` §8 gap 13). |
 | T-24 | **T4 replay API:** `VALENCE_MODE=replay VALENCE_SCENARIO=context_blindness VALENCE_SPEED=20 .venv/bin/python -m uvicorn valence.api.app:app --port 8001`. **T5:** `.venv/bin/python scripts/console.py --url ws://127.0.0.1:8001/ws/events`. |
 | T-23 | **T6 frontend:** `cd frontend && npm run dev`. Set its backend URL to `http://127.0.0.1:8000`; `localhost` can resolve to `::1` and fail. |
@@ -90,12 +90,12 @@ curl -s -X POST $A/api/calibrate/room -H "$J" -d '{"spl_reference": 62.0, "lux_r
 | Clock | Proof | Exact action | Point at / say |
 |---|---|---|---|
 | 0:00–0:20 | Thesis | none | "A face snapshot misses masked stress and misreads resting focus. 15 minutes of context fixes most of that on simulated data, and no frame or audio is kept." |
-| 0:20–1:05 | **1 Data minimization** | Show the governance log in the console or frontend. Run `curl -s $A/api/governance/stats \| jq '{frames_decoded, frames_purged, purge_gap, violations, live_raw_buffers, unzeroable, retention_s}'`, then `curl -s $A/api/retention \| jq .raw_media_stored`, then `curl -s $A/api/governance/verify`. | `frames_purged − frames_decoded` is 0–2 (in-flight tolerance); `purge_gap` 0 (decoded but unpurged frames; above 2 for 3 ticks it puts `purge_gap` in `status.degraded`); `violations` 0; `live_raw_buffers` 0; `unzeroable` `{}`; `raw_media_stored` 0; chain `ok: true`; Wi-Fi off, `offline: true`. Frames are zero-filled, not just `del`'d. |
+| 0:20–1:05 | **1 Data minimization** | Show the governance log in the console or frontend. Run `curl -s $A/api/governance/stats \| jq '{frames_decoded, frames_purged, purge_gap, violations, live_raw_buffers, unzeroable, retention_s}'`, then `curl -s $A/api/retention \| jq .raw_media_stored`, then `curl -s $A/api/governance/verify`. | `frames_purged − frames_decoded` is 0–2 (in-flight tolerance); `purge_gap` 0 (decoded but unpurged frames; above 2 for 3 ticks it puts `purge_gap` in `status.degraded`); `violations` 0; `live_raw_buffers` 0; `unzeroable` `{}`; `raw_media_stored` 0; chain `ok: true`; Wi-Fi off, `offline: true`. Frames are zero-filled, not just `del`'d. The counter pair holds only if the capture has not restarted since T2 started (no pause/stop → start, `POST /api/live` or replay since). |
 | 1:05–1:45 | **2 Context vs face (live)** | Console line for Person #1. | `Frustrated / Masked Stress … (face-only: Collaborative_Happy) MASK OVERRIDE`, with the template line "The face alone suggests Collaborative / Happy, but … point the other way. Context corrected the facial mask." |
 | 1:45–2:20 | 2 | Charts `accuracy_vs_history.png`, then `confusion_m0_vs_m2.png` | On simulated data: macro-F1 at 15 min is M2 0.789 [0.774, 0.807] vs M0 0.425. Frustrated_Masked recall is 70.8% vs 11.7%. Focused misread as negative is 18.8% vs 55.9%. |
-| 2:20–3:00 | **3 Missing/degraded face** | `curl -s -X POST $A/api/sim/face_occlusion -H "$J" -d '{"enabled": true}'`; show the console; then the same call with `false`. Charts `robustness_face_dropout.png`, `robustness_lux.png`. | The label should hold. The text switches to "The face is not readable right now, so the call rests on context: …" and the console shows `SIMULATED: face_occlusion`. On simulated data, with the face hidden on every tick M2 scores 0.687 vs M0 0.121, within 0.007 of the no-face model (0.693) instead of below it, because training included copies with the face hidden (modality dropout). At 10% light, 0.677 vs 0.254, still slightly below the no-face model (MODEL_CARD §5). |
+| 2:20–3:00 | **3 Missing/degraded face** | `curl -s -X POST $A/api/sim/face_occlusion -H "$J" -d '{"enabled": true}'`; show the console; then the same call with `false`. Charts `robustness_face_dropout.png`, `robustness_lux.png`. | The label should hold. The text switches to "The face is not readable right now, so the call rests on context: …" and the console shows `SIMULATED: face_occlusion`. On simulated data, with the face hidden on every tick M2 scores 0.687 vs M0 0.121, 0.006 below the no-face model (0.693), close to a tie, because training included copies with the face hidden (modality dropout). At 10% light, 0.677 vs 0.254, still below the no-face model (MODEL_CARD §5). |
 | 3:00–3:20 | 2 (counterfactual) | `EID=$(curl -s $A/api/state \| jq -r '.people["1"].prediction.event_id')`, then `curl -s "$A/api/explain/$EID/counterfactual?feature=hours_since_break&value=0.5" \| jq '{original, cf: .counterfactual.label, label_changed}'` | "Same window, break clock set to 30 min: does the label survive?" Read `label_changed` as it comes. Only that one feature changes; nothing is published. |
-| 3:20–3:50 | 2 (context blindness) | `curl -s -X POST $R/api/replay/context_blindness -H "$J" -d '{"speed": 20}'` and watch T5 | The same head-in-hands pose in both halves. Laughter and compliments read as Collaborative / Happy. Silence, dim light and a long stretch without a break (4.4 h at the scenario's start, about 4.5 h by the second half) read as Exhausted. That segment starts at minute 9 of 18 (`scenarios/context_blindness.yaml`), about 27 s in at speed 20. The messages say `source: replay`. A cloud replay with `85874e97` (2026-10-18) read Person #1 as Collaborative / Happy for all 86 first-half ticks and Exhausted for all 106 second-half ticks, with no transition ticks. |
+| 3:20–3:50 | 2 (context blindness) | `curl -s -X POST $R/api/replay/context_blindness -H "$J" -d '{"speed": 20}'` and watch T5 | The same head-in-hands pose in both halves. Laughter and compliments read as Collaborative / Happy. Silence, dim light and a long stretch without a break (4.4 h at the scenario's start, about 4.5 h by the second half) read as Exhausted. That segment starts at minute 9 of 18 (`scenarios/context_blindness.yaml`), about 27 s in at speed 20. The messages say `source: replay`. A cloud replay with `85874e97` (2026-10-18) read Person #1 as Collaborative / Happy on all 84 first-half ticks and on the first 2 second-half ticks (the 2-tick hysteresis), then Exhausted on the remaining 106 of 108. |
 | 3:50–4:00 | Close | none | Simulated data only. EU AI Act Art. 5(1)(f), so not for workplaces or schools. Room-only mode exists. Demographic and in-the-wild validation are explicit gaps. |
 
 **Live label caveat.** The served model passes `make negative` (quiet typing reads Focused), but only on the
@@ -139,14 +139,14 @@ curl -s -X POST $A/api/demo/reset                                           # fo
 |---|---|---|
 | Camera fails: `degraded` has `camera`/`edge`, `edge_error` in `/api/health` | Was it launched from Terminal/iTerm? Run `python scripts/spikes/selftest.py`. Otherwise `curl -s $A/api/recordings`, then `curl -s -X POST $A/api/replay_recording/golden_demo -H "$J" -d '{"loop": true}'`. Last resort: `curl -s -X POST $A/api/replay/full_demo -H "$J" -d '{"loop": true}'`. Both clear the window. During any replay the frame counters prove nothing: `/api/governance/stats` shows the recording's stamped `frames_decoded`, and the `governance` message reports this process's own count (`docs/GOVERNANCE.md` §3.4). Skip proof 1's counter check then | `source: replay` |
 | Mic fails: `degraded` has `mic` | Check `VALENCE_MIC`. Inject events with `curl -s -X POST $A/api/sim/event -H "$J" -d '{"laughter": 2, "compliments": 1}'` (or `"fists": {"1": 1}`). dB stays missing; M2 is NaN-native. | SIMULATED: `laughter_count`, `compliments_count`, `clenched_fists_count`; audit `sim_event` |
-| Narrator down: `status.narrator = "fallback"` | Nothing to do: each `prediction` already carries template text and ticks continue. Restart T1, or use `--template-only`. | `explanation.source: template` |
+| Narrator down: `status.narrator = "fallback"` | Nothing to do: each `prediction` already carries template text and ticks continue. Restart T1, or use `--template-only` (its `/health` is 503, so `fallback` and `degraded: narrator` stay). | `explanation.source: template` |
 | Model artifacts missing: `/api/models` says `stub-rules`, `degraded` has `predictor:stub`, counterfactual returns 501 | `git checkout artifacts/` (`m2.txt`, `m0.txt`, `model_meta.json` and `clip_bounds.json` are committed), check `VALENCE_STATE_SET=core`, restart T2, recalibrate. The stub keeps the demo running meanwhile. | `feature_version: stub-rules` |
 | libomp segfault at start | Start only with `make live`: `VALENCE_MODE=live` makes `app.py` import `valence.edge.run`, which sets `OMP_NUM_THREADS=1` and imports torch before LightGBM; LightGBM predicts with `num_threads=1`. Do not set `OMP_NUM_THREADS` to anything else; `brew install libomp`. Last resort: `KMP_DUPLICATE_LIB_OK=TRUE` in `.env` (OK in `docs/BENCHMARKS.md`). | none |
-| Window empty at demo time (late restart) | `curl -s -X POST $A/api/control/stop`, then `curl -s -X POST $A/api/control/start`, then `curl -s -X POST $A/api/demo/seed -H "$J" -d '{"scenario": "frustrated_masked", "minutes": 12}'`. Adds context only, no face. | `source: sim_seed`, SIMULATED `room_history`; audit `demo_seed` |
+| Window empty at demo time (late restart) | `curl -s -X POST $A/api/control/stop`, then `curl -s -X POST $A/api/control/start`, then `curl -s -X POST $A/api/demo/seed -H "$J" -d '{"scenario": "frustrated_masked", "minutes": 12}'`. Adds context only, no face. The stop/start restarts the capture, so skip proof 1's counter pair afterwards. | `source: sim_seed`, SIMULATED `room_history`; audit `demo_seed` |
 | Live flip does not come | Replay `frustrated_masked` on `$R` (§3) | `source: replay` |
 | Frontend will not connect | Use `127.0.0.1`, not `localhost`; present from the console (T3/T5). | none |
 | `purge_violation: true` | Say it plainly: `end_tick()` can race a perception thread and count a spurious violation (`docs/GOVERNANCE.md` §8 gap 4). Show `live_raw_buffers`. | `violations` > 0 |
-| `degraded` has `purge_gap` | More than 2 decoded frames were not purged for 3 ticks in a row (`engine.py`). Pause (`control/pause`), show `/api/governance/stats`, and say it plainly. | `purge_gap` > 2 |
+| `degraded` has `purge_gap` | More than 2 decoded frames were not purged for 3 ticks in a row (`engine.py`). Pause (`control/pause`), show `/api/governance/stats`, and say it plainly. Exception: after a recording replay, `POST /api/live` keeps the recording's stamped `frames_decoded` (the aggregator keeps the maximum), so the gap is a false alarm until the new capture passes that count. Restart T2 and recalibrate instead of `POST /api/live` (`docs/GOVERNANCE.md` §8 gap 3). | `purge_gap` > 2 |
 | Port 8000 busy after a crash | `lsof -nP -iTCP:8000 -sTCP:LISTEN`, kill it, restart, recalibrate | none |
 
 ## 6. Q&A prep
@@ -155,8 +155,8 @@ curl -s -X POST $A/api/demo/reset                                           # fo
    held out for test. The behavioral assumptions are published in `docs/DATASET.md` and `docs/MODEL_CARD.md`. The
    claim is only "under published assumptions, temporal context beats a face snapshot". In-the-wild validation is
    future work. The live demo shows the pipeline running, not its accuracy. The one real-data check, 3 min of the
-   builder's quiet typing, read mostly Frustrated before the simulator was refit to live capture and reads Focused
-   on every tick now. The refit used that same capture, so it is a consistency check, not validation (MODEL_CARD §5).
+   builder's quiet typing, read Frustrated_Masked on 49% of ticks and Focused on none before the simulator was refit
+   to live capture, and reads Focused on every tick now. The refit used that same capture, so it is a consistency check, not validation (MODEL_CARD §5).
 2. **"You wrote the simulator, so context wins by construction."**
    - `noise_scale` was left at 1.0, untuned, so the headline was never tuned toward (`docs/PLAN.md` build-time
      decisions).
@@ -188,7 +188,7 @@ curl -s -X POST $A/api/demo/reset                                           # fo
 7. **"Why not just a better face model?"**
    - A forced smile *is* a smile. Our M0 is deliberately naive (`cheekSquint` excluded, `docs/PERCEPTION.md`)
      so the correction is measurable. A Duchenne-aware model would narrow the masking gap, and we say so.
-   - Context carries most of the signal: M2-noface scores 0.694, M0 0.426, M2 0.802.
+   - Context carries most of the signal: M2-noface scores 0.694, M0 0.425, M2 0.802.
    - It keeps working without a face: 0.687 with the face hidden on every tick, close to the no-face model's 0.693,
      because it was trained with face-hidden and degraded copies (modality dropout). At 10% light it is 0.677,
      still slightly below; a fallback to the no-face model is not built (all simulated).
@@ -197,7 +197,8 @@ curl -s -X POST $A/api/demo/reset                                           # fo
    - Edge: 45–57 ms/frame at 10.0 Hz live; YOLO 20.7 ms p50 live (`docs/BENCHMARKS.md`).
    - Labels update per 5 s tick with EMA and 2-tick hysteresis, so they lag behavior by design.
      `status.loop_latency_ms` shows the tick cost.
-   - Narrator: Qwen3-1.7B took 536 ms for 55 tokens without YOLO running. The p95 with YOLO is not measured,
+   - Narrator: Qwen3-1.7B took 536 ms for 55 tokens in the standalone LLM spike (`docs/BENCHMARKS.md`). The p95
+     with YOLO running is not measured,
      and the 2.5 s deadline falls back to the template.
 9. **"What leaves the device?"**
    - Nothing. Both services bind to loopback, the offline vars are set, and the demo runs with Wi-Fi off.

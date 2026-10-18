@@ -55,7 +55,9 @@ class Aggregator:
         self._block_db: deque[tuple[float, float]] = deque()  # (t, db) for the 15-min room median
         self._lux = math.nan
         self._lux_quality = 0.0
-        self.frames_decoded = 0
+        self.frames_decoded = 0  # frames decoded since the current source began (across capture restarts)
+        self._decoded_offset = 0
+        self._decoded_last = 0
         self.frame_w = 0
         self.frame_h = 0
         self.mirrored = False
@@ -92,7 +94,10 @@ class Aggregator:
     def _push_video(self, obs: VideoObs) -> None:
         self._video_frames += 1
         self.video_frames_total += 1
-        self.frames_decoded = max(self.frames_decoded, obs.frames_decoded)
+        if obs.frames_decoded < self._decoded_last:  # a new capture started (pause/start): its counter restarts at 0
+            self._decoded_offset += self._decoded_last
+        self._decoded_last = obs.frames_decoded
+        self.frames_decoded = self._decoded_offset + obs.frames_decoded
         self.frame_w, self.frame_h, self.mirrored = obs.frame_w, obs.frame_h, obs.mirrored
         self.last_video_t = time.monotonic()
         if not math.isnan(obs.lux):
@@ -203,6 +208,10 @@ class Aggregator:
             for pid, n in (fists or {}).items():
                 self._acc.setdefault(pid, _PersonAcc()).fists += n
                 self._sim_fields.add("clenched_fists_count")
+
+    def reset_frame_counter(self) -> None:
+        with self._lock:
+            self.frames_decoded = self._decoded_offset = self._decoded_last = 0
 
     def reset_people(self) -> None:
         with self._lock:

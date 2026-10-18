@@ -611,5 +611,15 @@
       "temperature": 0.96
     }
   },
-  "trained_at": "2026-10-18 00:23:40"
+  "trained_at": "2026-10-18 00:23:40",
+  "modality_dropout": {
+    "m0": false,
+    "m2_noface": false,
+    "m2": true
+  },
+  "modality_dropout_rates": {
+    "face_hidden": 0.3,
+    "face_degraded": 0.2
+  },
+  "modality_dropout_note": "recorded after training: these models were trained by train_ladder.py with face dropout for M2-family models (commit 38b9850 onward); later trainings record it directly"
 }

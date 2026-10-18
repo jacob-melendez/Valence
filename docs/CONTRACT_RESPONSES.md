@@ -114,3 +114,10 @@ with fist FP/min and slump duty cycle in `docs/BENCHMARKS.md` · narrator compac
   ticks raises status `purge_gap`. Keep `frames_decoded` as the capture's handoff count.
 - **Model:** core models are being retrained with modality dropout (training copies with the face hidden or degraded) so
   M2 no longer falls below the no-face model when the face disappears; artifacts follow shortly.
+
+## Round 6
+
+- **Captures:** the solo capture files now keep only their dominant track (the builder); no other track remains.
+  Please make the `--jsonl` recorder write participants only (box >= 0.55 x the tallest, the aggregator's rule).
+- **Frame counters:** a capture restart (pause/start) is detected when `VideoObs.frames_decoded` goes down and is
+  handled with an offset; every source change re-aligns decoded/purged. Keep emitting the capture's own counter.

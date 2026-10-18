@@ -64,8 +64,8 @@ and a new label needs 2 consecutive ticks. The displayed confidence is the calib
 shown label, documented as "sim-calibrated" (`contracts.py`). `warming_up` is set for the first 60 s of a window,
 and the override is blocked for the first 120 s.
 
-**6-state variant (P1: + Overwhelmed, Tense).** `artifacts/all/` (`m2_lgbm@4a4d8135`, trained 2026-10-18 00:23:40
-on the refit simulator with modality dropout, same 110-feature M2, 247 rounds, T = 0.960). Frustrated_Masked
+**6-state variant (P1: + Overwhelmed, Tense).** `artifacts/all/` (`m2_lgbm@4a4d8135`, `trained_at` 2026-10-18
+00:23:40, on the refit simulator with modality dropout, same 110-feature M2, 247 rounds, T = 0.960). Frustrated_Masked
 becomes mask-only (`mask_p` 0.92) and Tense takes unmasked frustration. **Not evaluated** with `evaluate.py` and not
 negative-controlled; the trainer's own mixed-length test macro-F1 (`artifacts/all/model_meta.json` `summary`, simulated)
 is M0 0.4614, M2-noface 0.5732, M2 0.7682. Serve with `VALENCE_STATE_SET=all VALENCE_ARTIFACTS_DIR=artifacts/all`.
@@ -161,7 +161,7 @@ sets of extra copies of its own windows, with labels kept:
 | Copies | Share of training windows | Change to the face block |
 |---|---|---|
 | Face hidden | 30% | `face_now`, `face_mean_1m/_5m/_15m`, `face_std_5m` → NaN; `face_visible_now`, `face_visible_frac_5m` → 0 |
-| Degraded, as in low light | 20% | face means + N(0, 0.25), clipped to [−1, 1]; `face_std_5m` + 0.2; both visibility features × U(0.3, 0.8) |
+| Degraded, as in low light | 20% | `face_now` and the three face means + N(0, 0.25), clipped to [−1, 1]; `face_std_5m` + 0.2; both visibility features × one U(0.3, 0.8) draw per copy |
 
 Class weights are computed on the augmented set. Early-stopping, calibration and test windows are never augmented.
 
@@ -251,14 +251,15 @@ models: context has not caught up yet, and M0 beats both M1 and M2 there.
 | M2-noface | 0.6933 | 0.6933 | 0.6933 | 0.6933 |
 | **M2** | 0.8025 | 0.7702 | 0.7165 | **0.6770** |
 
-M2 degrades gradually where M0 and M0t collapse. With modality dropout, M2 with the face **fully hidden now matches
-M2-noface** (0.6870 vs 0.6933, −0.0063) instead of falling below it; before the retrain it fell below. At relative
-light 0.25 it stays above M2-noface (0.7165 vs 0.6933, +0.0232). At 0.1 it is still slightly below (0.6770 vs
-0.6933, −0.0163): very noisy face evidence still costs a little more than no face at all (§8). The training
-degradation resembles these test conditions, so part of this gain is by construction (§7).
+M2 degrades gradually where M0 and M0t collapse. Modality dropout was added so that M2 does not fall below
+M2-noface when the face disappears. With the face **fully hidden** it is now 0.0063 below M2-noface (0.6870 vs
+0.6933), a near tie (this table has no CIs). At relative light 0.25 it stays above M2-noface (0.7165 vs 0.6933,
++0.0232). At 0.1 it is still below (0.6770 vs 0.6933, −0.0163): very noisy face evidence still costs a little more
+than no face at all (§8). The training degradation resembles these test conditions (at 1.0 the hidden copies match
+the test input exactly), so part of this gain is by construction (§7).
 
 **Calibration (M2).** T = 0.9541; ECE 0.0079 before and 0.0063 after temperature scaling. In every reliability
-bin from 0.4 to 1.0, accuracy is within 0.009 of confidence; the 0.3–0.4 bin (n = 310) is within 0.016. The
+bin from 0.4 to 1.0, accuracy is within 0.01 of confidence; the 0.3–0.4 bin (n = 310) is within 0.016. The
 0.2–0.3 bin has n = 5.
 
 **M3 (GRU + attention, benchmark; `reports/m3_metrics.json`).** Retrained on the current corpus and session split,
@@ -316,8 +317,8 @@ nothing about the thesis.
 1. Read every number as "under the published simulator assumptions"; quote the claim wording above and nothing stronger.
 2. Before trusting live output, record the missing captures (keyboard gaze, slump, audio), check those scales,
    and pass `make negative` on a capture the simulator was **not** fit to.
-3. Modality dropout brought M2 with no face up to M2-noface (0.6870 vs 0.6933), but at relative light 0.1 it is
-   still 0.0163 below (§5). A fallback to M2-noface based on `face_visible_frac_5m` would close that. **Not built.**
+3. Modality dropout brought M2 with no face to within 0.0063 of M2-noface (0.6870 vs 0.6933), but at relative
+   light 0.1 it is still 0.0163 below (§5). A fallback to M2-noface based on `face_visible_frac_5m` would close that. **Not built.**
 4. Ignore the first minute after a state change; always show `warming_up`, `source`, `simulated_fields`, "sim-calibrated".
 5. Run the `noise_scale` sweep (×0.5 / ×1.5) before claiming that the model ordering holds beyond `noise_scale` 1.0.
 6. Evaluate `artifacts/all` (and run its negative control) before demoing Overwhelmed or Tense as anything more
