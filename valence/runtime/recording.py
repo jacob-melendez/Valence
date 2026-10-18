@@ -9,6 +9,7 @@ Two ways to use a recording:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -57,25 +58,36 @@ class JsonlFeeder:
                     if self._stop.wait((obs.t - prev_t) / self.speed):
                         return
                 prev_t = obs.t
-                # Re-stamp wall time so break clocks and time of day follow the replay, not the recording.
-                self.push(obs)
+                # Re-stamp both clocks so break clocks and time of day follow the replay, not the recording.
+                self.push(restamp(obs, time.time(), time.monotonic()))
             if not self.loop:
                 return
 
 
+def restamp(obs: Obs, wall: float, t: float) -> Obs:
+    """The same observation on another clock (observations are frozen)."""
+    return dataclasses.replace(obs, wall=wall, t=t)
+
+
 def replay_offline(runtime, path: str | Path, tick_s: float = 5.0) -> list[dict]:
-    """Feed a recording through ``runtime`` (which must use its LiveSource) and step once per tick."""
+    """Feed a recording through ``runtime`` (which must use its LiveSource) and step once per tick.
+
+    The recording is mapped onto one synthetic clock starting now, so observations and ticks agree:
+    the break clock starts when the replayed person first appears instead of when the capture was made.
+    """
     emitted: list[dict] = []
-    next_boundary = None
+    wall0, mono0 = time.time(), time.monotonic()
+    t0 = next_boundary = None
     for obs in iter_obs(path):
-        if next_boundary is None:
-            next_boundary = obs.t + tick_s
+        if t0 is None:
+            t0, next_boundary = obs.t, obs.t + tick_s
         while obs.t >= next_boundary:
-            emitted += runtime.step()
+            emitted += runtime.step(wall=wall0 + next_boundary - t0, mono=mono0 + next_boundary - t0)
             next_boundary += tick_s
-        runtime.push_obs(obs)
-    emitted += runtime.step()
+        runtime.push_obs(restamp(obs, wall0 + obs.t - t0, mono0 + obs.t - t0))
+    if next_boundary is not None:
+        emitted += runtime.step(wall=wall0 + next_boundary - t0, mono=mono0 + next_boundary - t0)
     return emitted
 
 
-__all__ = ["iter_obs", "list_recordings", "JsonlFeeder", "replay_offline", "time"]
+__all__ = ["iter_obs", "list_recordings", "JsonlFeeder", "replay_offline", "restamp", "time"]

@@ -199,3 +199,20 @@ def test_reset_clears_narration_cache(runtime):
     runtime.narrator = Narrator()
     runtime.reset_people()
     assert runtime.narrator.cleared == 1
+
+
+def test_replay_offline_uses_the_replay_clock(runtime):
+    """Break clocks start when the replayed person appears, not when the capture was recorded."""
+    from pathlib import Path
+
+    from valence.runtime.recording import replay_offline
+
+    path = Path(__file__).resolve().parents[1] / "data" / "real" / "capture_typing.jsonl"
+    if not path.exists():
+        pytest.skip("capture not present")
+    runtime.use_live()
+    preds = replay_offline(runtime, path)
+    assert preds
+    hours = [m["hours_since_break"] for m in runtime.msgs
+             if m["type"] == "state_vector" and m["person_id"] != 0 and m["hours_since_break"] is not None]
+    assert hours and max(hours) < 1.0
