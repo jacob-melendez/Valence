@@ -73,3 +73,36 @@ def test_counterfactual_changes_only_the_named_feature():
     assert out["feature"] == "hours_since_break" and out["counterfactual_value"] == 0.5
     assert out["simulated_fields"] == ["hours_since_break"]
     assert abs(sum(out["counterfactual"]["probabilities"].values()) - 1) < 1e-3
+
+
+def test_ood_rule_ignores_legitimate_bounded_and_clock_values():
+    from valence.features.compute import FEATURE_INDEX
+
+    df = render("focused")
+    src, w = ScenarioSource(df, "x"), RollingWindow(180)
+    for _ in range(100):
+        for r in src.next_tick(0, 0):
+            w.append(r)
+    x = features_from_window(w.snapshot(1), w.room())
+    x[FEATURE_INDEX["face_visible_now"]] = 1.0  # face on every frame: above the training p99
+    x[FEATURE_INDEX["face_visible_frac_5m"]] = 1.0
+    x[FEATURE_INDEX["tod_sin"]] = np.sin(2 * np.pi * 8 / 24)  # 08:00, outside the simulated hours
+    x[FEATURE_INDEX["hours_since_break"]] = 9.0
+    _, ood = served._clip(x)
+    assert ood == []
+    x[FEATURE_INDEX["db_now"]] = 110.0
+    _, ood = served._clip(x)
+    assert ood == ["db_now"]
+
+
+def test_real_capture_ticks_are_not_shrunk():
+    from valence.runtime.recording import replay_offline
+
+    path = ARTIFACTS.parent / "data" / "real" / "capture_typing.jsonl"
+    if not path.exists():
+        pytest.skip("capture not present")
+    rt = Runtime(Settings(), EventBus(), served, gate=PurgeGate(), audit_dir=tempfile.mkdtemp())
+    rt.use_live()
+    preds = [m for m in replay_offline(rt, path) if not m["warming_up"]]
+    rt.close()
+    assert preds and all(len(m["data_quality"]["ood_features"]) <= 3 for m in preds)

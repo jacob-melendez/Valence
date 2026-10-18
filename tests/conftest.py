@@ -46,11 +46,19 @@ if MISSING:
     sys.meta_path.insert(0, _MissingFinder())
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_call(item):
-    outcome = yield
+def _skip_if_mac_only(outcome):
     excinfo = outcome.excinfo
     if excinfo and issubclass(excinfo[0], (ModuleNotFoundError, AttributeError)):
         name = (getattr(excinfo[1], "name", None) or "").split(".")[0]
         if name in MAC_ONLY:
             outcome.force_exception(pytest.skip.Exception(f"Mac-only dependency '{name}' not installed"))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):  # fixtures that touch a Mac-only package
+    _skip_if_mac_only((yield))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    _skip_if_mac_only((yield))

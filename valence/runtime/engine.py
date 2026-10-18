@@ -293,9 +293,11 @@ class Runtime:
             self.mic = True
 
     # --- the tick -------------------------------------------------------------------------------------
-    def step(self) -> list[dict[str, Any]]:
+    def step(self, wall: float | None = None, mono: float | None = None) -> list[dict[str, Any]]:
+        """One tick. ``wall``/``mono`` override the clock for offline replays (default: now)."""
         t0 = time.perf_counter()
-        wall, mono = time.time(), time.monotonic()
+        wall = time.time() if wall is None else wall
+        mono = time.monotonic() if mono is None else mono
         records = self.source.next_tick(wall, mono)
         if records is None:  # scenario finished
             self.paused = True
