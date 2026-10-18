@@ -1,11 +1,15 @@
-"""Narrator HTTP service (local only, 127.0.0.1:8081).
+"""Narrator HTTP service (local only, 127.0.0.1:8081), contract 1.0.
 
-``POST /narrate`` takes one fact sheet (validated with :class:`FactSheet`; 422 on bad input) and
-returns the explanation, its source and latency; ``GET /health`` reports the model, warm-up state
-and per-source counts. The model is loaded and warmed once at startup; if that fails the service
-keeps answering with templates and says so in ``/health``.
+``POST /narrate`` takes one ``valence.contracts.FactSheet`` (FastAPI validates it with the
+contract model itself, so anything off-contract is a 422) and returns exactly a
+``valence.contracts.NarrationResult`` ``{text, source, latency_ms, attempts}``, which is what
+``valence.explain.narrator_client.NarratorClient`` parses. ``GET /health`` is 200 only when the
+model is loaded and warmed up (docs/API.md 9.2; the client only checks the status code) and 503
+otherwise, with the model, warm-up state, load error and per-source counts in the body either way.
+The model is loaded, its prompt caches prefilled and warmed once at startup; if that fails the
+service keeps answering ``/narrate`` with templates and ``/health`` says 503.
 
-    python -m valence.narrator.service [--port 8081] [--template-only]
+    python -m valence.narrator.service [--port 8081] [--template-only] [--adapter PATH] [--model PATH]
 """
 
 from __future__ import annotations
@@ -14,14 +18,14 @@ import argparse
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
+from valence.contracts import FactSheet, NarrationResult
 from valence.narrator.engine import Narrator, TemplateOnlyNarrator
-from valence.narrator.schema import FactSheet
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +38,6 @@ class NarratorLike(Protocol):
     def narrate(self, sheet: dict[str, Any]) -> dict[str, Any]: ...
     def health(self) -> dict[str, Any]: ...
     def close(self) -> None: ...
-
-
-class NarrateResponse(BaseModel):
-    text: str
-    source: Literal["llm", "llm_retry", "template"]
-    latency_ms: float
-    attempts: int
 
 
 def create_app(narrator: NarratorLike | None = None, *, template_only: bool = False) -> FastAPI:
@@ -61,19 +58,18 @@ def create_app(narrator: NarratorLike | None = None, *, template_only: bool = Fa
     app = FastAPI(title="Valence Narrator", version="1.0", lifespan=lifespan)
     app.state.narrator = narrator
 
-    @app.post("/narrate", response_model=NarrateResponse)
-    def narrate(sheet: FactSheet) -> NarrateResponse:
-        result = narrator.narrate(sheet.model_dump(mode="json"))
-        return NarrateResponse(
-            text=result["text"],
-            source=result["source"],
-            latency_ms=result["latency_ms"],
-            attempts=result["attempts"],
-        )
+    @app.post("/narrate", response_model=NarrationResult)
+    def narrate(sheet: FactSheet) -> NarrationResult:
+        out = narrator.narrate(sheet.model_dump(mode="json"))
+        return NarrationResult(text=out["text"], source=out["source"], latency_ms=int(round(out["latency_ms"])),
+                               attempts=int(out.get("attempts", 1)))
 
     @app.get("/health")
-    def health() -> dict[str, Any]:
-        return narrator.health()
+    def health() -> JSONResponse:
+        """200 only when the LLM is loaded and warmed up; 503 (same body) while loading, after a
+        failed load and in template-only mode. The backend checks only the status code."""
+        body = narrator.health()
+        return JSONResponse(status_code=200 if body.get("ok") else 503, content=body)
 
     return app
 

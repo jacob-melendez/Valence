@@ -1,7 +1,7 @@
 """Offline narrator evaluation: faithfulness, fallback and latency over a batch of fact sheets.
 
-    python -m valence.narrator.evaluate --n 100 --seed 0 --mode llm|template \\
-        [--adapter PATH] [--model PATH] [--sheets FILE.jsonl] [--out FILE.json]
+    python -m valence.narrator.evaluate --n 100 --seed 0 --mode llm|template [--states core|all] \\
+        [--adapter PATH] [--model PATH] [--sheets FILE.jsonl] [--out FILE.json] [--no-prompt-cache]
 
 Prints one JSON report. Rates over raw LLM attempts (hallucinated numbers, false mask language,
 banned terms) measure the model itself; ``pass_rate`` measures what users would actually see
@@ -26,7 +26,10 @@ from valence.narrator.fake_fact_sheets import make_batch
 from valence.narrator.validator import validate
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:[.'%-][a-z0-9]+)*%?")
-_COLLAPSE = ("number", "words", "sentences", "drivers", "person")
+_COLLAPSE = ("number", "sign", "words", "sentences", "drivers", "person", "outside_top5", "qualifier", "contrast",
+             "effect", "direction", "time_of_day", "room_scope", "mask_term", "other_state", "face_state",
+             "unmeasured", "error")
+_QUALIFIER_KINDS = ("qualifier:", "contrast:", "effect:", "direction:")
 
 
 def load_sheets(path: str | Path) -> list[dict[str, Any]]:
@@ -102,17 +105,26 @@ def summarize(sheets: Sequence[Mapping[str, Any]], results: Sequence[Mapping[str
         "distinct_1": distinct_n((r["text"] for r in results), 1),
         "distinct_2": distinct_n((r["text"] for r in results), 2),
         "llm_attempts": len(attempts),
-        "hallucinated_number_rate": _rate(sum(any(x.startswith("number:") for x in rs) for _, rs in attempts),
-                                          len(attempts)),
+        "hallucinated_number_rate": _rate(sum(any(x.startswith(("number:", "sign:")) for x in rs)
+                                              for _, rs in attempts), len(attempts)),
+        "invented_signal_rate": _rate(sum(any(x.startswith("unmeasured:") for x in rs) for _, rs in attempts),
+                                      len(attempts)),
         "false_mask_rate": _rate(sum(any(x.startswith("mask_term:") for x in rs) for _, rs in unmasked),
                                  len(unmasked)),
         "banned_term_rate": _rate(sum(any(x.startswith(("banned:", "person:")) for x in rs) for _, rs in attempts),
                                   len(attempts)),
+        "qualifier_mismatch_rate": _rate(sum(any(x.startswith(_QUALIFIER_KINDS) for x in rs) for _, rs in attempts),
+                                         len(attempts)),
+        "room_scope_rate": _rate(sum(any(x.startswith("room_scope:") for x in rs) for _, rs in attempts),
+                                 len(attempts)),
+        "reused": sum(bool(r.get("reused")) for r in results),
         "final": {
             "hallucinated_number_rate": _rate(sum(any(x.startswith("number:") for x in v.reasons) for v in finals), n),
             "false_mask_rate": _rate(sum(any(x.startswith("mask_term:") for x in v.reasons) for v in finals), n),
             "banned_term_rate": _rate(
                 sum(any(x.startswith(("banned:", "person:")) for x in v.reasons) for v in finals), n),
+            "qualifier_mismatch_rate": _rate(
+                sum(any(x.startswith(_QUALIFIER_KINDS) for x in v.reasons) for v in finals), n),
         },
         "final_violations": dict(Counter(reason_kind(x) for v in finals for x in v.reasons).most_common(10)),
         "top_failure_reasons": dict(failures.most_common(12)),
@@ -135,12 +147,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("llm", "template"), default="llm")
     parser.add_argument("--model", default=None)
     parser.add_argument("--adapter", default=None)
+    parser.add_argument("--states", choices=("core", "all"), default="core", help="state set of synthetic sheets")
     parser.add_argument("--sheets", default=None, help="JSONL fact sheets (default: synthetic make_batch)")
+    parser.add_argument("--no-prompt-cache", action="store_true", help="prefill the whole prompt every request")
     parser.add_argument("--out", default=None, help="also write the JSON report here")
     args = parser.parse_args(argv)
 
-    sheets = load_sheets(args.sheets)[: args.n] if args.sheets else make_batch(args.n, args.seed)
-    narrator = TemplateOnlyNarrator() if args.mode == "template" else Narrator(args.model, args.adapter)
+    sheets = load_sheets(args.sheets)[: args.n] if args.sheets else make_batch(args.n, args.seed, args.states)
+    narrator = (TemplateOnlyNarrator() if args.mode == "template"
+                else Narrator(args.model, args.adapter, prompt_cache=not args.no_prompt_cache, reuse_texts=False))
     with narrator:
         narrator.load()
         results = run(narrator, sheets)
@@ -148,7 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "mode": args.mode,
         "model": narrator.model_path,
         "adapter": narrator.adapter_path,
-        "sheets": args.sheets or f"make_batch(n={args.n}, seed={args.seed})",
+        "sheets": args.sheets or f"make_batch(n={args.n}, seed={args.seed}, states={args.states!r})",
+        "prompt_cache": not args.no_prompt_cache,
         **summarize(sheets, results, narrator.deadline_s),
     }
     text = json.dumps(report, indent=2)
