@@ -143,6 +143,9 @@ export interface ValenceState {
   persons: TrackPerson[];
   /** Box coordinates are in mirrored image space (tracks.mirrored). */
   mirrored: boolean;
+  /** Backend frame size from `tracks` (0 in scenario replay): boxes are normalized to it. */
+  frameW: number;
+  frameH: number;
   govLog: GovernanceMsg[];
   gov: GovernanceMsg | null;
   vectors: Record<number, StateVectorMsg>;
@@ -188,7 +191,7 @@ export function resolveBaseUrl(): string {
 // ---------- Store ----------
 let state: ValenceState = {
   source: "mock", conn: "mock", baseUrl: DEFAULT_API,
-  persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [],
+  persons: [], mirrored: false, frameW: 0, frameH: 0, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [],
   status: null, retention: null, evalSummary: null,
   states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   sim: { face_occlusion: false, low_light: false }, running: "running",
@@ -243,7 +246,10 @@ export function handleMessage(msg: ServerMessage) {
       return set({ lastMessageAt: now });
     case "tracks":
       lastTracksAt = now;
-      return set({ persons: Array.isArray(msg.persons) ? msg.persons : [], mirrored: !!msg.mirrored, lastMessageAt: now });
+      return set({
+        persons: Array.isArray(msg.persons) ? msg.persons : [], mirrored: !!msg.mirrored,
+        frameW: Number(msg.frame_w) || 0, frameH: Number(msg.frame_h) || 0, lastMessageAt: now,
+      });
     case "governance":
       return set({ gov: msg, govLog: [...state.govLog, msg].slice(-200), lastMessageAt: now });
     case "state_vector":
@@ -349,7 +355,7 @@ export function provenanceBadges(s: ValenceState): { label: string; tone: "mock"
 function resetData() {
   recentEvents = {};
   set({
-    persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
+    persons: [], mirrored: false, frameW: 0, frameH: 0, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
     states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   });
 }
@@ -719,7 +725,35 @@ export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
 }
 
 let booted = false;
-export function boot() { if (!booted) { booted = true; setSource("mock", resolveBaseUrl()); } }
+/** True when the page was opened with a usable `?api=` (e.g. the URL run_demo.sh prints). */
+export function hasApiParam(): boolean {
+  if (typeof window === "undefined") return false;
+  try { return !!validBase(new URLSearchParams(window.location.search).get("api")); } catch { return false; }
+}
+/** Mock by default; opened with `?api=`, connect to that backend right away. */
+export function boot() { if (!booted) { booted = true; setSource(hasApiParam() ? "live" : "mock", resolveBaseUrl()); } }
+
+/** The preview box's aspect ratio (`aspect-video`). */
+export const VIEW_ASPECT = 16 / 9;
+/**
+ * Map a box normalized to the backend frame (`frame_w` x `frame_h`) into the 16:9 view, which shows the
+ * frame like `object-cover`: a 4:3 frame is scaled to the view's width and cropped top and bottom.
+ * Unknown frame size (0, scenario replay) leaves the box as is. Mirroring is applied separately.
+ */
+export function coverBox(
+  bbox: readonly [number, number, number, number], frameW: number, frameH: number, viewAspect = VIEW_ASPECT,
+): [number, number, number, number] {
+  const [x1, y1, x2, y2] = bbox;
+  if (!(frameW > 0 && frameH > 0)) return [x1, y1, x2, y2];
+  const fa = frameW / frameH;
+  if (Math.abs(fa - viewAspect) < 1e-3) return [x1, y1, x2, y2];
+  if (fa < viewAspect) { // taller frame: full width, crop vertically
+    const vis = fa / viewAspect, off = (1 - vis) / 2;
+    return [x1, (y1 - off) / vis, x2, (y2 - off) / vis];
+  }
+  const vis = viewAspect / fa, off = (1 - vis) / 2; // wider frame: full height, crop horizontally
+  return [(x1 - off) / vis, y1, (x2 - off) / vis, y2];
+}
 
 const replayBody = (c: Partial<ReplayOpts>, loopDefault: boolean) => ({ speed: c.speed ?? 1, loop: c.loop ?? loopDefault });
 

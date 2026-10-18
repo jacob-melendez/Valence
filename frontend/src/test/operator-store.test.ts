@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CORE_STATES, applyCommandResult, applyHealth, applyStateSnapshot, baselineFilling, baselineProgress, baselineWarning,
+  CORE_STATES, applyCommandResult, applyHealth, coverBox, applyStateSnapshot, baselineFilling, baselineProgress, baselineWarning,
   describe as describeCommand, getState, handleMessage, parseBaseline, stateName, validStates,
   type HelloMsg, type PredictionMsg, type RoomBaseline, type StateVectorMsg, type StatusMsg,
 } from "@/lib/valence";
@@ -181,5 +181,34 @@ describe("GET /api/state on connect", () => {
     expect(() => applyStateSnapshot({ people: { "42": null } })).not.toThrow();
     expect(() => applyStateSnapshot(null)).not.toThrow();
     expect(getState().predictions[42]).toBeUndefined();
+  });
+});
+
+describe("box mapping into the 16:9 view", () => {
+  it("leaves 16:9 frames and unknown frame sizes unchanged", () => {
+    expect(coverBox([0.1, 0.2, 0.4, 0.95], 1280, 720)).toEqual([0.1, 0.2, 0.4, 0.95]);
+    expect(coverBox([0.1, 0.2, 0.4, 0.95], 0, 0)).toEqual([0.1, 0.2, 0.4, 0.95]);
+  });
+
+  it("crops a 640x480 frame top and bottom like object-cover", () => {
+    const [x1, y1, x2, y2] = coverBox([0.1, 0.2, 0.4, 0.95], 640, 480);
+    expect([x1, x2]).toEqual([0.1, 0.4]); // full width shown
+    expect(y1).toBeCloseTo(0.1); // (0.2 - 0.125) / 0.75
+    expect(y2).toBeCloseTo(1.1); // below the visible area, clipped by the view
+    const mid = coverBox([0, 0.5, 1, 0.5], 640, 480);
+    expect(mid[1]).toBeCloseTo(0.5); // the centre stays put
+    expect(coverBox([0, 0.125, 1, 0.875], 640, 480).map((v) => +v.toFixed(6))).toEqual([0, 0, 1, 1]);
+  });
+
+  it("crops a wider frame left and right", () => {
+    const [x1, , x2] = coverBox([0.2, 0, 0.8, 1], 2560, 1080);
+    const vis = (16 / 9) / (2560 / 1080);
+    expect(x1).toBeCloseTo((0.2 - (1 - vis) / 2) / vis);
+    expect(x2).toBeCloseTo((0.8 - (1 - vis) / 2) / vis);
+  });
+
+  it("stores the frame size from tracks", () => {
+    handleMessage({ type: "tracks", t: 1, capture_ts_ms: 1, frame_w: 640, frame_h: 480, mirrored: false, persons: [] });
+    expect([getState().frameW, getState().frameH]).toEqual([640, 480]);
   });
 });
