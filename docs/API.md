@@ -246,7 +246,7 @@ and an instant template explanation.
 | `mask_override` | bool | The face-only baseline and the context model disagree with enough confidence for several ticks, the face evidence inside M2 points to M0's state, and the person's window is at least 2 min old. As implemented: M0 reads `Collaborative_Happy` with confidence ≥ 0.45 while M2 (confidence ≥ 0.70) does not; on after ≥ 3 of the last 6 face-visible ticks, off at ≤ 1. The plan's rule is M0 ≥ 0.55 for 3 consecutive ticks (`docs/ARCHITECTURE.md` 9.4). Show "Context corrected the facial mask". |
 | `warming_up` | bool | `true` during the person's first `settings.warmup_s` (60 s) |
 | `layers` | `Layer[]` | Explanation layers, strongest support first (see below) |
-| `data_quality` | object | `face_visible_frac`: fraction of the last 5 min with a visible face. `lux`: latest lux or `null`. `ood_features`: names of features clipped to the training range; when more than 3 are clipped, confidence is lowered and the narration says so. |
+| `data_quality` | object | `face_visible_frac`: fraction of the last 5 min with a visible face. `lux`: latest lux or `null`. `ood_features`: names of features out of distribution: outside their physical domain (face, visibility, slump/hih levels, counts) or, for db/lux/motion, more than half the training range beyond p1/p99; clock features never count. When more than 3 are listed, confidence is lowered and the narration says so. |
 | `explanation` | `{text, source}` | Instant explanation built from the FactSheet. `source` is always `"template"` here. A later `explanation` message may replace it (section 5). |
 | `source`, `simulated_fields` | string, string[] | Provenance (section 6) |
 
@@ -697,11 +697,11 @@ by `valence/models/train_ladder.py`; do not rely on them in the UI.
 #### 7.3.12 `GET /api/health`
 
 ```json
-{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null}
+{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null, "mic_error": null}
 ```
 
-`edge_error` is the reason the perception runner failed to start (missing module, camera or mic permission),
-or `null`. `ok` is `true` whenever the server can answer. Use `status` and `degraded` for component health.
+`edge_error` is the reason the perception runner failed to start (missing module, camera permission), or
+`null`. `mic_error` is set when audio failed to start and the runner is running video-only (§7.4.2). `ok` is `true` whenever the server can answer. Use `status` and `degraded` for component health.
 
 #### 7.3.13 `GET /api/narrator/health`
 
@@ -775,11 +775,13 @@ Switch the input to live sensors: clear all windows, start the edge runner, unpa
 No body.
 
 ```json
-{"ok": true, "edge_error": null}
+{"ok": true, "edge_error": null, "mic_error": null}
 ```
 
-If the camera or mic cannot start, the call still returns `200` with `"ok": false` and the reason in
-`edge_error`. `status.degraded` then contains `edge`. Audit: `live`, then `reset`.
+If the edge fails with audio on (wrong `VALENCE_MIC`, mic permission, a silent mic), the server retries once
+with video only. If that works, live mode runs without audio: `"ok": true`, the first failure in `mic_error`,
+and `status.degraded` contains `mic`. If the camera cannot start either, the call still returns `200` with
+`"ok": false` and both reasons in `edge_error`; `status.degraded` then contains `edge`. Audit: `live`, then `reset`.
 
 #### 7.4.3 `POST /api/events/break`
 
@@ -808,7 +810,7 @@ scenario with the simulator, and restarts the ticker. All messages then carry `s
 
 | Body field | Type | Default | Notes |
 |---|---|---|---|
-| `speed` | float | `1.0` | Ticks run `speed` times faster than real time. Must be > 0 (not validated yet). `20` is used by `scripts/e2e_check.py`. |
+| `speed` | float | `1.0` | Ticks run `speed` times faster than real time. Must be in (0, 1000], otherwise `422`. `20` is used by `scripts/e2e_check.py`. |
 | `loop` | bool | `false` | Restart at the end. Without looping, the runtime pauses when the scenario ends; use another replay or `POST /api/live` to continue. |
 
 ```json
@@ -819,7 +821,7 @@ scenario with the simulator, and restarts the ticker. All messages then carry `s
 {"ok": true, "scenario": "frustrated_masked", "speed": 1.0}
 ```
 
-Errors: `404 {"detail": "unknown scenario <name>"}`. Audit: `replay` with `scenario` and `speed`, and `reset`.
+Errors: `404 {"detail": "unknown scenario <name>"}`; `422` for a `speed` outside (0, 1000]. Audit: `replay` with `scenario` and `speed`, and `reset`.
 
 #### 7.4.5 `POST /api/sim/face_occlusion` and `POST /api/sim/low_light`
 
@@ -995,11 +997,12 @@ It exercises the same path as live data, so `tracks` are sent from the recorded 
 `GET /api/recordings` returns a bare array, for example `[{"name": "golden_demo", "bytes": 482113}]`.
 
 `POST /api/replay_recording/{name}` releases live sensors, clears all windows, starts the feeder and restarts
-the ticker. All messages then carry `source: "replay"`.
+the ticker. All messages then carry `source: "replay"`. Each observation is re-stamped to the current clock as
+it is pushed, so break clocks start when the replayed person appears (not at the recording's capture time).
 
 | Body field | Type | Default | Notes |
 |---|---|---|---|
-| `speed` | float | `1.0` | Playback speed |
+| `speed` | float | `1.0` | Playback speed, in (0, 1000] (`422` otherwise) |
 | `loop` | bool | `true` | Restart at the end of the file |
 
 ```json

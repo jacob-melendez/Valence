@@ -39,6 +39,7 @@ class NarratorClient:
         self._stop = threading.Event()
         self.healthy = False
         self.failures = 0
+        self._failed_in_a_row = 0
         self._thread = threading.Thread(target=self._run, name="narrator-client", daemon=True)
 
     def start(self) -> None:
@@ -59,11 +60,20 @@ class NarratorClient:
         with self._cv:
             self._pending.clear()
 
+    def _mark(self, ok: bool) -> None:
+        """Healthy after one success, unhealthy only after two failures in a row (one slow narration
+        past the deadline should not flip the status line to fallback)."""
+        self._failed_in_a_row = 0 if ok else self._failed_in_a_row + 1
+        if ok:
+            self.healthy = True
+        elif self._failed_in_a_row >= 2:
+            self.healthy = False
+
     def check_health(self) -> bool:
         try:
-            self.healthy = httpx.get(f"{self.url}/health", timeout=1.0).status_code == 200
+            self._mark(httpx.get(f"{self.url}/health", timeout=1.0).status_code == 200)
         except httpx.HTTPError:
-            self.healthy = False
+            self._mark(False)
         return self.healthy
 
     def _run(self) -> None:
@@ -87,10 +97,10 @@ class NarratorClient:
                                    headers={"content-type": "application/json"})
                 resp.raise_for_status()
                 result = NarrationResult.model_validate(resp.json())
-                self.healthy = True
+                self._mark(True)
             except (httpx.HTTPError, ValueError):
                 self.failures += 1
-                self.healthy = False
+                self._mark(False)
                 return  # the prediction already carries template text
             if result.source != "template":
                 self._cache[key] = result

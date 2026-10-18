@@ -420,11 +420,21 @@ is never narrated and is left out of layer sums and drivers.
 
 ### 7.5 Clipping and out-of-distribution reporting
 
-Before inference, every feature is clipped to the training p1–p99 range stored with the model artifacts. The
-names of clipped features go to `data_quality.ood_features` (`fill_ratio` excluded). If more than 3 features
-are clipped, the served model pulls the probabilities 30% toward uniform, which lowers the confidence, and the
-template text says some readings are outside the training range. The sim-to-real target is that at least 90% of
-live features fall inside the clip bounds (TBD — measured on live captures).
+Before inference, every feature is clipped to the training p1–p99 range stored with the model artifacts
+(trees saturate at the edges, so this barely moves predictions). Clipping alone is not evidence of a strange
+input, so out-of-distribution reporting uses a separate band per feature (`ood_band` in `served.py`):
+
+- features with a physical domain (face valence and means in [−1, 1]; visibility, withdrawal, slump and
+  head-in-hands levels in [0, 1]; event counts and `*_since_s` ≥ 0) are OOD only outside that domain;
+- clock and context features (`tod_sin`, `tod_cos`, `hours_since_break`, `n_people`, `fill_ratio`) never are;
+- the remaining db/lux/motion features are OOD only more than 50% of the training range beyond p1/p99
+  (e.g. `db_now` outside about 14–95 dB).
+
+Their names go to `data_quality.ood_features`. If more than 3 features are OOD, the served model pulls the
+probabilities 30% toward uniform, which lowers the confidence, and the template text says some readings are
+outside the training range. On the committed live captures (typing, fists) no tick has more than 2 OOD
+features; under the earlier rule (every clipped feature counted) every tick of both had more than 3, because a
+face visible on every frame (1.0 vs a training p99 of 0.998) and morning times of day sat at the clip edges.
 
 ---
 
@@ -470,7 +480,7 @@ The ticker runs this for each person on every completed tick. Target: features t
 ### 9.1 Features, clip, models
 
 1. Append the new `TickRecord` to the person's window, then `features_from_window(person, room)` → 114 floats.
-2. Clip to p1–p99 and collect `ood_features`.
+2. Clip to p1–p99 and collect `ood_features` (§7.5: out-of-band features, not every clipped one).
 3. Run M2 and M0 (M0 on the face snapshot; skipped, giving a null `face_only`, when no face was visible this
    tick).
 

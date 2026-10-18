@@ -68,17 +68,30 @@ class App:
         self.runtime = Runtime(settings, self.bus, self.predictor, narrator=self.narrator)
         self.edge_stop = None
         self.edge_error: str | None = None
+        self.mic_error: str | None = None  # edge running video-only because audio failed to start
 
     def start_edge(self, obscure_face: bool = False) -> None:
         if self.edge_stop is not None:
             return
+        self.edge_error = self.mic_error = None
         try:
             from valence.edge.run import start as edge_start  # LOCAL session's module (Mac only)
-
-            self.edge_stop = edge_start(self.runtime.push_obs, video=True, audio=True, obscure_face=obscure_face)
-            self.edge_error = None
-        except Exception as exc:  # missing module, camera denied, ...
+        except Exception as exc:
             self.edge_error = f"{type(exc).__name__}: {exc}"
+            log.error("edge unavailable: %s", self.edge_error)
+            return
+        try:
+            self.edge_stop = edge_start(self.runtime.push_obs, video=True, audio=True, obscure_face=obscure_face)
+            return
+        except Exception as exc:  # camera denied, wrong or silent mic, ...
+            first = f"{type(exc).__name__}: {exc}"
+        # A failed mic must not take the camera down: the edge closes both before raising, so retry video-only.
+        try:
+            self.edge_stop = edge_start(self.runtime.push_obs, video=True, audio=False, obscure_face=obscure_face)
+            self.mic_error = first
+            log.error("edge started without audio: %s", first)
+        except Exception as exc:
+            self.edge_error = f"{type(exc).__name__}: {exc} (with audio: {first})"
             log.error("edge failed to start: %s", self.edge_error)
 
     def stop_edge(self) -> None:
@@ -218,7 +231,7 @@ async def ws_events(ws: WebSocket) -> None:
 def health() -> dict[str, Any]:
     a = state()
     return {"ok": True, "contract_version": CONTRACT_VERSION, "mode": a.runtime.mode,
-            "model": getattr(a.predictor, "model_id", "unknown"), "edge_error": a.edge_error}
+            "model": getattr(a.predictor, "model_id", "unknown"), "edge_error": a.edge_error, "mic_error": a.mic_error}
 
 
 @app.get("/api/states")
@@ -366,13 +379,24 @@ def log_break(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return {"ok": True}
 
 
+def _speed(body: dict[str, Any]) -> float:
+    """Replay speed from a request body: a finite number in (0, 1000]."""
+    try:
+        speed = float(body.get("speed", 1.0))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "speed must be a number") from None
+    if not (0 < speed <= 1000):  # also rejects NaN; 0 would divide by zero in the tick loop
+        raise HTTPException(422, "speed must be in (0, 1000]")
+    return speed
+
+
 @app.post("/api/replay/{scenario}")
 def replay(scenario: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     a = state()
     if scenario not in {s["name"] for s in scenarios.list_scenarios()}:
         raise HTTPException(404, f"unknown scenario {scenario}")
+    speed = _speed(body)
     a.stop_edge()
-    speed = float(body.get("speed", 1.0))
     a.runtime.use_scenario(scenarios.render(scenario, state_set=a.settings.state_set), scenario,
                            speed=speed, loop=bool(body.get("loop", False)))
     a.runtime.paused = False
@@ -397,8 +421,9 @@ def replay_recording(name: str, body: dict[str, Any] = Body(default={})) -> dict
     path = (RECORDINGS / f"{name}.jsonl").resolve()
     if path.parent != RECORDINGS.resolve() or not path.exists():
         raise HTTPException(404, f"unknown recording {name}")
+    speed = _speed(body)
     a.stop_edge()
-    a.runtime.use_recording(path, speed=float(body.get("speed", 1.0)), loop=bool(body.get("loop", True)))
+    a.runtime.use_recording(path, speed=speed, loop=bool(body.get("loop", True)))
     a.runtime.paused = False
     a.runtime.stop()
     a.runtime.start()
@@ -414,7 +439,7 @@ def go_live() -> dict[str, Any]:
     a.runtime.paused = False
     a.runtime.stop()
     a.runtime.start()
-    return {"ok": a.edge_error is None, "edge_error": a.edge_error}
+    return {"ok": a.edge_error is None, "edge_error": a.edge_error, "mic_error": a.mic_error}
 
 
 @app.post("/api/sim/{overlay}")

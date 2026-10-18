@@ -232,6 +232,8 @@ class Runtime:
         self.smoothers.clear()
         self.latest.clear()
         self.history.clear()
+        self._last_narrated.clear()  # person ids restart, so their throttles must too
+        self._last_audited.clear()
         if self.narrator is not None:
             self.narrator.clear_cache()
         self._audit("operator", {"action": "reset", "keep_room": keep_room})
