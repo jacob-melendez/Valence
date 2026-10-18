@@ -41,8 +41,9 @@ def _condition(sheet: dict) -> str:
 
 def test_feature_names_are_the_served_vector():
     from valence.features.compute import FEATURE_NAMES as served
+    from valence.features.compute import ROOM_REL
 
-    assert FEATURE_NAMES == tuple(served)
+    assert FEATURE_NAMES == tuple(f for f in served if f not in ROOM_REL)  # venue-relative features: CLOUD round 7
     assert {"db_mean_15m", "fist_cnt_5m", "fist_since_s", "face_visible_frac_5m", "tod_sin", "fill_ratio",
             "withdraw_now", "n_people", "lux_rel_15m", "hih_d1m15m", "face_visible_now"} <= set(FEATURE_NAMES)
 

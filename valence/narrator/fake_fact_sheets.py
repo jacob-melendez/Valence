@@ -35,12 +35,14 @@ from typing import Any
 from valence.contracts import CORE_STATES, STATE_SETS, display_label
 from valence.explain.explainer import build_fact_sheet, build_layers
 from valence.features.compute import FEATURE_NAMES as COMPUTED_FEATURES
+from valence.features.compute import ROOM_REL
 
 SMOOTH_CHANNELS: tuple[str, ...] = ("db", "lux", "motion", "slump", "hih")
 EVENT_CHANNELS: tuple[str, ...] = ("fist", "laugh", "compl")
 WINDOWS: tuple[str, ...] = ("1m", "5m", "15m")
 
-FEATURE_NAMES: tuple[str, ...] = tuple(COMPUTED_FEATURES)  # the served model's frozen vector
+# The vector these fake sheets were designed on (the venue-relative room features came later; CLOUD round 7).
+FEATURE_NAMES: tuple[str, ...] = tuple(f for f in COMPUTED_FEATURES if f not in ROOM_REL)
 FACE_CONDITIONS: tuple[str, ...] = ("agree", "disagree", "hidden")
 
 Range = tuple[float, float]

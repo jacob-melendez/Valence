@@ -531,6 +531,9 @@ call injects data that is not sensed, so it is tagged in `simulated_fields` or `
 | POST | `/api/demo/seed` | Pre-fill room history | `demo_seed` | **yes**: `room_history`, `sim_seed`, optionally `hours_since_break` |
 | POST | `/api/demo/reset` | Forget all people, keep the room | `reset` | no |
 | POST | `/api/calibrate/room` | Venue calibration | `calibrate_room` | no (changes calibration, not data) |
+| POST | `/api/room/baseline` | Capture the venue room baseline | `room_baseline`, then `room_baseline_captured` | no (a measurement) |
+| GET | `/api/room/baseline` | Baseline status and values | — | — |
+| POST | `/api/room/baseline/reset` | Back to the automatic baseline | `room_baseline_reset` | no |
 | POST | `/api/mode` | Room-only on or off | `mode` | no |
 | POST | `/api/label` | Self-report label (P1) | `self_report` | no (never enters the model) |
 
@@ -697,8 +700,11 @@ by `valence/models/train_ladder.py`; do not rely on them in the UI.
 #### 7.3.12 `GET /api/health`
 
 ```json
-{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null, "mic_error": null}
+{"ok": true, "contract_version": "1.0.0", "mode": "replay", "model": "m2_lgbm@1a2b3c4d", "edge_error": null, "mic_error": null,
+ "room_baseline": {"mode": "captured", "complete": true, "target_samples": 90, "db_samples": 90, "lux_samples": 90, "db_median": 68.4, "db_iqr": 2.1, "lux_median": 410.0}}
 ```
+
+`room_baseline` is the venue baseline (§7.4.12).
 
 `edge_error` is the reason the perception runner failed to start (missing module, camera permission), or
 `null`. `mic_error` is set when audio failed to start and the runner is running video-only (§7.4.2). `ok` is `true` whenever the server can answer. Use `status` and `degraded` for component health.
@@ -965,7 +971,34 @@ Calibration applies to new observations only. The window then mixes old and new 
 15 min, so calibrate first and call `POST /api/control/stop` then `start` before the real run. Audit:
 `calibrate_room` with the applied values. Measured values, not simulated.
 
-#### 7.4.12 `POST /api/label`
+#### 7.4.12 `POST /api/room/baseline`, `GET /api/room/baseline`, `POST /api/room/baseline/reset`
+
+The venue room baseline. The served models never see absolute dB or lux: they read the room *relative to this
+baseline* (`db_room_*` = dB above it, `lux_room_*` = log2 of the light ratio), so a loud hall is "this room's
+normal" instead of evidence of a loud, frustrated room. Explanations still quote the absolute level ("average
+noise of 72 dB over the last 5 minutes, 6 dB above this room's baseline"). Near-field gating of laughter and
+compliments uses it too (an event counts only `near_field_db` = 6 dB above the baseline).
+
+On arrival at the venue, with the person sitting neutral at the desk, start a capture:
+
+| Body field | Type | Default | Notes |
+|---|---|---|---|
+| `seconds` | float | `90` (`settings.room_baseline_s`) | Samples to collect per channel (about one audio block and one lux estimate per second). `422` outside [10, 600]. |
+
+Response: `{"ok": true, "mode": "capturing", "complete": false, "target_samples": 90, "db_samples": 0, ...}`.
+`GET /api/room/baseline` returns the same object; `mode` becomes `captured` once the dB channel has its samples
+(or the lux channel, if no audio arrives). Until then the running median of what has been collected is used.
+
+Without a capture the baseline is automatic (`mode: "auto"`): the first `room_baseline_s` seconds of a live
+session or of a replayed recording. `POST /api/live` keeps a captured baseline; a recording replay always starts
+an automatic one (its own room); `POST /api/room/baseline/reset` goes back to automatic. Scenario replays carry
+the simulator's own baseline per tick.
+
+The baseline is two medians and an IQR, held in RAM and never written to disk except as the audit entries
+`room_baseline` (seconds), `room_baseline_captured` (the medians) and `room_baseline_reset`. Calibrating with
+`POST /api/calibrate/room` afterwards shifts the collected baseline into the new units.
+
+#### 7.4.13 `POST /api/label`
 
 Self-report label (P1), used to compare live predictions against what the person reports. **It never
 changes a prediction or any model input.**
@@ -988,7 +1021,7 @@ The label, the time and that person's latest numeric `TickRecord` (no media) are
 `422 {"detail": "state must be one of [...]"}`, and a missing body gives `422`. Audit: `self_report` with
 `label` and `person_id`.
 
-#### 7.4.13 `GET /api/recordings` and `POST /api/replay_recording/{name}`
+#### 7.4.14 `GET /api/recordings` and `POST /api/replay_recording/{name}`
 
 The camera/mic fallback: replay a features-only JSONL recording (`data/real/<name>.jsonl`, written by
 `python -m valence.edge.run --jsonl`) through the live aggregator, with its original timing scaled by `speed`.

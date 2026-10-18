@@ -4,14 +4,16 @@ import numpy as np
 
 from valence.config import Settings
 from valence.features.build_dataset import build
-from valence.features.compute import FEATURE_NAMES, FEATURE_SETS, compute, features_from_window
+from valence.features.compute import ABS_ROOM, FEATURE_NAMES, FEATURE_SETS, NOISY_LIVE, compute, features_from_window
 from valence.features.window import RollingWindow
 from valence.runtime.engine import ScenarioSource
 from valence.sim.scenarios import render
 
 
 def test_feature_names_and_sets():
-    assert len(FEATURE_NAMES) == 114 and len(FEATURE_SETS["m2"]) == 110
+    assert len(FEATURE_NAMES) == 123 and len(FEATURE_SETS["m2"]) == 101
+    # The served models never see absolute room levels (venue shift); the ablation keeps them.
+    assert not set(FEATURE_SETS["m2"]) & set(ABS_ROOM) and set(ABS_ROOM) - set(NOISY_LIVE) <= set(FEATURE_SETS["m2_abs"])
     for name, cols in FEATURE_SETS.items():
         assert set(cols) <= set(FEATURE_NAMES), name
     assert not set(FEATURE_SETS["m2_noface"]) & set(FEATURE_SETS["m0t"])
@@ -66,4 +68,4 @@ def test_short_and_missing_windows_do_not_crash():
                                            "face_valence", "face_visible")}
     room = {f: np.array([nan]) for f in ("ambient_db", "light_lux", "laughter_count", "compliments_count")}
     x = compute(person, room)
-    assert x.shape == (114,)
+    assert x.shape == (123,)

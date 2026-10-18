@@ -27,7 +27,7 @@ EVENTS = {"fist": ("person", "clenched_fists_count"), "laugh": ("room", "laughte
           "compl": ("room", "compliments_count")}
 PERSON_FIELDS = ("motion_energy", "posture_slump", "head_in_hands_frac", "clenched_fists_count",
                  "social_withdrawal_flag", "n_people", "hours_since_break", "tod_h", "face_valence", "face_visible")
-ROOM_FIELDS = ("ambient_db", "light_lux", "laughter_count", "compliments_count")
+ROOM_FIELDS = ("ambient_db", "light_lux", "laughter_count", "compliments_count", "room_db_base", "room_lux_base")
 
 
 def _cont_names(ch: str) -> list[str]:
@@ -46,16 +46,24 @@ FEATURE_NAMES += ["withdraw_now", "withdraw_frac_5m", "n_people", "hours_since_b
 FACE_FEATURES = ["face_now", "face_visible_now", "face_mean_1m", "face_mean_5m", "face_mean_15m", "face_std_5m",
                  "face_visible_frac_5m"]
 FEATURE_NAMES += FACE_FEATURES
+# Room level relative to the venue baseline (TickRecord.room_db_base / room_lux_base): dB above the baseline,
+# light as log2(lux / baseline lux). A loud hall is then "this room's normal", not "loud".
+ROOM_REL = ["db_room_now", "db_room_mean_1m", "db_room_mean_5m", "db_room_mean_15m", "db_room_max_5m",
+            "db_room_ewm_5m", "lux_room_now", "lux_room_mean_5m", "lux_room_mean_15m"]
+FEATURE_NAMES += ROOM_REL
 FEATURE_INDEX = {n: i for i, n in enumerate(FEATURE_NAMES)}
 
-_ABS_DB = [n for n in FEATURE_NAMES if n.startswith("db_") and n.split("_")[1] in ("now", "mean", "max", "ewm")]
-SNAPSHOT = ["db_now", "lux_now", "motion_now", "slump_now", "hih_now", "fist_cnt_now", "laugh_cnt_now",
+# Absolute room levels: computed and quoted in explanations, but not used by the served models (venue shift).
+ABS_ROOM = [n for n in FEATURE_NAMES
+            if n.split("_")[0] in ("db", "lux") and n.split("_")[1] in ("now", "mean", "max", "ewm")]
+SNAPSHOT = ["db_room_now", "lux_room_now", "motion_now", "slump_now", "hih_now", "fist_cnt_now", "laugh_cnt_now",
             "compl_cnt_now", "withdraw_now", "n_people", "hours_since_break", "tod_sin", "tod_cos"]
 # 1-minute dB/lux slopes and spreads are dominated by transients live (typing starting, doors, webcam
 # auto-exposure): computed and shown, but not used by the served context models (live capture run 1).
 NOISY_LIVE = ["db_slope_1m", "db_std_1m", "lux_slope_1m", "lux_std_1m"]
-CONTEXT = [n for n in FEATURE_NAMES if n not in FACE_FEATURES and n not in NOISY_LIVE]
-_M2 = [n for n in FEATURE_NAMES if n not in NOISY_LIVE]
+_ABS_M2 = [n for n in FEATURE_NAMES if n not in NOISY_LIVE and n not in ROOM_REL]  # the pre-baseline design
+_M2 = [n for n in _ABS_M2 if n not in ABS_ROOM] + ROOM_REL
+CONTEXT = [n for n in _M2 if n not in FACE_FEATURES]
 
 # Feature sets of the model ladder (docs/PLAN.md "Model ladder").
 FEATURE_SETS: dict[str, list[str]] = {
@@ -63,7 +71,7 @@ FEATURE_SETS: dict[str, list[str]] = {
     "m0t": FACE_FEATURES,
     "m1": SNAPSHOT,
     "m2_noface": CONTEXT,
-    "m2_noabsdb": [n for n in _M2 if n not in _ABS_DB],
+    "m2_abs": _ABS_M2,  # absolute dB/lux instead of room-relative (ablation)
     "m2_notime": [n for n in _M2 if n not in ("hours_since_break", "tod_sin", "tod_cos")],
     "m2": _M2,
 }
@@ -113,6 +121,25 @@ def _continuous(x: np.ndarray) -> list[float]:
     return out
 
 
+def _last_finite(x: np.ndarray | None) -> float:
+    if x is None:
+        return math.nan
+    ok = x[~np.isnan(x)]
+    return float(ok[-1]) if ok.size else math.nan
+
+
+def _room_rel(v: dict[str, float], db_base: float, lux_base: float) -> list[float]:
+    out = []
+    for name in ROOM_REL:
+        ch, absolute = name.split("_")[0], v[name.replace("_room", "")]
+        if ch == "db":
+            out.append(absolute - db_base)
+        else:
+            ok = absolute > 0 and lux_base > 0  # False for NaN
+            out.append(math.log2(absolute / lux_base) if ok else math.nan)
+    return out
+
+
 def _events(x: np.ndarray) -> list[float]:
     x = np.nan_to_num(x, nan=0.0)
     now = float(x[-1]) if x.size else 0.0
@@ -148,6 +175,8 @@ def compute(person: dict[str, np.ndarray], room: dict[str, np.ndarray]) -> np.nd
         _nanstat(np.nanmean, face[-WIN["15m"]:]), _nanstat(np.nanstd, face[-WIN["5m"]:]),
         _nanstat(np.nanmean, vis[-WIN["5m"]:]),
     ]
+    v = dict(zip(FEATURE_NAMES, feats))
+    feats += _room_rel(v, _last_finite(r.get("room_db_base")), _last_finite(r.get("room_lux_base")))
     return np.asarray(feats, dtype=float)
 
 

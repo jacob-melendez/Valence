@@ -1,0 +1,11 @@
+description: A loud hackathon hall (72 dB around the team) - focused work, then masked frustration. With the venue baseline the hall is this room's normal, so the flip has to come from the person, not the noise.
+seed: 109
+people: 1
+start_hour: 13.0
+start_hours_since_break: 1.5
+lux_base: 450
+venue_db: 72
+face_hidden: 0.05
+segments:
+  - {minutes: 6, state: Focused}
+  - {minutes: 9, state: Frustrated_Masked, overrides: {mask_p: 1.0}}

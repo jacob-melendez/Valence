@@ -222,6 +222,8 @@ class TickRecord:
     db_p90: float = NAN
     light_lux: float = NAN
     lux_quality: float = 0.0
+    room_db_base: float = NAN  # venue baseline: room level with the person sitting neutral (POST /api/room/baseline)
+    room_lux_base: float = NAN  # venue baseline light
     # Somatic & Social
     laughter_count: int = 0  # room, near-field gated
     compliments_count: int = 0  # room, near-field gated

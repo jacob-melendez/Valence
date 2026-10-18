@@ -69,3 +69,12 @@ def test_mic_failure_keeps_the_camera(client, monkeypatch):
     assert res["ok"] and res["edge_error"] is None and "mic is silent" in res["mic_error"]
     assert client.get("/api/health").json()["mic_error"]
     assert "mic" in client.get("/api/state").json()["status"]["degraded"]
+
+
+def test_room_baseline_endpoints(client):
+    assert client.post("/api/room/baseline", json={"seconds": 5}).status_code == 422
+    res = client.post("/api/room/baseline", json={"seconds": 60}).json()
+    assert res["ok"] and res["mode"] == "capturing" and res["target_samples"] == 60
+    assert client.get("/api/room/baseline").json()["mode"] == "capturing"
+    assert client.get("/api/health").json()["room_baseline"]["mode"] == "capturing"
+    assert client.post("/api/room/baseline/reset").json()["mode"] == "auto"

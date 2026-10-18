@@ -128,6 +128,7 @@ class Runtime:
         self.history: deque[dict[str, Any]] = deque(maxlen=settings.window_ticks * 8)
         self._last_narrated: dict[int, tuple[str, str, float]] = {}
         self._last_audited: dict[int, tuple[str, float]] = {}
+        self._baseline_logged = None
         self._tick_i = 0
         self._last_tracks = 0.0
         self.loop_latency_ms = 0.0
@@ -192,6 +193,8 @@ class Runtime:
         self._new_source_counters()
         self.source = LiveSource(self.aggregator)
         self.aggregator.source = "live"
+        if self.aggregator.baseline.mode != "captured":  # an operator capture at the venue survives
+            self.aggregator.start_baseline(mode="auto")
         self.mode = "live"
         self.speed = 1.0
         self._audit("operator", {"action": "live"})
@@ -205,6 +208,7 @@ class Runtime:
         self.reset_people(keep_room=False)
         self.source = LiveSource(self.aggregator, label="replay")
         self.aggregator.source = "replay"
+        self.aggregator.start_baseline(mode="auto")  # the recording's own room
         self.mode = "replay"
         self.speed = 1.0
         self.feeder = JsonlFeeder(path, self.push_obs, speed=speed, loop=loop)
@@ -305,6 +309,10 @@ class Runtime:
             self.paused = True
             return []
         records = [self._overlay(r) for r in records]
+        baseline = self.aggregator.baseline
+        if baseline.mode == "captured" and self._baseline_logged is not baseline:
+            self._baseline_logged = baseline
+            self._audit("operator", {"action": "room_baseline_captured", **baseline.snapshot()})
         for r in records:
             self.window.append(r)
         purge = self.gate.end_tick()

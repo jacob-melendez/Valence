@@ -26,7 +26,8 @@ from valence.models.train_ladder import split_sessions
 from valence.sim.generator import simulate_corpus
 
 SEQ = 180
-CHANNELS = ["ambient_db", "light_lux", "motion_energy", "posture_slump", "head_in_hands_frac",
+# Room channels relative to the venue baseline, like the served M2 (dB above it, log2 of the light ratio).
+CHANNELS = ["db_room", "lux_room", "motion_energy", "posture_slump", "head_in_hands_frac",
             "clenched_fists_count", "laughter_count", "compliments_count", "social_withdrawal_flag", "n_people",
             "hours_since_break", "tod_sin", "tod_cos", "face_valence", "face_visible"]
 
@@ -36,6 +37,8 @@ def sequences(df: pd.DataFrame, meta: pd.DataFrame) -> np.ndarray:
     people = df[df["person_id"] != 0].copy()
     people["tod_sin"] = np.sin(2 * np.pi * people["tod_h"] / 24)
     people["tod_cos"] = np.cos(2 * np.pi * people["tod_h"] / 24)
+    people["db_room"] = people["ambient_db"] - people["room_db_base"]
+    people["lux_room"] = np.log2(people["light_lux"] / people["room_lux_base"])
     out = np.zeros((len(meta), SEQ, len(CHANNELS) + 1), dtype=np.float32)
     by_key = {k: g.sort_values("tick") for k, g in people.groupby(["session_id", "person_id"])}
     cache: dict = {}

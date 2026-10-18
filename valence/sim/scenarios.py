@@ -29,7 +29,7 @@ def load_script(name: str, directory: Path = SCENARIO_DIR) -> Script:
         name=name, people=people, segments=segments, seed=int(data.get("seed", 0)),
         description=data.get("description", ""), start_hour=data.get("start_hour"),
         start_hours_since_break=h0, lux_base=data.get("lux_base"), mic_offset_db=data.get("mic_offset_db", 0.0),
-        face_hidden=data.get("face_hidden"),
+        face_hidden=data.get("face_hidden"), venue_db=data.get("venue_db"),
     )
 
 

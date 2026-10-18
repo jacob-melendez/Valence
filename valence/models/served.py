@@ -19,7 +19,7 @@ import numpy as np
 
 from valence.contracts import TickRecord
 from valence.explain.explainer import build_layers
-from valence.features.compute import FEATURE_INDEX, FEATURE_NAMES, FEATURE_SETS, features_from_window
+from valence.features.compute import ABS_ROOM, FEATURE_INDEX, FEATURE_NAMES, FEATURE_SETS, features_from_window
 from valence.features.spec import layer_of
 from valence.models.predictor import PredictionOutput
 
@@ -121,7 +121,8 @@ class ServedPredictor:
         names = self.cols2
         values = {n: float(x[FEATURE_INDEX[n]]) for n in names}
         contribs = {n: float(c) for n, c in zip(names, contrib[k, :-1]) if c != 0.0}
-        layers = build_layers(contribs, values, tod_h=tod_h)
+        absolute = {n: float(x[FEATURE_INDEX[n]]) for n in ABS_ROOM}
+        layers = build_layers(contribs, values, tod_h=tod_h, absolute=absolute)
         return PredictionOutput(
             label=label, confidence=float(p[k]), probabilities=dict(zip(self.states, map(float, p))),
             face_only_label=face_label, face_only_confidence=face_conf, layers=layers, raw_override=raw_override,

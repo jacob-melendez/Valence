@@ -23,7 +23,8 @@ class Settings:
     person_drop_min: float = 15.0
     # Audio
     db_cal_offset: float = 94.0  # dBFS -> approx dB SPL; replaced by calibration
-    near_field_db: float = 6.0  # laughter/compliments count only this far above the room median
+    near_field_db: float = 6.0  # laughter/compliments count only this far above the room baseline (or median)
+    room_baseline_s: float = 90.0  # venue baseline length (audio blocks / lux samples, ~1 per second)
     # Model / states
     state_set: str = "core"  # "core" (4 states) or "all" (6 states)
     artifacts_dir: str = "artifacts"

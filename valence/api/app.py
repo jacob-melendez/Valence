@@ -231,7 +231,8 @@ async def ws_events(ws: WebSocket) -> None:
 def health() -> dict[str, Any]:
     a = state()
     return {"ok": True, "contract_version": CONTRACT_VERSION, "mode": a.runtime.mode,
-            "model": getattr(a.predictor, "model_id", "unknown"), "edge_error": a.edge_error, "mic_error": a.mic_error}
+            "model": getattr(a.predictor, "model_id", "unknown"), "edge_error": a.edge_error, "mic_error": a.mic_error,
+            "room_baseline": a.runtime.aggregator.baseline_status()}
 
 
 @app.get("/api/states")
@@ -485,6 +486,38 @@ def calibrate_room(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     out = a.runtime.aggregator.calibrate(body.get("spl_reference"), body.get("lux_reference"))
     a.runtime._audit("operator", {"action": "calibrate_room", **{k: round(v, 3) for k, v in out.items()}})
     return {"ok": True, **out}
+
+
+@app.post("/api/room/baseline")
+def capture_room_baseline(body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Start capturing the venue baseline: ~``seconds`` of room noise and light with the person sitting neutral.
+
+    Room-relative features (``db_room_*``, ``lux_room_*``) and near-field gating use it once complete; until
+    then, the running median of what has been collected. Constants only, held in RAM.
+    """
+    a = state()
+    try:
+        seconds = float(body.get("seconds", a.settings.room_baseline_s))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "seconds must be a number") from None
+    if not (10 <= seconds <= 600):
+        raise HTTPException(422, "seconds must be in [10, 600]")
+    snap = a.runtime.aggregator.start_baseline(seconds)
+    a.runtime._audit("operator", {"action": "room_baseline", "seconds": seconds})
+    return {"ok": True, **snap}
+
+
+@app.get("/api/room/baseline")
+def get_room_baseline() -> dict[str, Any]:
+    return state().runtime.aggregator.baseline_status()
+
+
+@app.post("/api/room/baseline/reset")
+def reset_room_baseline() -> dict[str, Any]:
+    a = state()
+    snap = a.runtime.aggregator.start_baseline(mode="auto")
+    a.runtime._audit("operator", {"action": "room_baseline_reset"})
+    return {"ok": True, **snap}
 
 
 @app.post("/api/mode")
