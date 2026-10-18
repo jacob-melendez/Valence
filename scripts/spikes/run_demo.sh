@@ -7,6 +7,7 @@
 #   NARRATOR=template bash scripts/spikes/run_demo.sh   # skip the LLM (template narrator)
 #   BASELINE=0 bash scripts/spikes/run_demo.sh          # skip the venue room-baseline capture
 #   FRONTEND=1 bash scripts/spikes/run_demo.sh          # also start the frontend dev server
+#   SANDBOX=0 bash scripts/spikes/run_demo.sh           # don't wrap the servers in the no-network sandbox
 #
 # In live mode it captures the venue room baseline (BASELINE_S seconds, default 90) once the API is up:
 # sit neutral at the desk while it runs. Ctrl-C stops everything. Works with macOS /bin/bash 3.2.
@@ -54,6 +55,17 @@ export DYLD_LIBRARY_PATH="$TORCH_LIB${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export YOLO_OFFLINE=1 YOLO_AUTOINSTALL=false HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export VALENCE_MODE="$MODE"
 
+# --- no outbound network for the processes that see camera/mic data -------------------------------
+# MediaPipe 1.x embeds a Clearcut usage logger (posts to play.googleapis.com) with no off switch; the
+# sandbox profile denies every outbound connection except loopback, so nothing leaves the machine even
+# with Wi-Fi on. The frontend dev server is not wrapped (it never sees camera or mic data).
+RUN=()
+if [[ "${SANDBOX:-1}" != 0 ]]; then
+  command -v sandbox-exec > /dev/null || fail "sandbox-exec not found (SANDBOX=0 to run without it)"
+  RUN=(sandbox-exec -f "$ROOT/scripts/spikes/valence_offline.sb")
+  echo "sandbox: narrator + API run with outbound network denied (loopback only)"
+fi
+
 PIDS=()
 # bash 3.2 + set -u: "${arr[@]}" on an empty array is "unbound", so expand with ${arr[@]+"${arr[@]}"}
 cleanup() { echo; echo "stopping..."; for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; }
@@ -68,7 +80,7 @@ wait_http() { # wait_http <url> <seconds>: until the server answers at all (the 
 # --- narrator ------------------------------------------------------------------------------------
 NARGS=()
 [[ "${NARRATOR:-llm}" == template ]] && NARGS+=(--template-only)
-"$PY" -m valence.narrator.service --port "$NARRATOR_PORT" ${NARGS[@]+"${NARGS[@]}"} > "$LOGS/narrator.log" 2>&1 &
+${RUN[@]+"${RUN[@]}"} "$PY" -m valence.narrator.service --port "$NARRATOR_PORT" ${NARGS[@]+"${NARGS[@]}"} > "$LOGS/narrator.log" 2>&1 &
 PIDS+=($!)
 echo "narrator: starting on :$NARRATOR_PORT (model load + warm-up ~10 s) ..."
 if wait_http "http://127.0.0.1:$NARRATOR_PORT/health" 90 && [[ "$(http_code "http://127.0.0.1:$NARRATOR_PORT/health")" == 200 ]]; then
@@ -80,7 +92,7 @@ else
 fi
 
 # --- API -----------------------------------------------------------------------------------------
-"$PY" -m uvicorn valence.api.app:app --host 127.0.0.1 --port "$API_PORT" > "$LOGS/api.log" 2>&1 &
+${RUN[@]+"${RUN[@]}"} "$PY" -m uvicorn valence.api.app:app --host 127.0.0.1 --port "$API_PORT" > "$LOGS/api.log" 2>&1 &
 PIDS+=($!)
 echo "api: starting on :$API_PORT in $MODE mode (camera + models ~10 s) ..."
 wait_http "http://127.0.0.1:$API_PORT/api/health" 60 || { tail -20 "$LOGS/api.log"; fail "API did not start"; }
