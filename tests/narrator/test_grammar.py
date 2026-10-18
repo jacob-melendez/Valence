@@ -77,7 +77,8 @@ def _blank_core_strings(text: str, sheet: dict) -> str:
 
 
 def test_every_target_passes_the_validator_for_both_state_sets(corpus):
-    assert len(corpus) >= 1200 + (2223 if HAS_PRODUCTION else 0)
+    n_production = sum(1 for line in PRODUCTION.open() if line.strip()) if HAS_PRODUCTION else 0
+    assert len(corpus) >= 1200 + n_production
     assert {name for sheet, _ in corpus for name in [("all" if len(sheet_states(sheet)) == 6 else "core")]} == {
         "core", "all"}
     failures = [(s["event_id"], validate(t, s).reasons) for s, t in corpus if not validate(t, s).ok]
