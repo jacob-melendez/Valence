@@ -14,15 +14,16 @@ the behavior over time (noise, light, time since a break, clenched fists, slumpi
 face, keeps none of the raw media, and explains every prediction.
 
 **How to read this document.** Valence is being built during the hackathon. At this update (Saturday
-evening, 2026-10-17) the repo contains the shared contract, configuration and governance modules with their
-tests; the runtime, REST/WebSocket API and console; simulator v2 and the 8 replay scenarios; the feature
-code; a first trained model ladder (core 4 states, untuned `noise_scale` 1.0) with M2 served; the explainer,
+evening, 2026-10-17; partly updated on 2026-10-18 for the venue room baseline) the repo contains the shared
+contract, configuration and governance modules with their tests; the runtime, REST/WebSocket API and console;
+simulator v2 and the 9 replay scenarios; the feature code; a trained model ladder (core 4 states, untuned
+`noise_scale` 1.0) with M2 served; the explainer,
 template text and counterfactual; the evaluation and negative-control scripts; the Mac perception and edge
 runner; and a draft narrator service. Per-item status is in `docs/DELIVERABLES.md`. A file existing does not
 mean its tests pass. Where the implementation already differs from `docs/PLAN.md`, the difference is stated in
-place. **No accuracy result is reported here:** every metric below is a **target**, and its result is
-"TBD — produced by `<script>`". The only measured numbers are hardware timings from `docs/BENCHMARKS.md`
-(Apple M3 Max, 36 GB). Measured results will go to `docs/RESULTS.md`.
+place. **No accuracy result is reported here:** every metric below is a **target**; the simulated results are
+in `docs/RESULTS.md` and `docs/MODEL_CARD.md`, and items not yet produced say "TBD — produced by `<script>`". The
+only measured numbers are hardware timings from `docs/BENCHMARKS.md` (Apple M3 Max, 36 GB).
 
 ---
 
@@ -117,8 +118,8 @@ mic ────► audio worker: 16 kHz mono, 100 ms blocks, ~1 s analysis step
          only scalars, flags and normalized boxes cross this line;                         │   weakref check per tick
          keypoints, crops, blendshapes and recognizer text stay inside perception          ▼
 replay: scenario YAML | features-only JSONL | /api/demo/seed ──► aggregator: ROOM slot + PERSON slots
-  ─► 5 s TickRecord per person ─► rolling window (180 ticks = 15 min) ─► ~110 features ─► clip (+ OOD list)
-  ─► M2 LightGBM (served) + M0 face-only shadow ─► calibrated probabilities ─► smoothed label
+  ─► 5 s TickRecord per person ─► rolling window (180 ticks = 15 min) ─► 123 features ─► clip (+ OOD list)
+  ─► M2 LightGBM (served, 101 features) + M0 face-only shadow ─► calibrated probabilities ─► smoothed label
   ─► TreeSHAP ─► 4 layers ─► mask-override check ─► FactSheet ─► template text (instant)
   ─► WebSocket + REST on 127.0.0.1:8000 ─► Lovable console (frontend)
   ─► audit log (labels + SHAP summaries)      ─► narrator on 127.0.0.1:8081 ─► validator ─► LLM text or template
@@ -153,8 +154,9 @@ process in its own virtual environment. Each modality can be switched independen
 | Mic, speech activity | Speech probability per step | `speech_prob` |
 | Capture bookkeeping | | `frame_seq`, `frames_decoded`, `frame_w`, `frame_h`, `mirrored`; audio `block_seq` |
 
-Laughter and compliments count only when the audio step is at least 6 dB above the room's median level
-(`near_field_db`), so the desk area is measured rather than the whole venue. Both are room-scope signals.
+Laughter and compliments count only when the audio step is at least 6 dB above the venue room baseline
+(`near_field_db`; before the baseline is complete, 6 dB above the room's 15-minute median), so the desk area is
+measured rather than the whole venue. Both are room-scope signals.
 
 Measured on the demo Mac (`docs/BENCHMARKS.md`, 1280×720 sample images, not yet the live camera): video
 perception end to end ~45 ms p50 for 2 people against a 100 ms budget at 10 Hz; Vosk restricted grammar p50
@@ -184,7 +186,7 @@ for room signals.
 
 | Slot | `TickRecord` fields | Layer |
 |---|---|---|
-| Room | `ambient_db`, `db_p90`, `light_lux`, `lux_quality` | Ambient Physics |
+| Room | `ambient_db`, `db_p90`, `light_lux`, `lux_quality`, `room_db_base`, `room_lux_base` (venue room baseline) | Ambient Physics |
 | Room | `laughter_count`, `compliments_count` (near-field gated) | Somatic & Social |
 | Room | `tod_h` | Time Dynamics |
 | Person | `hours_since_break` (per-person, presence-based break clock) | Time Dynamics |
@@ -207,16 +209,21 @@ room slot; the implementation and `docs/DATASET.md` keep one clock per person.)
 | Somatic & Social | fists, laughter, compliments, slump, head in hands, motion, withdrawal, number of people | Behaviors that reveal inner state or social interaction |
 | Facial Surface | face valence history and visibility | The face, as one input among several, so its weight is visible in every explanation |
 
-**Window features** (~110 in the plan; 114 as implemented in `valence/features/compute.py`; order frozen as
+**Window features** (~110 in the plan; 123 as implemented in `valence/features/compute.py`; order frozen as
 `feature_names` in `artifacts/model_meta.json`): for noise, light, motion, slump and head in hands — current
 value, mean/std/slope/max over 1, 5 and 15 min, two EWMs, a 1-vs-15-minute difference and the current value
-relative to its 15-minute median; for fists, laughter and compliments — counts in the current tick and over
+relative to its 15-minute median; noise and light relative to the venue room baseline (dB above it, log2 of the
+light ratio: now, means and a max/EWM); for fists, laughter and compliments — counts in the current tick and over
 1, 5 and 15 min, and time since the last event; withdrawal now and over 5 min; number of people; hours since
 break; time of day (sine/cosine); window fill ratio; face now, face visible now, face mean over 1/5/15 min,
-face std over 5 min and face-visible fraction over 5 min. NaN is native (no imputation). Features are clipped
-to the training 1st–99th percentiles; clipped feature names are reported in `data_quality.ood_features`, and
-more than three clipped features lowers the confidence (probabilities are pulled toward uniform) and is
-narrated.
+face std over 5 min and face-visible fraction over 5 min. The served M2 reads 101 of them: **no absolute dB or lux
+level**, so a loud hall is this room's normal rather than a loud, frustrated room; the absolute levels are still
+computed and quoted in explanations ("average noise of 72 dB over the last 5 minutes, 6 dB above this room's
+baseline"). The baseline is captured on arrival with the person sitting neutral (`POST /api/room/baseline`), or
+taken automatically from the first 90 s of a session. NaN is native (no imputation). Features are clipped to the
+training 1st–99th percentiles; features outside their physical domain (or, for dB/lux/motion, far outside the
+training range) are reported in `data_quality.ood_features`, and more than three of them lowers the confidence
+(probabilities are pulled toward uniform) and is narrated.
 
 ### 2.6 Facial Surface: face valence without identity
 
@@ -269,7 +276,7 @@ so the no-face model will confuse that pair; we report it as "the face is inform
 | M0t | face history | Baseline (P1) |
 | M1 | context snapshot (current values of the context channels; no face, no history) | Baseline |
 | M2-noface | full window without face | Ablation: how much the face adds |
-| M2-noabsdB | full window without absolute dB | Ablation: robustness to venue noise and mic offset (P1) |
+| M2-abs | full window with absolute dB/lux levels instead of room-relative ones | Ablation: what absolute levels cost in a loud hall (P1) |
 | M2-notime | full window without time features | Ablation: is "hours since break" doing all the work? (P1) |
 | **M2** | **full window: context + face history** | **Served live** |
 | M3 | GRU(64) + attention over the window | Benchmark only (P1) |
@@ -349,7 +356,8 @@ running: TBD — produced by the narrator A/B run (local session, `docs/NARRATOR
 | Raw audio block | Mic, 16 kHz mono, 100 ms blocks | `db_spl`, `rms_power`, `speech_prob`, `laughter_onsets`, `compliment_hits` (`AudioObs`) | `gate.purge(block, "audio")` | RAM, audio worker | ~1 s rolling analysis buffer |
 | Recognizer text | Vosk restricted grammar | A count of matched phrases | Discarded inside perception, counted as `transcripts_purged`. **No free transcript ever exists**: the grammar can only output its fixed phrases or `[unk]` | RAM, perception | One audio step |
 | Observations | Perception output | Aggregated into ticks | Released after aggregation | RAM, main process | Until the next 5 s tick |
-| `TickRecord` / rolling window | Aggregator | ~110 features per tick for the models; `state_vector` messages | Evicted after 15 min; a person's rows dropped after `person_drop_min` (15 min) absence; cleared by `POST /api/demo/reset` | RAM, main process (not written to disk) | ≤ 15 min |
+| Venue room baseline | Room dB and lux samples, ~90 s on arrival (or the first 90 s of a session) | Median dB, dB IQR, median lux: room constants, no media and nothing per person | Replaced by the next capture or reset; audited as `room_baseline`, `room_baseline_captured`, `room_baseline_reset` | RAM, main process | Until reset, a recording replay or process exit |
+| `TickRecord` / rolling window | Aggregator | 123 features per tick (101 read by M2); `state_vector` messages | Evicted after 15 min; a person's rows dropped after `person_drop_min` (15 min) absence; cleared by `POST /api/demo/reset` | RAM, main process (not written to disk) | ≤ 15 min |
 | Predictions, SHAP, FactSheets, explanation text | Models, explainer, narrator | `prediction`, `explanation` messages on loopback | Not persisted (except the audit summary below) | RAM; loopback HTTP / WebSocket | Latest per person |
 | **Audit log** | Decisions | Labels, confidences, SHAP layer summaries, operator actions (seed, simulated inputs, calibration); periodic purge-counter entries are planned. Strings > 200 chars, NaN and deep nesting are refused, so free text cannot be logged | Hash-chained (`GET /api/governance/verify`; offline `scripts/audit_verify.py` planned); file **deleted at session close**; files older than `audit_ttl_s` (86 400 s) deleted at startup | `var/audit/<session_id>.jsonl` — the only file the live pipeline writes by default | Session; at most 24 h after a crash |
 | Application logs | Code | Text only | `RawMediaFilter` drops records carrying arrays or bytes | stderr | Process lifetime |
@@ -390,7 +398,8 @@ and `contracts.json_schemas()`.
 | System status | `status` | `mode`, `camera`, `mic`, `fps`, `loop_latency_ms`, `narrator`, `offline`, `uptime_s`, `degraded`, `purge_violation` |
 | State list | `GET /api/states`, `hello.states` | `{id, display, tier}` |
 | Retention summary | `GET /api/retention` | |
-| Evaluation results | `GET /api/eval/summary`, `GET /api/eval/figures/{name}.png` | TBD — produced by `valence/eval/evaluate.py` |
+| Venue room baseline | `GET /api/room/baseline`, `/api/health` → `room_baseline` | `mode` (auto / capturing / captured), `db_median`, `db_iqr`, `lux_median` |
+| Evaluation results | `GET /api/eval/summary`, `GET /api/eval/figures/{name}.png` | `reports/metrics.json`, `reports/figs/` (produced by `valence/eval/evaluate.py`) |
 | Counterfactual | `GET /api/explain/{event_id}/counterfactual?feature=<name>&value=<number>` | original and counterfactual label and confidence, `label_changed` |
 
 ### 3.2 Inputs
@@ -406,12 +415,13 @@ and `contracts.json_schemas()`.
 | Simulate face hidden / low light | `POST /api/sim/face_occlusion`, `POST /api/sim/low_light` `{"enabled": bool}` |
 | Room-only mode | `POST /api/mode {"room_only": bool}` |
 | Venue calibration | `POST /api/calibrate/room` (SPL offset, 2-point lux, noise floor) |
+| Capture the venue room baseline (on arrival, sitting neutral) | `POST /api/room/baseline {"seconds": 90}`; `POST /api/room/baseline/reset` returns to automatic |
 | Seed an empty window | `POST /api/demo/seed` (context only, tagged `sim_seed`) |
 | Self-report label (P1) | `POST /api/label {state}` |
 
 Every control call is written to the audit log. Inputs that inject data that was not sensed (`sim/*`,
 `demo/seed`, including a seeded `hours_since_break`) are also tagged in `source` / `simulated_fields`. A
-logged break and venue calibration are real events or measurements, so they are audited but not tagged
+logged break, venue calibration and the room baseline are real events or measurements, so they are audited but not tagged
 (`docs/API.md` §6 and §8).
 
 ### 3.3 Example audit explanation (illustrative format, not a result)
@@ -439,12 +449,12 @@ driver has `scope: room`, so an LLM narration must phrase it as "the room" (see 
 
 | Set | What it is | Used for | Status |
 |---|---|---|---|
-| Simulator v2 | ~300 sessions × 1–3 people × 60–120 min at 5 s (~500k person-ticks), seeded. Per-person semi-Markov hidden state (dwell 4–10 min, minimum 2 min), fatigue tilt after ~3 h, Poisson breaks, room dB that lags occupants' states, ±12 dB per-session mic offset (plan range 12–15 dB), face missing on 5–40% of ticks, 2% per-modality dropout | Training, calibration, main evaluation | Generator in the repo (`valence/sim/generator.py`, `params.py`). The v1 models were trained on 300 sessions at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`); corpus statistics TBD |
-| Legacy | The original mock generator: one random state per 5 s row (nothing for a window to learn) and context ranges that barely overlap | "Why we rebuilt the data" slide | Generator in the repo (`valence/sim/legacy.py`); slide result TBD — `valence/eval/evaluate.py` |
-| Live feature capture | Builder, 3 min each: quiet typing, looking at the keyboard, clenching fists, slumping (features only) | Sets the simulator's false-positive rates and motion/slump scales from measurements instead of guesses; negative control | TBD — `data/real/capture_*.jsonl` |
+| Simulator v2 | ~300 sessions × 1–3 people × 60–120 min at 5 s (~500k person-ticks), seeded. Per-person semi-Markov hidden state (dwell 4–10 min, minimum 2 min), fatigue tilt after ~3 h, Poisson breaks, room dB that lags occupants' states, ±12 dB per-session mic offset (plan range 12–15 dB), a random venue hall level per session (40–75 dB, power-summed, with the arrival baseline an operator would capture), face missing on 5–40% of ticks, 2% per-modality dropout | Training, calibration, main evaluation | Generator in the repo (`valence/sim/generator.py`, `params.py`). The served models were trained on 300 sessions at the untuned `noise_scale` 1.0 (`artifacts/model_meta.json`), on the simulator refit to capture run 1; corpus statistics TBD |
+| Legacy | The original mock generator: one random state per 5 s row (nothing for a window to learn) and context ranges that barely overlap | "Why we rebuilt the data" slide | Generator in the repo (`valence/sim/legacy.py`); slide result in `reports/metrics.json` (`legacy_mock`, from `valence/eval/evaluate.py`) |
+| Live feature capture | Builder, 3 min each: quiet typing, looking at the keyboard, clenching fists, slumping (features only); plus audio | Sets the simulator's false-positive rates and motion/slump scales from measurements instead of guesses; negative control | Done: run 1 (typing, fists, baseline, covered camera) set the simulator's scales; runs 2–3 (keyboard gaze, slump, audio) checked them without a refit (`data/real/capture_*.jsonl`, `docs/BENCHMARKS.md`, `docs/MODEL_CARD.md` §5) |
 | Acted set | 6 scenarios × 3 min, plus face-detection rate at 3 light levels (features only) | Sanity check (majority-label agreement) | TBD — scored by `valence/eval/negative_control.py --expect <state>` (the plan's `score_acted.py` is folded into it) |
 | Self-report | Builder's own label every 10 min during live runs | Sanity check | P1; endpoint exists (`POST /api/label`); labels TBD |
-| Scenarios | Replay YAML: one per state, `context_blindness`, `full_demo` | Demo, end-to-end tests, override validation | 8 files in `scenarios/` |
+| Scenarios | Replay YAML: one per state, `context_blindness`, `full_demo`, `loud_venue` (a 72 dB hall) | Demo, end-to-end tests, override validation | 9 files in `scenarios/`; `tests/test_scenarios.py` |
 
 **Anti-circularity.** Simulator difficulty is one `noise_scale`, tuned against a single criterion that is not
 the headline result: M2 macro-F1 ≤ 0.92 (no ceiling effect) and a match between live and simulated feature
@@ -489,25 +499,26 @@ running, distinct-2 and self-BLEU for variety.
 prototype for consented self-monitoring outside workplace and education; `--room-only` is the
 compliance-oriented configuration; TTL and session deletion because pseudonymous data is personal data.
 
-### 4.3 Success metrics (targets; no results yet)
+### 4.3 Success metrics (targets; results, where produced, are in `docs/RESULTS.md` and `docs/MODEL_CARD.md`)
 
 | Area | Metric | Target | Produced by |
 |---|---|---|---|
-| Model | M2 macro-F1, held-out simulated sessions | 0.85–0.92 | `valence/eval/evaluate.py` → `reports/metrics.json` (TBD) |
-| Model | Ordering at 15 min of history | M2 > M1 > M0, non-overlapping 95% CIs | `evaluate.py` (TBD) |
-| Model | Face dependence (core 4) | M2-noface ≥ M2 − 0.05 | `evaluate.py` (TBD) |
-| Model | Headline: `Frustrated_Masked` recall, Focused-paradox confusion | M2 better than M0 on both; values reported as measured | `evaluate.py` (TBD) |
-| Model | Calibration | ECE lower after temperature scaling | `evaluate.py` (TBD) |
+| Model | M2 macro-F1, held-out simulated sessions | 0.85–0.92 | `valence/eval/evaluate.py` → `reports/metrics.json` (produced) |
+| Model | Ordering at 15 min of history | M2 > M1 > M0, non-overlapping 95% CIs | `evaluate.py` (produced) |
+| Model | Face dependence (core 4) | M2-noface ≥ M2 − 0.05 | `evaluate.py` (produced) |
+| Model | Headline: `Frustrated_Masked` recall, Focused-paradox confusion | M2 better than M0 on both; values reported as measured | `evaluate.py` (produced) |
+| Model | Calibration | ECE lower after temperature scaling | `evaluate.py` (produced) |
 | Explainer | SHAP additivity | Within 1e-6 | `tests/test_served.py::test_shap_additivity` (test exists) |
 | Explainer | Mask override | Fires within 6 ticks on `frustrated_masked`; never on `collaborative_happy` or `focused` | `tests/test_served.py::test_mask_override_fires_on_masked_and_not_elsewhere` (test exists) |
 | Explainer | Counterfactual | Changes only the named feature | `tests/test_served.py::test_counterfactual_changes_only_the_named_feature` (test exists) |
-| Sim-to-real | Negative control: replay of typing capture | ≤ 20% of ticks predicted `Frustrated_Masked`/`Tense` | `valence/eval/negative_control.py` (TBD) |
+| Sim-to-real | Negative control: replay of typing capture | ≤ 20% of ticks predicted `Frustrated_Masked`/`Tense` | `valence/eval/negative_control.py` (passes, in-sample; `docs/MODEL_CARD.md` §5) |
+| Sim-to-real | Venue shift: Focused misread as negative from the session's own room to a loud hall | Reported as measured (simulated) | `evaluate.py` `venue_shift` (produced; `docs/MODEL_CARD.md` §5) |
 | Sim-to-real | Live features inside clip bounds | ≥ 90% | `data_quality.ood_features` logs (TBD) |
 | Sim-to-real | Acted set | Majority-label agreement table (reported, no threshold) | `negative_control.py --expect` (TBD) |
 | Governance | Purge | 0 violations, 0 live raw buffers, `frames_decoded == frames_purged` over 60 min | `scripts/mem_soak.py`, `/api/governance/stats` (TBD) |
 | Governance | Audit chain | Verifies; tampering detected | `tests/test_audit.py` (exists), `GET /api/governance/verify`, `scripts/audit_verify.py` (TBD) |
 | Governance | Persistence | Only the audit log is written; works with Wi-Fi off | `lsof`, rehearsal (TBD) |
-| Runtime | End-to-end replay | Correct label on ≥ 80% of ticks; override fires; tick < 200 ms | `tests/test_e2e_replay`, `scripts/e2e_check.py` (TBD) |
+| Runtime | End-to-end replay | Correct label on ≥ 80% of ticks; override fires; tick < 200 ms | `tests/test_scenarios.py` (label ≥ 80% per segment after a 2-min grace, override on masked segments only: passes on all 9 scenarios); `tests/test_e2e_replay` and `scripts/e2e_check.py` (TBD) |
 | Runtime | Live loop | ≥ 8 Hz for 60 min, flat memory | 60-min soak (TBD) |
 | Runtime | Chaos | Narrator killed / camera lost / mic muted → `status` event and fallback; ticks continue | chaos tests and rehearsal (TBD) |
 | Perception | Probes | 5 fists → 5 ± 1; 10 s slump sets the flag; covered camera → `face_visible` 0; dB within ±3 of a phone meter | `live_probe` (local, TBD) |
@@ -516,8 +527,10 @@ compliance-oriented configuration; TTL and session deletion because pseudonymous
 
 ### 4.4 Demo plan (Sunday)
 
-1. **Venue setup (~10 min):** `POST /api/calibrate/room` (SPL offset, 2-point lux, noise floor). Start the live
-   pipeline at the table at least 20 minutes before judging so the 15-minute window is real, not seeded.
+1. **Venue setup (~10 min):** `POST /api/calibrate/room` (SPL offset, 2-point lux, noise floor), then capture the
+   venue room baseline sitting neutral (`POST /api/room/baseline {"seconds": 90}`, check `GET /api/room/baseline`
+   reads `captured`). Start the live pipeline at the table at least 20 minutes before judging so the 15-minute
+   window is real, not seeded.
 2. **Governance first:** counters with `frames_decoded == frames_purged`, 0 violations, 0 live raw buffers,
    `offline: true`; the purge gate code and its tests.
 3. **Live:** the masked flip (face-only says happy, context and `mask_override` say otherwise) and
@@ -550,19 +563,22 @@ screen recording of a full replay run is made before judging, for the case where
 | YOLO too slow | CPU at imgsz 480 → PoseLandmarker + IoU tracking |
 | YAMNet / Vosk fail | Alternative runtime → `POST /api/sim/event` (flagged simulated) |
 | Narrator slow or down | Llama-3.2-3B → template text (always available) |
-| Venue noise far from training | Venue calibration; session-relative features; M2-noabsdB ablation |
+| Venue noise far from training | Venue room baseline captured on arrival; room-relative features (no absolute dB/lux in the model); venue-randomized training; M2-abs ablation and venue-shift evaluation; rollback to the previous model (`VALENCE_ARTIFACTS_DIR=artifacts/legacy`) |
 | Empty window at demo start | Start early; `/api/demo/seed` (context only, tagged `sim_seed`) as last resort |
 | Behind schedule | Drop order: P2 → P1 states → withdrawal → lux fit → acted set to 2 scenarios → M3 → Vosk → YAMNet → LoRA → GestureRecognizer → LLM (template only). Governance and evaluation (P0) are never dropped. |
 
 ### 4.7 Known gaps and open items
 
-- No model result is reported. First (v1) evaluation figures exist in `reports/figs/` (uncommitted; core 4
-  states, untuned `noise_scale` 1.0); `reports/metrics.json` and the narrator A/B are TBD, as listed in §4.3.
-- Difficulty tuning (`valence/sim/tune_difficulty.py`) and the capture-based simulator update are not done;
-  the v1 models will be retrained after both.
+- Model results (simulated) are in `reports/metrics.json` and `docs/RESULTS.md`, not in this document; the
+  narrator A/B is TBD.
+- Difficulty tuning (`valence/sim/tune_difficulty.py`) is not done. The capture-based simulator update is done
+  (refit to capture run 1; runs 2–3 checked it, `docs/MODEL_CARD.md` §5).
+- The venue room baseline assumes the arrival capture is neutral; a sustained forced-smile capture and a fix for
+  the held-slump motion artifact (perception) are still open (`docs/MODEL_CARD.md` §7).
 - Mask-override rule: the implementation (§2.8, "as implemented") differs from the plan rule. Pick one and
   align `docs/PLAN.md`, this document and the code.
-- Live-camera perception timings are pending camera permission (`docs/BENCHMARKS.md`).
+- Live-camera perception timings are measured (edge runner 45–57 ms/frame at 10.0 Hz, `docs/BENCHMARKS.md`); the
+  60-min soak is not.
 - YAMNet mode (resolved): the edge runs AUDIO_CLIPS on each step's last 0.975 s, as planned; the only YAMNet
   timing in `docs/BENCHMARKS.md` was measured in AUDIO_STREAM mode.
 - Room-only mode switches off per-person labels, but perception still runs per person (boxes, face valence)
@@ -581,6 +597,7 @@ screen recording of a full replay run is made before judging, for the case where
 | Purge | `del frame` and "instantly purge" | Zero-fill in place + weakref check + violation count + `frames_decoded == frames_purged`; honest limits stated | `del` removes a name, not the bytes |
 | State vector | One vector | Room slot + up to 3 person slots; room history inherited by newcomers | Rooms have several people; noise and light are shared, bodies are not |
 | Laughter | A "keyword" | An audio event (YAMNet), near-field gated; compliments via a restricted grammar | Laughter is not a word; a restricted grammar means no free transcript exists |
+| Room noise and light | Absolute dB and lux | Relative to the venue room baseline captured on arrival; absolute levels only quoted in explanations | A loud demo hall must not read as a loud, frustrated room |
 | States | 4 | 4 core (P0) + `Overwhelmed`, `Tense` (P1), cap 6, config-driven | Unmasked frustration and distress needed their own classes |
 | Display labels | "Frustrated" in the text, "Frustrated / Masked Stress" in the label | `display_label` rules: "Frustrated" unless the override fires (core set); "Upbeat" for one person | The label must not claim masking without evidence, or collaboration with one person |
 | Layers | 3 context layers | 3 context layers + Facial Surface | The face is an M2 input; its weight must be visible to explain an override |

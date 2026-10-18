@@ -13,8 +13,9 @@ What this document is and is not:
   assumptions*. It is not evidence about real people.
 - **No model result appears here.** Accuracy, F1 and calibration numbers are produced later by
   `valence/eval/evaluate.py` into `reports/metrics.json` and reported in `docs/RESULTS.md`.
-- Detector false-positive rates, and the motion and slump scales, are **placeholders**. The live feature capture
-  on the demo Mac replaces them (section 10). No capture numbers exist yet in `docs/BENCHMARKS.md`.
+- Detector false-positive rates, and the motion and slump scales, started as **placeholders**. Live capture run 1
+  on the demo Mac replaced them (`e0ad762`, section 10), and capture runs 2–3 checked them without a refit
+  (section 11.3). Capture numbers are in `docs/BENCHMARKS.md`.
 - Field names follow `valence/contracts.py` (contract version 1.0.0) exactly.
 
 **Spec vs code: resolved.** The differences found on 2026-10-17 were settled as follows (also recorded in the
@@ -27,8 +28,10 @@ What this document is and is not:
 | Fist bursts | burst multiplier switches symmetrically between 1.7 and 0.3 (mean ×1.0), so the per-state rates are the true long-run rates. |
 | Overwhelmed face hiding | each Overwhelmed episode draws its own face-hidden share U(0.40, 0.70) (hands over the face); it replaces the session share instead of stacking on it. |
 | Head-in-hands while laughing | Collaborative_Happy head-in-hands share rises by +0.35 on ticks with laughter (people cover their faces when they laugh). |
-| Difficulty | `noise_scale` = 1.0, **untuned**: criterion A (§12.2) already holds (served M2 macro-F1 0.82 ≤ 0.92), so no tuning toward the results was done. The tuning script in §12.2 is not built. |
+| Difficulty | `noise_scale` = 1.0, **untuned**: criterion A (§12.2) already holds (served M2 macro-F1 0.797 ≤ 0.92, `reports/metrics.json`), so no tuning toward the results was done. The tuning script in §12.2 is not built. |
 | Relative features | `*_rel_15m` = current value minus its 15-minute median (window-only, so train/live parity is exact). |
+| Capture refit (`e0ad762`) | Face, motion, slump, head-in-hands, dB/lux noise, face-hidden and false-positive values were refit to live capture run 1. The as-built values are in `valence/sim/params.py` and `docs/MODEL_CARD.md` §3; sections 7, 9, 10 and Appendix A below still show the pre-refit spec where they differ (except where noted). |
+| Venue and room baseline (`bbd46a4`, `docs/CONTRACT_REQUESTS.md` round 4) | Each session draws a hall level U(40, 75) dB, independent of state, power-summed with the team's own level, and the arrival baseline an operator would capture (`room_db_base`, `room_lux_base`; sections 4.1, 9.2, 9.3); the lux range widened to 100–800. The served models read the room relative to that baseline: 9 room-relative features (`db_room_*`, `lux_room_*`), 123 features computed, 101 used by M2, no absolute dB or lux level. |
 
 ## Contents
 
@@ -148,6 +151,8 @@ Parquet (`TickRecord.to_dict()` turns NaN into `null` for JSON).
 | `face_visible` | float | person | fraction of the tick, 0–1 | U(0.6, 1.0) when readable, else 0 |
 | `hours_since_break` | float | person | h | break clock, section 6.4 |
 | `tod_h` | float | room | h, [0, 24) | start time + elapsed, wraps at midnight |
+| `room_db_base` | float | room | dB SPL | arrival baseline of the session, constant per session (section 9.2); live: the venue baseline, NaN until known |
+| `room_lux_base` | float | room | lux | arrival baseline light, constant per session (section 9.3); live: the venue baseline, NaN until known |
 | **`true_state`** (hidden) | str | person | a state id from the active set | the hidden state; never a model input |
 | **`episode_age_s`** (hidden) | float | person | s | seconds since the person entered the current hidden state; used for `acc_vs_episode_age.png` |
 
@@ -161,7 +166,7 @@ slot of `valence/features/window.RollingWindow`, which a newly seated person inh
 
 | Field group | Room row value |
 |---|---|
-| Room channels (`ambient_db`, `db_p90`, `light_lux`, `lux_quality`, `laughter_count`, `compliments_count`, `tod_h`, `n_people`) | identical to the person rows of that tick |
+| Room channels (`ambient_db`, `db_p90`, `light_lux`, `lux_quality`, `room_db_base`, `room_lux_base`, `laughter_count`, `compliments_count`, `tod_h`, `n_people`) | identical to the person rows of that tick |
 | `clenched_fists_count` | sum over present people |
 | `posture_slump`, `head_in_hands_frac`, `motion_energy`, `face_visible`, `hours_since_break` | mean over present people (NaN-aware) |
 | `face_valence` | median over present people with a readable face |
@@ -236,7 +241,7 @@ core set, one person, before the current state is excluded: weights ≈ Focused 
 
 | Rule | Value |
 |---|---|
-| Break onset | Poisson, base rate **1 per 90 min** of presence; ×2 while Exhausted or Overwhelmed |
+| Break onset | Poisson, base rate **1 per 120 min** of presence (as built; the plan's ~1/90, see the resolved table above); ×2 while Exhausted or Overwhelmed |
 | Break length | U(10, 20) min, at least `settings.break_absent_min` (10 min), so every simulated break also counts as a break for the live aggregator's presence-based clock |
 | During a break | The person has no rows; `n_people` drops; the room's sound and light targets are recomputed without them |
 | On return | `hours_since_break` resets to 0; the new state is `Focused` (alone) or `Focused` / `Collaborative_Happy` with equal probability (session with ≥ 2 people) |
@@ -336,22 +341,29 @@ with it.
 | Target | Mean `db_target` of the people present; 40 dB when the room is empty |
 | Lag | Room level follows the target with τ_room |
 | Mic offset | One per session, U(−12, +12) dB, not scaled by `ns` (plan range for the half-width: 12–15 dB). Stands for an uncalibrated microphone and room differences. Scenarios use 0 dB (calibrated) unless they set `mic_offset_db`. |
-| Tick value | `ambient_db = room_level + mic_offset + N(0, 4·ns) + 2 dB × min(laughter_count, 2)` |
-| p90 | `db_p90 = ambient_db + 2 + abs(N(0, 2·ns)) + 1.5 dB if laughter_count > 0` |
+| Venue (`venue_db_range`) | One hall level per session, U(40, 75) dB, drawn independently of every state: the noise of the hall around the team. Scenarios have none (a quiet team room) unless they set `venue_db` (`loud_venue`: 72 dB). |
+| Arrival baseline (`room_db_base`) | `power_sum(venue, 48 dB) + mic_offset + N(0, 1.5·ns)`: what an operator's capture with one neutral occupant (`neutral_db` 48, the Focused target) would measure. Constant per session. |
+| Tick value (as built) | `ambient_db = power_sum(venue, room_level) + mic_offset + drift + transient + N(0, 1.2·ns) + 2 dB × min(laughter_count, 2)`, where `power_sum` adds levels as powers (`10·log10(Σ 10^(L/10))`), drift is AR(1) (×0.95, σ 0.5·ns dB per tick) and transients are state-independent bumps (0.3 per min, +4 to +12 dB, 30% of them −0.5× that, for 2–8 ticks) |
+| p90 (as built) | `db_p90 = ambient_db + 1.5 + abs(N(0, 1·ns)) + 1.5 dB if laughter_count > 0` |
+| Random streams | The venue and baseline draws use their own generator seeded with crc32 of the session id, so adding them left every scripted scenario's other draws unchanged. |
 | Sharing | Every person row of the tick carries the same room values. In a mixed room (for example one Collaborative_Happy and one Focused person) both rows see the same, intermediate level, so dB is weaker evidence per person than per room. |
 
 Because the offset (±12 dB) is comparable to the gap between quiet and lively states (~15 dB), absolute dB is
 only weakly diagnostic across sessions; relative and trend features (`db_rel_15m`, slopes) carry most of the
-signal. The `M2-noabsdB` ablation tests this.
+signal. The hall level (40–75 dB, power-summed) makes absolute dB weaker still: in a 72 dB hall a Frustrated room
+(66 dB) adds only about 1 dB. So the served models read the room relative to the arrival baseline (`db_room_*`
+= `ambient_db` − `room_db_base`). The M2-abs ablation (absolute levels, same corpus) and the venue-shift
+evaluation (`docs/MODEL_CARD.md` §5) test this.
 
 ### 9.3 Light (`light_lux`, `lux_quality`)
 
 | Step | Rule |
 |---|---|
-| Session baseline | log-uniform in [120, 600] lux |
+| Session baseline | log-uniform in [100, 800] lux |
+| Arrival baseline (`room_lux_base`) | session baseline × tod factor at the session start × `exp(N(0, 0.08·ns))`, constant per session; the served models read `lux_room_*` = log2(`light_lux` / `room_lux_base`) |
 | Time-of-day drift | ×0.85 between 22:00 and 06:00 (artificial light only), ×1.0 otherwise; sessions start 09:00–23:00, so many cross 22:00 |
-| State link | Room light multiplier lags (τ_room) toward the mean `lux_mult` of the people present (1.0 when empty). The link is weak (×0.65–×1.15) next to the 5× spread of baselines. |
-| Tick value | `light_lux = baseline × tod_factor × room_light_multiplier × exp(N(0, 0.08·ns))` |
+| State link | Room light multiplier lags (τ_room) toward the mean `lux_mult` of the people present (1.0 when empty). The link is weak (×0.65–×1.15) next to the 8× spread of baselines (100–800 lux). |
+| Tick value (as built) | `light_lux = baseline × tod_factor × room_light_multiplier × transient × exp(drift + N(0, 0.015·ns))`, where drift is an AR(1) on log-lux (×0.98, σ 0.01·ns per tick) and transients are state-independent auto-exposure jumps (0.5 per min, ×U(0.75, 1.3) for 2–12 ticks) |
 | `lux_quality` | 1.0 (live: background share × unclipped share × stability, halved while uncalibrated) |
 
 ### 9.4 Time (`hours_since_break`, `tod_h`)
@@ -383,7 +395,7 @@ features exploit.
 | Head-in-hands state | Same chain with target share = lagged `hih_p` |
 | `head_in_hands_frac` | U(0.5, 1.0) while on, 0 otherwise |
 | `motion_energy` | `lagged motion × exp(N(0, 0.4·ns))`, ×0.7 while slumped |
-| `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if `posture_slump ≥ 0.6` and `motion_energy ≤ 0.06` sw/s, else 0 (0 when either is NaN). The live aggregator calls the same function. |
+| `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if `posture_slump ≥ 0.6` and `motion_energy ≤ 0.02` sw/s (as built), else 0 (0 when either is NaN). The live aggregator calls the same function. |
 
 ### 9.7 Face (`face_valence`, `face_visible`)
 
@@ -417,8 +429,9 @@ Count fields are integers in the contract, so a dropped tick reads as 0 events (
 
 Real detectors fire when nothing is happening: typing can look like a fist, looking down at the keyboard can
 look like a slump, keyboard clicks can be heard as laughter. The simulator adds these as state-independent
-rates. **The values below are placeholders.** They are replaced by measurements from the live feature capture,
-not guessed.
+rates. **The values below were the placeholders.** Capture run 1 replaced them with measurements (as built in
+`params.FP`: fist 0.02 / min, slump share 0.02, laughter 0.02 / min, compliments 0.01 / min; small non-zero rates
+kept so one event is never certain).
 
 | Parameter (`params.FP`) | Placeholder | Meaning | Replaced by (capture → statistic) |
 |---|---|---|---|
@@ -459,7 +472,7 @@ The simulator generates every channel in the unit the live pipeline produces fro
 | `ambient_db` | approx. dB SPL, Leq over the tick | power mean of `AudioObs.db_spl` (dBFS + `db_cal_offset`, default 94, set by `POST /api/calibrate/room` against a phone SPL meter) |
 | `db_p90` | dB SPL | 90th percentile of the tick's ~1 s block levels |
 | `light_lux` | lux | 10 s median of the webcam lux regression, refreshed at 1 Hz; 2-point calibration against a phone lux meter |
-| `laughter_count` | onsets per tick, room | YAMNet laughter onsets, counted only when the block is ≥ room median + 6 dB (`settings.near_field_db`) |
+| `laughter_count` | onsets per tick, room | YAMNet laughter onsets, counted only when the block is ≥ the venue room baseline + 6 dB (`settings.near_field_db`; before the baseline is complete, the 15-min room median + 6 dB) |
 | `compliments_count` | hits per tick, room | Vosk restricted-grammar phrase hits, same near-field gate |
 | `clenched_fists_count` | onsets per tick, person | debounced fist onsets (score ≥ 0.7 held ≥ 0.5 s; hands in the bottom 20% keyboard zone ignored) |
 | `posture_slump` | fraction of the tick | share of frames with a debounced slump |
@@ -470,6 +483,7 @@ The simulator generates every channel in the unit the live pipeline produces fro
 | `hours_since_break` | h | presence-based clock: an absence ≥ `break_absent_min` (10 min; ~0.5 for demos) or `POST /api/events/break` resets it |
 | `tod_h` | h, [0, 24) | local clock |
 | `n_people` | count | most people seen in the tick (≤ `settings.max_tracks` = 3) |
+| `room_db_base`, `room_lux_base` | dB SPL, lux | the venue room baseline: median dB and median lux of ~90 s captured on arrival with the person sitting neutral (`POST /api/room/baseline`), or automatically the first 90 s of a live session or replayed recording |
 
 ### 11.2 Consistency rules
 
@@ -480,8 +494,22 @@ The simulator generates every channel in the unit the live pipeline produces fro
 | Room row = `aggregator.room_record` semantics | the room slot and room-only mode see the same thing in both worlds |
 | Corpus breaks last ≥ `break_absent_min` | a simulated break is always a live break |
 | A person who returns from a break starts a new person window in `build_dataset.py` (room history kept) | live does not re-identify people: after an absence the person normally gets a new display id and a cold person window, while the room slot persists |
-| Mic offset in the simulator; venue calibration live | models must not rely on absolute dB alone (`M2-noabsdB` ablation) |
+| Mic offset and hall level in the simulator; venue calibration and the room baseline live | the served models read dB and lux only relative to the room baseline, never as absolute levels (M2-abs ablation, venue-shift evaluation) |
+| Simulated arrival baseline = hall + one neutral occupant + measurement error | the same thing `POST /api/room/baseline` measures live with the person sitting neutral |
 | Face valence is relative in both | the simulator's 0 is the person's neutral, as the edge's baseline subtraction makes it live |
+
+### 11.3 Capture runs 2–3: scale check (no refit)
+
+Mac captures of one person at the demo desk (`data/real/capture_{keyboard_gaze,slump,audio}.jsonl`), replayed
+through the aggregator and compared with simulated ticks by `valence/eval/capture_stats.py`
+(`reports/capture_vs_sim.json`; it also reports `db_room`, laughter and compliments). The simulator was not
+changed.
+
+| Capture | Finding |
+|---|---|
+| Keyboard gaze vs simulated Focused | Slump 0% under the fixed rule (run 1's nose-only rule gave 93%); motion p50 0.022 sw/s (simulated Focused 0.024); face visible 100%; `db_room` p50 0.1 dB. Matches. |
+| Slump (cued 20 s slumps with upright gaps) | Slumping is detected (per-tick slump p10 / p50 / p90 0 / 0.27 / 1.0). But motion during a *held* slump is p50 0.101 sw/s, against 0.033 upright and 0.575 in transitions; simulated Exhausted is ~0.012. Face visible drops to 0.33 while slumped. This looks like a perception artifact (head keypoints jitter when the head drops) and is assigned to the edge session; the simulator's still slump was kept. |
+| Audio ("great job" ×3, one laugh) | Laughter detected under the new rule (≥ 0.05 for one result, off < 0.02, 4 s refractory; one ~5 s laugh counts 2 onsets); compliments 3/3. Speech and laughter at the desk are +12–17 dB over the quiet baseline. The one laugh tick read face valence 0.977, the others 0.03–0.07: the face-only model reads Collaborative with probability ≥ 0.5 from face valence 0.4 up, so a sustained broad smile should drive the mask override, but a sustained forced-smile capture is still needed to confirm the face scale live. |
 
 ---
 
@@ -537,9 +565,11 @@ validation is future work." Nothing stronger is claimed from this dataset.
 Scenarios are scripted sessions in `scenarios/*.yaml`, rendered by `valence/sim/scenarios.render()` through the
 same observation model with `source = "replay"`. Each segment holds the listed state for its whole length (no
 Markov transitions); context still lags by τ, so labels are expected to follow segment boundaries with a delay
-of minutes. Unset nuisance values are drawn from the scenario's own `seed`; the mic offset defaults to 0 dB.
-Scenarios are **never** part of the training or evaluation splits. They drive the demo, `test_e2e_replay`
-(target: correct label on ≥ 80% of ticks) and validation of the mask-override detector.
+of minutes. Unset nuisance values are drawn from the scenario's own `seed`; the mic offset defaults to 0 dB, and
+there is no hall noise unless the YAML sets `venue_db`. Scenarios are **never** part of the training or evaluation
+splits. They drive the demo, `tests/test_scenarios.py` (every scenario, after a 2-min grace: the scripted state on
+≥ 80% of ticks per segment and person, the override on masked segments and nowhere else) and validation of the
+mask-override detector.
 
 | Scenario | State set | People | Minutes | Script | Setup (start, h since break, lux base, face hidden) | Shows |
 |---|---|---|---|---|---|---|
@@ -551,6 +581,7 @@ Scenarios are **never** part of the training or evaluation splits. They drive th
 | `tense` | all (P1) | 2 | 13 | Focused 3 → Tense 10 (both) | 17:00, 2.5 h, 330 lux, seeded draw | Visible frustration: face, fists and a loud room agree, so no override is expected. |
 | `context_blindness` | core | 2 | 18 | Collaborative_Happy 7 (both, `hih_p: 0.45`) → both absent 2 → Person #1 Exhausted 9 (`hih_p: 0.45`, `lux_mult: 0.5`), Person #2 absent | 20:00; 4.4 h (Person #1) / 1.0 h (Person #2); 380 lux; 5% | The same head-in-hands pose in two contexts gets two labels: with laughter and compliments (amused), and in a silent, dim room after hours of work (exhausted). The 2-min absence is shorter than the 5-min scripted-break threshold, so Person #1's clock keeps running past 4.4 h into the Exhausted half; no `hours_since_break` override is needed. |
 | `full_demo` | core | 1 | 26 | Focused 5 → Frustrated_Masked 9 (`mask_p: 1.0`) → absent 6 (break) → Collaborative_Happy 6 | 15:00, 2.0 h, 300 lux, 5% | The pitch storyline: focused work, the masked flip, a logged break that resets the clock, recovery. With one person the last segment displays "Upbeat". |
+| `loud_venue` | core | 1 | 15 | Focused 6 → Frustrated_Masked 9 (`mask_p: 1.0`) | 13:00, 1.5 h, 450 lux, 5%; `venue_db` 72, seed 109 | A loud hackathon hall around the team. With the venue baseline the hall is this room's normal, so the flip has to come from the person, not the noise. |
 
 Scripted absences reset `hours_since_break` when they last ≥ 5 min (scenarios are short; live demos run with
 `break_absent_min` ≈ 0.5 min). The demo seed (`POST /api/demo/seed`) uses the same engine to fill an empty
@@ -590,7 +621,7 @@ window with room context only (no face), tagged `source = "sim_seed"`.
 | `data/sim/tune_ns{ns}.parquet` | tuning corpora | no | same |
 | `data/sim/legacy.csv` | output of the original generator | no | `valence/sim/legacy.py` |
 | `artifacts/sim_manifest.json` | per corpus: seed, `n_sessions`, `state_set`, `noise_scale`, params hash, split assignment, row and per-state counts, content hash; the `ns*` tuning log | yes | generator / tuner |
-| `data/real/capture_*.jsonl` | live feature capture (typing, keyboard gaze, fists, slump) | yes | edge session (`python -m valence.edge.run --jsonl`) |
+| `data/real/capture_*.jsonl` | live feature capture: run 1 (baseline, covered camera, fists, typing), run 2 (keyboard gaze, slump), run 3 (audio); summaries in `data/real/capture_summary_*.json` | yes | edge session (`python -m valence.edge.run --jsonl`) |
 | `data/real/` (other files) | acted set and self-report labels (names set by the edge session) | yes | edge session |
 
 Reproducibility:
@@ -639,6 +670,7 @@ None of these checks has been run yet; they are the acceptance criteria for the 
 | Hidden states are crisp categories with clean boundaries. | Real states blend and change gradually; self-report labels are noisy. |
 | Face valence is a Gaussian around a state mean, with an exact personal-neutral baseline. Individual differences in expression, display norms and baseline estimation error are not modeled. | The face channel is cleaner here than live. The anti-bias claim is narrowed to "decision stability when face evidence is missing or degraded"; demographic validation is an explicit gap. |
 | Low light adds face noise but does not raise the missing-face rate. | The live face-detection rate at three light levels (acted set) will show whether it should. |
+| The hall is one constant level per session, power-summed with the room, and the arrival baseline is the hall plus one neutral occupant with N(0, 1.5 dB) error. | Real halls fluctuate, and a baseline captured during a loud burst or with an agitated person shifts every room-relative feature. The venue-shift evaluation mixes hall noise in the same way, so its result is partly by construction. |
 | Masking is a forced-smile episode with unchanged context. | Real masking may be subtler or only partial. |
 | False-positive rates and scales come from one person, one room, one camera, three minutes per condition. | Other people, desks and cameras may differ. |
 | People are independent apart from group affinity and shared room channels. There is no emotional contagion, conversation dynamics or person-to-person attribution of laughter. | Multi-person realism is limited to "the room is shared". |
@@ -695,7 +727,11 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Sound | `mic_offset_db` | U(−12, +12) per session | dB | | Plan (±12–15) |
 | Sound | laughter bump | +2 dB per laughter onset, at most 2 | dB | | Design |
 | Sound | p90 | ambient + 2 + abs(N(0, 2)) + 1.5 if laughter | dB | ✓ (σ) | Design |
-| Light | `lux_range` (session baseline) | log-uniform 120–600 | lux | | Plan |
+| Sound | `venue_db_range` (hall level, power-summed with the room) | U(40, 75) per session; scenarios none unless `venue_db` | dB SPL | | Design (`docs/CONTRACT_REQUESTS.md` round 4) |
+| Sound | `neutral_db` (one neutral occupant, for the arrival baseline) | 48 | dB SPL | | Design (= Focused `db_target`) |
+| Sound | `baseline_db_noise` (arrival capture error) | 1.5 | dB (σ) | ✓ | Design |
+| Light | `lux_range` (session baseline) | log-uniform 100–800 | lux | | Design (`docs/CONTRACT_REQUESTS.md` round 4; was 120–600) |
+| Light | `baseline_lux_noise` (arrival capture error) | lognormal σ 0.08 | log units | ✓ | Design |
 | Light | time-of-day factor | ×0.85 from 22:00 to 06:00 | — | | Plan (drift); Design (value) |
 | Light | `lux_mult` | ×1.00 / ×0.85 / ×0.65 / ×1.15 / ×0.85 / ×0.95 | — | | Plan (dim / bright signatures); Design (values) |
 | Light | lux tick noise | lognormal σ 0.08 | log units | ✓ | Design |
@@ -711,7 +747,7 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Body | `motion` | 0.08 / 0.20 / 0.04 / 0.18 / 0.10 / 0.30 | shoulder-widths/s | | Design; scale Placeholder |
 | Body | motion noise | lognormal σ 0.4; ×0.7 while slumped | log units | ✓ | Design |
 | Body | `person_tau_min` | U(1, 2) per person | min | ✓ | Design |
-| Body | withdrawal rule | slump ≥ 0.6 and motion ≤ 0.06 sw/s (`features/spec.py`) | — | | Design (shared with live) |
+| Body | withdrawal rule | slump ≥ 0.6 and motion ≤ 0.02 sw/s, as built (`features/spec.py`) | — | | Design (shared with live) |
 | Detectors | `FP["fist_per_min"]` | 0.05 | per min | | Placeholder |
 | Detectors | `FP["slump_share"]` | 0.05 | share of time | | Placeholder |
 | Detectors | `FP["laugh_per_min"]` | 0.02 (room) | per min | | Placeholder |

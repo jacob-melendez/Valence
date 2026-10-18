@@ -13,7 +13,7 @@ Build a single-page web app called "Valence Audit Console": the judge-facing dis
 
 DATA SOURCE
 - A Mock mode (default ON) that generates realistic fake messages matching the schemas below: cycle through all states over ~2 minutes, include a "mask override" moment, a moment where the face is hidden, and stream governance purge events every 5 s.
-- A Live mode that connects to a configurable backend base URL (default http://localhost:8000; WebSocket ws://localhost:8000/ws/events). Auto-reconnect and show connection state.
+- A Live mode that connects to a configurable backend base URL (default http://127.0.0.1:8000, not localhost, because macOS resolves localhost to ::1 first; overridable with `?api=` and remembered; WebSocket ws://127.0.0.1:8000/ws/events). Auto-reconnect and show connection state.
 - Put all message types (TypeScript types) and handling in one module so switching mock -> live changes nothing else.
 
 EMOTIONAL STATES
@@ -33,6 +33,7 @@ WHAT THE APP MUST DISPLAY
 11. System status from `status` messages: camera, mic, mode (live/replay/hybrid), FPS, loop latency, narrator status, offline indicator, degraded sensors, purge violation alarm.
 12. Data-retention summary from GET /api/retention.
 13. Evaluation results from GET /api/eval/summary and images at GET /api/eval/figures/{name}.png: accuracy vs history chart, robustness charts (face hidden / low light), confusion matrices, calibration plot, metrics table. Use placeholder data in mock mode.
+14. Room baseline status: the venue baseline the model reads the room against, from `room_baseline` in GET /api/health or from GET /api/room/baseline: {"mode":"captured","complete":true,"target_samples":90,"db_samples":90,"lux_samples":90,"db_median":68.4,"db_iqr":2.1,"lux_median":410.0}. Show the mode (auto / capturing / captured), the dB median and the lux median, with capture progress (db_samples of target_samples) while capturing.
 
 CONTROLS (sent to the backend)
 - Start / Stop / Pause (privacy kill switch): POST /api/control/{start|stop|pause}
@@ -41,6 +42,7 @@ CONTROLS (sent to the backend)
 - Replay scenario picker (list from GET /api/scenarios): POST /api/replay/{scenario}
 - Toggles "Simulate face hidden" and "Simulate low light": POST /api/sim/face_occlusion and POST /api/sim/low_light with {"enabled": true|false}
 - Toggle "Room-only mode" (one aggregate label, no per-person inference): POST /api/mode with {"room_only": true|false}
+- Button "Capture room baseline (90 s)": POST /api/room/baseline with {"seconds": 90}; tell the operator to sit neutral and quiet until the mode reads "captured". Button "Reset": POST /api/room/baseline/reset (back to automatic).
 
 WEBSOCKET MESSAGES (JSON, discriminated by "type")
 {"type":"hello","contract_version":"1.0.0","mode":"live","room_only":false,"states":[{"id":"Focused","display":"Focused","tier":"P0"},{"id":"Frustrated_Masked","display":"Frustrated / Masked Stress","tier":"P0"},{"id":"Exhausted","display":"Exhausted","tier":"P0"},{"id":"Collaborative_Happy","display":"Collaborative / Happy","tier":"P0"}],"feature_version":"v1","frame_w":1280,"frame_h":720,"mirrored":false}
