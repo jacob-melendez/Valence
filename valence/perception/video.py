@@ -103,9 +103,11 @@ class VideoPerceiver:
         self._lux, self._lux_q = math.nan, 0.0
 
     def close(self) -> None:
-        self.gestures.close()
-        self.faces_full.close()
-        self.faces_crop.close()
+        for task in (self.gestures, self.faces_full, self.faces_crop):
+            try:
+                task.close()
+            except RuntimeError:  # MediaPipe's dispatcher already shut down at interpreter exit
+                pass
 
     def process(self, frame_bgr: np.ndarray, t: float, wall: float, seq: int, frames_decoded: int = 0) -> VideoObs:
         """``frames_decoded``: the capture's cumulative decoded-frame count (governance check)."""
