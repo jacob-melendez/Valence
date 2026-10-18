@@ -69,7 +69,8 @@ curl -s -X POST $A/api/calibrate/room -H "$J" -d '{"spl_reference": 62.0, "lux_r
   recalibrate.**
 - It is audited as `calibrate_room` and is a measurement, not SIMULATED.
 - Training range is roughly 34–73 dB for `db_mean_5m` and 89–575 lux for `lux_mean_5m`
-  (`artifacts/clip_bounds.json`). Values outside are clipped and listed in `data_quality.ood_features`.
+  (`artifacts/clip_bounds.json`). Values outside are clipped to it; only values more than half the training range
+  beyond it (about 14–95 dB for `db_now`) are listed in `data_quality.ood_features`.
 
 ## 3. The 4-minute pitch
 
@@ -82,7 +83,8 @@ curl -s -X POST $A/api/calibrate/room -H "$J" -d '{"spl_reference": 62.0, "lux_r
   as the keyboard zone), then relax. A fist counts at a score of 0.7 or more held for at least 0.5 s, with a
   3 s refractory (`docs/PERCEPTION.md`).
 - **Pace:** one clench every 45–60 s. The trained clip range is 0–2 fists per minute and 0–7 per 5 minutes
-  (`artifacts/clip_bounds.json`); faster clenching is clipped and listed as out of range.
+  (`artifacts/clip_bounds.json`); faster clenching is clipped to that range (it reads no stronger), though
+  counts are never reported as out of range.
 - **Why start early:** context lags behavior. On simulated data M2 is right 36.2% of the time in the first
   30 s of an episode, 67.7% at 1–2 min and 86.6% at 2–5 min (`accuracy_by_episode_age`). The override is also
   blocked for the first 120 s of a person's window (`override_block_s`).
@@ -240,7 +242,7 @@ curl -s -X POST $A/api/demo/reset                                           # fo
 | `scripts/e2e_check.py`, `scripts/mem_soak.py`, `scripts/audit_verify.py`, hybrid mode | Not built. No 60-min soak or memory chart exists. |
 | 2-point lux fit and noise floor in `/api/calibrate/room` | Not built (one-point lux, additive dB only). |
 | Narrator p95 with YOLO running, LoRA | Not measured / not shipped (`--adapter` exists, no adapter is shipped). The prompt-only narrator (strict fact sheet, driver-bound validator, cached prompt prefix; `c61bed2`) or the template is what runs. |
-| Negative control (`make negative`) | Passes on the served `85874e97`: Focused on 100% of the 25 non-warm-up ticks of `data/real/capture_typing.jsonl` (cloud, 2026-10-18), but in-sample: the simulator was refit to that capture run. Re-run after any retrain and quote only the latest result. Keyboard-gaze, slump and audio captures are still wanted (`docs/CONTRACT_RESPONSES.md` round 4). |
+| Negative control (`make negative`) | Passes on the served `85874e97`: Focused on 100% of the 25 non-warm-up ticks of `data/real/capture_typing.jsonl` (cloud, 2026-10-18), but in-sample: the simulator was refit to that capture run. With the corrected replay clock (MODEL_CARD §5), the cued-fists capture reads Focused on 23/25 ticks, so fists alone do not make the flip: rehearse the full masked act (noise, smile and fists) and confirm on a `golden_demo` replay. Re-run after any retrain and quote only the latest result. Keyboard-gaze, slump and audio captures are still wanted (`docs/CONTRACT_RESPONSES.md` round 4). |
 | `reports/figs/` vs `metrics.json` | All seven figures carry the same 2026-10-18 00:33 timestamp as `metrics.json` (`85874e97`; `m3_attention.png` comes from the M3 run). A partial `make eval` run can overwrite only some figures: check timestamps and pitch only figures from the run that wrote `metrics.json`. |
 | Narrator text cache | `/api/demo/reset` clears the backend's narration cache, but the narrator service keeps its own (≤ 256 texts, RAM, reused only after re-validation). Restart T1 to drop it. |
 | `VALENCE_DB_CAL_OFFSET` in `.env.example` | No code reads `settings.db_cal_offset`. The edge's offset is `spl_offset_db` in `data/real/calibration.json`. |

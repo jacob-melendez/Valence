@@ -28,6 +28,8 @@ def test_rest_endpoints(client):
     assert client.post("/api/mode", json={"room_only": False}).json()["ok"]
     assert client.post("/api/demo/reset").json()["ok"]
     assert client.post("/api/replay/nope").status_code == 404
+    assert client.post("/api/replay/focused", json={"speed": 0}).status_code == 422
+    assert client.post("/api/replay/focused", json={"speed": "fast"}).status_code == 422
     assert client.post("/api/control/pause").json()["paused"]
     assert not client.post("/api/control/start").json()["paused"]
     assert client.get("/api/governance/verify").json()["ok"]
@@ -46,3 +48,24 @@ def test_websocket_stream(client):
         assert {"prediction", "governance", "state_vector"} <= seen
     hist = client.get("/api/history?minutes=15").json()
     assert any(m["type"] == "prediction" for m in hist)
+
+
+def test_mic_failure_keeps_the_camera(client, monkeypatch):
+    """A wrong or silent mic must not take live mode down: the edge restarts video-only."""
+    import sys
+    import types
+
+    calls = []
+
+    def fake_start(sink, *, video=True, audio=True, obscure_face=False):
+        calls.append(audio)
+        if audio:
+            raise RuntimeError("mic is silent")
+        return lambda: None
+
+    monkeypatch.setitem(sys.modules, "valence.edge.run", types.SimpleNamespace(start=fake_start))
+    res = client.post("/api/live").json()
+    assert calls == [True, False]
+    assert res["ok"] and res["edge_error"] is None and "mic is silent" in res["mic_error"]
+    assert client.get("/api/health").json()["mic_error"]
+    assert "mic" in client.get("/api/state").json()["status"]["degraded"]

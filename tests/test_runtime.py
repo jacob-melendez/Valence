@@ -216,3 +216,16 @@ def test_replay_offline_uses_the_replay_clock(runtime):
     hours = [m["hours_since_break"] for m in runtime.msgs
              if m["type"] == "state_vector" and m["person_id"] != 0 and m["hours_since_break"] is not None]
     assert hours and max(hours) < 1.0
+
+
+def test_narrator_status_needs_two_failures_in_a_row():
+    from valence.explain.narrator_client import NarratorClient
+
+    c = NarratorClient("http://127.0.0.1:9", lambda message: None)
+    c._mark(True)
+    c._mark(False)  # one slow narration past the deadline
+    assert c.healthy
+    c._mark(False)
+    assert not c.healthy
+    c._mark(True)
+    assert c.healthy

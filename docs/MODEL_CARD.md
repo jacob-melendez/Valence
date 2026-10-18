@@ -57,8 +57,10 @@ them natively.
 M2-noface and M3 are trained without it.
 
 **Serving path per tick.** (1) Compute the features. (2) Clip each feature to the training p1–p99
-(`artifacts/clip_bounds.json`) and list the clipped features as `data_quality.ood_features`. (3) Compute
-softmax(z/T). If more than 3 features were clipped, use p ← 0.7·p + 0.3/k. (4) Run M0 when `face_now` is not NaN.
+(`artifacts/clip_bounds.json`); list as `data_quality.ood_features` only the features outside their OOD band
+(physical domain for bounded features, never for clock features, 50% of the training range beyond p1/p99 for
+db/lux/motion; ARCHITECTURE §7.5). (3) Compute softmax(z/T). If more than 3 features are OOD, use
+p ← 0.7·p + 0.3/k. (4) Run M0 when `face_now` is not NaN.
 (5) Compute TreeSHAP for the argmax class. (6) Smooth with `PersonSmoother`: an EMA (α 0.5) feeds the *label* only,
 and a new label needs 2 consecutive ticks. The displayed confidence is the calibrated, unsmoothed probability of the
 shown label, documented as "sim-calibrated" (`contracts.py`). `warming_up` is set for the first 60 s of a window,
@@ -278,6 +280,15 @@ ticks, stress share 0, 0 mask overrides, **pass** (cloud, 2026-10-18: `python -m
 data/real/capture_typing.jsonl`). The simulator was refit to this same capture run, so the pass is **in-sample**: a
 consistency check, not validation.
 
+**Replay clock correction (2026-10-18).** Offline replay used to start each break clock at the recording's own
+capture time while ticking on the current clock, so a capture replayed hours later read `hours_since_break` of
+about 8.5 h. Fixed in `valence/runtime/recording.py` (one synthetic clock per replay; `tests/test_runtime.py`
+asserts < 1 h). With the corrected clock, typing is unchanged (Focused 25/25, pass). The cued-fists capture
+(`capture_fists.jsonl`) reads **Focused on 23/25** non-warm-up ticks and Collaborative (shown as "Upbeat") on 2,
+not the "Frustrated 60%" reported earlier (CONTRACT_RESPONSES round 4): that figure came from the inflated break
+clock. Cued fists in a quiet room with a fresh break clock are not enough for M2 to read Frustrated; whether the
+full masked act (noise, smile and fists) is, needs the `golden_demo` capture.
+
 **Legacy mock (why the data was rebuilt).** On the original i.i.d. generator (600 test rows), accuracy is
 face-only 0.6667, context-only 1.0000 and both 1.0000. The context columns encode the label, so that 100% says
 nothing about the thesis.
@@ -290,7 +301,7 @@ nothing about the thesis.
 | Class explained | The per-tick M2 argmax. The shown label comes from the smoother, so during the 2-tick hysteresis the layers can explain a different class than the one displayed. |
 | Layers | SHAP summed per layer: **Ambient Physics** (`db_`, `lux_`), **Time Dynamics** (`hours_since_break`, `tod_*`), **Somatic & Social** (motion, slump, head-in-hands, fists, laughter, compliments, withdrawal, `n_people`), **Facial Surface** (`face_*`). Sorted by contribution. `fill_ratio` is excluded (`valence/explain/explainer.py`). |
 | Drivers | Per layer, sorted by abs(SHAP), keeping **one driver per sensor channel** (so `motion_now` and `motion_ewm_1m` never both appear), at most 3 per layer. Each driver carries a display string with its only number, a `level` (high / elevated / normal / low, fixed thresholds in `describe.py`), an `effect` (supports / opposes, from the sign) and a `scope` (room / person). |
-| Template text | Uses the top 3 supporting drivers. The face layer is excluded when the override is on or no face is visible. The text adds an out-of-range note when more than 3 features were clipped (`valence/explain/template.py`). |
+| Template text | Uses the top 3 supporting drivers. The face layer is excluded when the override is on or no face is visible. The text adds an out-of-range note when more than 3 features are out of distribution (`valence/explain/template.py`). |
 | **Mask override, as built** | Raw condition, evaluated only on ticks with a readable face: M0 reads **Collaborative_Happy**, M2 reads a non-positive state, M0 confidence ≥ 0.45, M2 confidence ≥ 0.70, and the summed face-layer SHAP toward M0's class inside M2 is > 0. Smoother: a tick counts only if M2's raw label equals the shown label. The override turns **on at ≥ 3 of the last 6 face-visible ticks** and **off at ≤ 1**. A tick without a face keeps the current state. The history resets when the shown label changes, and the override is blocked for the first 120 s of the window. Effect: the core-set display changes from "Frustrated" to "Frustrated / Masked Stress", and the template states that context corrected the facial mask. |
 | Override tests | `tests/test_served.py` asserts the override fires within 30 ticks of the masked segment in `frustrated_masked` and never in `focused`, `collaborative_happy` or `exhausted`. The plan's target was 6 ticks; the test allows 30. Passed with `85874e97` (cloud, 2026-10-18; in a replay the override first fired 8 ticks into the masked segment); re-run after any retrain. |
 | Counterfactual | `GET /api/explain/{event_id}/counterfactual?feature=&value=` re-runs M2 on the person's current window with one feature changed and tags it in `simulated_fields` |
