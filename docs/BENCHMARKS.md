@@ -145,3 +145,6 @@ quiet and talking: laughter family **0.00** every second (Speech up to 0.99); re
 laughter family at 0.04-0.08, and one second at Laughter 0.50 / Snicker 0.26 / Chuckle 0.26. The planned rule
 (>= 0.30 for 2 results) can never fire on this mic; the shipped rule is >= 0.05 for one result, off < 0.02, 4 s
 refractory, which counts 1 onset per real laugh phase and 0 in quiet/talk on the probe.
+
+**Run 3 (audio only, new laughter rule):** 3x "great job" -> **3 compliment hits**; one ~5 s laugh -> **2 laughter
+onsets** (4 s apart: a long laugh can count twice under the 4 s refractory); 0 events during the quiet baseline.
