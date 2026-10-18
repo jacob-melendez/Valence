@@ -132,10 +132,10 @@ def describe(feature: str, value: float | None, *, tod_h: float | None = None) -
 
     if ch == "motion":
         if stat in ("now", "mean", "ewm", "max"):
-            lvl = _level(value, 0.25, 0.12, 0.06)
+            lvl = _level(value, 0.10, 0.05, 0.015)  # live: still ~0.014, typing ~0.03
             word = {"low": "nearly still", "normal": "moving normally", "elevated": "restless", "high": "very restless"}[lvl]
-            return d(f"{word} (motion {value:.2f})", "sw/s", lvl)
-        return d(f"motion changing ({value:+.2f})", "sw/s", _level(abs(value), 0.15, 0.06, 0.01))
+            return d(f"{word} (motion {value:.3f})", "sw/s", lvl)
+        return d(f"motion changing ({value:+.3f})", "sw/s", _level(abs(value), 0.05, 0.02, 0.003))
 
     if ch == "face":
         if stat.startswith("visible"):

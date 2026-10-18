@@ -41,7 +41,7 @@ FACE_CHANNELS: tuple[str, ...] = ("face_valence", "face_visible")
 
 # Withdrawal: mostly slumped and nearly still for the tick. Same rule in sim and live.
 WITHDRAW_SLUMP_MIN = 0.6
-WITHDRAW_MOTION_MAX = 0.06  # shoulder-widths/s; edge reports ~0.0-0.1 when still
+WITHDRAW_MOTION_MAX = 0.02  # shoulder-widths/s; live capture: still ~0.014, typing ~0.03
 
 
 def withdrawal_flag(posture_slump: float, motion_energy: float) -> int:

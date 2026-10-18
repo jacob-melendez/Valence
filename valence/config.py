@@ -17,6 +17,8 @@ class Settings:
     # People / breaks
     max_tracks: int = 3
     min_box_height: float = 0.25  # fraction of frame height
+    participant_rel_height: float = 0.55  # a track counts as a participant if its box is >= this x the largest
+    participant_min_presence: float = 0.3  # ... and it is present in >= this share of the tick's frames
     break_absent_min: float = 10.0  # absence that counts as a break (set ~0.5 for demos)
     person_drop_min: float = 15.0
     # Audio

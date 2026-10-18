@@ -147,3 +147,14 @@ def test_override_resets_when_label_changes():
     for _ in range(4):  # face hidden (None) and the label moves on: the override must not follow it
         r = sm.update(out("Collaborative_Happy", None), 100)
     assert r.label == "Collaborative_Happy" and not r.mask_override
+
+
+def test_background_tracks_are_not_participants():
+    agg = Aggregator(Settings(), "s")
+    for i in range(50):
+        desk = PersonObs(track_id=1, bbox=(0.2, 0.05, 0.7, 0.98), motion=0.03, face_visible=True, face_valence=0.0)
+        background = PersonObs(track_id=3, bbox=(0.8, 0.3, 0.9, 0.62))  # a third of the height, always there
+        agg.push(_video(i * 0.1, [desk, background], i + 1))
+    room, *people = agg.flush(wall=1_000_005, t_mono=5, tod_h=12.0)
+    assert [p.person_id for p in people] == [1]
+    assert room.n_people == 1 and people[0].n_people == 1

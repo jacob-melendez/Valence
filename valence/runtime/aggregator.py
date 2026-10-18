@@ -27,6 +27,7 @@ NEAR_FIELD_MIN_BLOCKS = 10
 @dataclass
 class _PersonAcc:
     frames: int = 0
+    height: float = 0.0  # sum of box heights (normalized), for the participant filter
     fists: int = 0
     slump: int = 0
     hih: int = 0
@@ -101,6 +102,7 @@ class Aggregator:
         for p in obs.persons:
             acc = self._acc.setdefault(p.track_id, _PersonAcc())
             acc.frames += 1
+            acc.height += p.bbox[3] - p.bbox[1]
             acc.fists += p.fist_onsets
             acc.slump += int(p.slump)
             acc.hih += int(p.head_in_hands)
@@ -229,8 +231,10 @@ class Aggregator:
                 lux_quality=self._lux_quality, laughter_count=self._laugh, compliments_count=self._compl, tod_h=tod_h,
             )
             people: list[TickRecord] = []
+            participants = self._participants()
+            room["n_people"] = len(participants)
             for pid, acc in sorted(self._acc.items()):
-                if acc.frames == 0:
+                if pid not in participants:
                     continue
                 slump = acc.slump / acc.frames
                 motion = float(np.mean(acc.motion)) if acc.motion else math.nan
@@ -247,6 +251,20 @@ class Aggregator:
             self._drop_absent(wall)
             self._reset_tick()
         return [room_record(room, people, sim_tick)] + people
+
+    def _participants(self) -> set[int]:
+        """People at the desk: present for a good share of the tick and close to the camera.
+
+        Background figures (people walking by, posters, a TV) are tracked but excluded: on the demo Mac they
+        were present in 80-95% of frames at a third of the main person's box height.
+        """
+        if not self._acc or not self._video_frames:
+            return set()
+        mean_h = {pid: acc.height / acc.frames for pid, acc in self._acc.items() if acc.frames}
+        tallest = max(mean_h.values())
+        return {pid for pid, acc in self._acc.items()
+                if acc.frames >= self.s.participant_min_presence * self._video_frames
+                and mean_h[pid] >= self.s.participant_rel_height * tallest}
 
     def _drop_absent(self, wall: float) -> None:
         for pid in [p for p, c in self._clocks.items() if wall - c.last_seen > self.s.person_drop_min * 60]:

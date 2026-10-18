@@ -11,7 +11,7 @@ from valence.sim.scenarios import render
 
 
 def test_feature_names_and_sets():
-    assert len(FEATURE_NAMES) == 114
+    assert len(FEATURE_NAMES) == 114 and len(FEATURE_SETS["m2"]) == 110
     for name, cols in FEATURE_SETS.items():
         assert set(cols) <= set(FEATURE_NAMES), name
     assert not set(FEATURE_SETS["m2_noface"]) & set(FEATURE_SETS["m0t"])

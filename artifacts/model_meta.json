@@ -157,8 +157,6 @@
     "m2_noface": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -174,8 +172,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -264,8 +260,6 @@
       "fill_ratio"
     ],
     "m2_noabsdb": [
-      "db_std_1m",
-      "db_slope_1m",
       "db_std_5m",
       "db_slope_5m",
       "db_std_15m",
@@ -274,8 +268,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -373,8 +365,6 @@
     "m2_notime": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -390,8 +380,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -486,8 +474,6 @@
     "m2": [
       "db_now",
       "db_mean_1m",
-      "db_std_1m",
-      "db_slope_1m",
       "db_max_1m",
       "db_mean_5m",
       "db_std_5m",
@@ -503,8 +489,6 @@
       "db_rel_15m",
       "lux_now",
       "lux_mean_1m",
-      "lux_std_1m",
-      "lux_slope_1m",
       "lux_max_1m",
       "lux_mean_5m",
       "lux_std_5m",
@@ -601,57 +585,57 @@
     ]
   },
   "temperatures": {
-    "m0": 0.8712909369150258,
-    "m0t": 1.031679130079168,
-    "m1": 1.0263303121733385,
-    "m2_noface": 0.9949268235966232,
-    "m2_noabsdb": 1.0229540798436578,
-    "m2_notime": 1.017420792967274,
-    "m2": 1.0120653791283152
+    "m0": 0.9031212789759472,
+    "m0t": 0.9672659421854932,
+    "m1": 0.8984838582611243,
+    "m2_noface": 0.9615705981635821,
+    "m2_noabsdb": 0.9061516595920358,
+    "m2_notime": 0.9749424263576503,
+    "m2": 0.9510378944934529
   },
   "summary": {
     "m0": {
-      "test_macro_f1": 0.3671,
-      "rounds": 96,
+      "test_macro_f1": 0.4225,
+      "rounds": 109,
       "features": 2,
-      "temperature": 0.871
+      "temperature": 0.903
     },
     "m0t": {
-      "test_macro_f1": 0.4457,
-      "rounds": 120,
+      "test_macro_f1": 0.4899,
+      "rounds": 123,
       "features": 7,
-      "temperature": 1.032
+      "temperature": 0.967
     },
     "m1": {
-      "test_macro_f1": 0.5807,
-      "rounds": 133,
+      "test_macro_f1": 0.5656,
+      "rounds": 75,
       "features": 13,
-      "temperature": 1.026
+      "temperature": 0.898
     },
     "m2_noface": {
-      "test_macro_f1": 0.7674,
-      "rounds": 365,
-      "features": 107,
-      "temperature": 0.995
+      "test_macro_f1": 0.6878,
+      "rounds": 217,
+      "features": 103,
+      "temperature": 0.962
     },
     "m2_noabsdb": {
-      "test_macro_f1": 0.8162,
-      "rounds": 477,
-      "features": 105,
-      "temperature": 1.023
+      "test_macro_f1": 0.8005,
+      "rounds": 168,
+      "features": 101,
+      "temperature": 0.906
     },
     "m2_notime": {
-      "test_macro_f1": 0.8029,
-      "rounds": 400,
-      "features": 111,
-      "temperature": 1.017
+      "test_macro_f1": 0.7835,
+      "rounds": 333,
+      "features": 107,
+      "temperature": 0.975
     },
     "m2": {
-      "test_macro_f1": 0.8163,
-      "rounds": 407,
-      "features": 114,
-      "temperature": 1.012
+      "test_macro_f1": 0.7974,
+      "rounds": 278,
+      "features": 110,
+      "temperature": 0.951
     }
   },
-  "trained_at": "2026-10-17 23:26:53"
+  "trained_at": "2026-10-17 23:59:46"
 }
