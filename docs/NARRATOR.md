@@ -208,55 +208,47 @@ decode-throughput probe before and after the run (`decode_tok_s`) and the power 
 .venv/bin/python -m valence.narrator.evaluate --n 300 --sheets data/narrator/test.jsonl --mode template --out C.json
 ```
 
-## Results of 2026-10-17 (throttled laptop, see below)
+## Results of 2026-10-18 (AC power, full 300-sheet test split, YOLO load at 10 Hz)
 
-The A/B phase ran with the laptop on battery at 3% -> 1% in low-power mode. Under that throttling
-the GPU decoded 10-25 tokens/s (about 140 tokens/s unthrottled, measured with the same probe at
-the start of the phase) and the YOLO load reached only 4.4 Hz instead of 10 Hz. At the real 2.5 s
-deadline nothing can finish, so the faithfulness comparison was run with the deadline lifted to
-60 s on a 60-sheet subset of the test split (every 5th row: 50 production + 10 synthetic; 23 mask,
-14 hidden face, 23 visible), without the YOLO load. Latencies in that run are throttled and are
-not deadline evidence.
+Both LLM arms at the real 2.5 s deadline with `scripts/spikes/gpu_load.py` running the real
+`VideoPerceiver` at 10.0 Hz (process p50 30-35 ms) the whole time. Unloaded decode probe before the
+runs: 188 tokens/s. Reports: `adapters/ab/ab_A300_ac.json`, `adapters/ab/ab_B300_ac.json` (local).
 
-| metric | A prompt-only (few-shot) | B LoRA (compact) | C template |
-|---|---|---|---|
-| sheets / deadline | 60 / 60 s | 60 / 60 s | 300 / 2.5 s |
-| final pass | 100% | 100% | 100% |
-| LLM first-try pass | 76.7% | **95.0%** | – |
-| LLM any-attempt pass | 91.7% | **100%** | – |
-| template fallback | 8.3% (3 attempts failed) | **0%** | 100% |
-| hallucinated-number rate (raw attempts) | 0.122 | **0.000** | – |
-| false-mask rate (raw unmasked attempts) | 0.160 | **0.000** | – |
-| banned/demographic-term rate (raw attempts) | 0.000 | 0.000 | – |
-| qualifier/contrast mismatch rate (raw attempts) | 0.146 | **0.016** | – |
-| mean attempts per request | 1.37 | 1.07 | – |
-| latency p50 / p95 / max (ms), throttled | 4700 / 14272 / 14551 | 7651 / 10906 / 16532 | 1 / 2 / 2 |
-| decode probe (tokens/s, start / end) | 17.0 / 16.9 | 10.5 / 10.7 | – |
-| distinct-1 / distinct-2 | 0.144 / 0.381 | 0.133 / 0.355 | 0.036 / 0.136 |
-| mean words (final text) | 40.2 | 50.8 | 57.8 |
+| metric (300 sheets: 240 production + 60 synthetic; 98 mask, 80 hidden face, 122 visible) | A prompt-only (few-shot) | B LoRA (compact) |
+|---|---|---|
+| final pass | 100% | **100%** |
+| LLM first-try pass | 75.3% | **93.3%** |
+| LLM any-attempt pass | 89.7% | **98.7%** |
+| template fallback | 10.3% | **1.3%** |
+| hallucinated-number rate (raw attempts) | 0.171 | **0.000** |
+| false-mask rate (raw unmasked attempts) | 0.228 | **0.000** |
+| banned/demographic-term rate (raw attempts) | 0.000 | 0.000 |
+| qualifier/contrast mismatch rate (raw attempts) | 0.154 | **0.041** |
+| latency p50 / p95 / max (ms) | 672 / 1950 / 2449 | 1010 / **1904** / 2465 |
+| over the 2.5 s deadline | 0 | 0 |
+| decode probe under load (tokens/s, start / end) | 118 / 99 | 78 / 79 |
+| distinct-1 / distinct-2 | 0.053 / 0.214 | 0.044 / 0.178 |
+| mean words (final text) | 40.0 | 51.4 |
 
-First-try by case (A / B): mask 73.9% / 95.7%, hidden face 85.7% / 100%, visible 73.9% / 91.3%.
-Top raw-attempt failures: A sentences 23, outside_top5 23, number 16, contrast 12, drivers 10,
-mask_term 8; B drivers 3, sentences 1, contrast 1.
+First-try by case (B): mask 93.9%, hidden face 95.0%, visible 91.8%. Top raw-attempt failures:
+A outside_top5 117, sentences 96, number 86, mask_term 74, contrast 67; B drivers 9, contrast 9,
+qualifier 6, timeout 3. Template-only (arm C, 300 sheets): 100% pass, distinct-2 0.136, p95 2 ms.
 
-The full 300-sheet arm A was also run at the real 2.5 s deadline with the YOLO load (4.4 Hz,
-decode 16 tokens/s): 0/300 from the LLM, 300/300 template, p50 2494 / p95 2521 / max 2530 ms, i.e.
-on the throttled machine every request times out and the template keeps the response on time and
-faithful. Arm B at the real deadline was not run: under the same throttling it can only produce
-the same all-template result, and the battery ran out. The two lifted-deadline arms ran at
-different throttled speeds (17 vs 10.5 tokens/s), so their latencies are not comparable to each
-other either.
+The earlier 2026-10-17 comparison (60 sheets, deadline lifted, laptop throttled on battery at 3%)
+pointed the same way (first try 95.0% vs 76.7%) but could not measure latency.
 
-## Decision: ship prompt-only (for now)
+## Decision: ship the LoRA adapter
 
 Ship rule: LoRA ships only if its final **and** first-try pass rates are >= prompt-only's **and**
-its p95 latency is <= 2.5 s measured with YOLO running. The faithfulness half favours the
-adapter (see the table), but the latency half could not be measured on this machine state, so by
-the rule the shipped arm is **prompt-only** (`engine.SHIP = "prompt"`).
+its p95 latency is <= 2.5 s measured with YOLO running. B: final 100% = 100%, first try 93.3% >=
+75.3%, p95 1904 ms <= 2500 ms, so **`engine.SHIP = "lora"`**. Its p50 is higher (1.0 s vs 0.67 s)
+because it writes longer answers (51 vs 40 words) and the unfused LoRA layers decode ~25% slower;
+p95 is still lower because it almost never needs a retry. The cost is a little less lexical
+variety (distinct-2 0.178 vs 0.214), bounded by the grammar it was trained on.
 
 The switch is one constant, read by the service at startup:
 
-- `valence/narrator/engine.py`: `SHIP = "prompt"` (or `"lora"`), `SHIPPED_ADAPTER = "adapters/narrator"`.
+- `valence/narrator/engine.py`: `SHIP = "lora"` (or `"prompt"`), `SHIPPED_ADAPTER = "adapters/narrator"`.
 - `VALENCE_NARRATOR_SHIP=lora|prompt` overrides `SHIP` without a code change.
 - With `lora`, the service loads `adapters/narrator` (compact prompt, 128-token budget) only if
   `adapters.safetensors` and `adapter_config.json` exist; otherwise it logs a warning and serves
@@ -266,24 +258,24 @@ The switch is one constant, read by the service at startup:
 - The service logs `narrator arm: prompt|lora (ship=..., adapter=..., prompt_style=...)` at startup
   and `/health` reports `adapter` and `prompt_style`.
 
-To flip to LoRA: on AC power (not low-power mode), rerun arms A and B above with the YOLO load; if
-B's `pass_rate` and `llm_first_try_pass_rate` are >= A's and B's `latency_ms.p95` <= 2500, set
-`SHIP = "lora"` (or export `VALENCE_NARRATOR_SHIP=lora` for the demo).
+Always measure on AC power (not low-power mode): on battery the same runs decoded at 10-17 tokens/s
+and every request timed out to the template. To roll back without a code change, export
+`VALENCE_NARRATOR_SHIP=prompt`.
 
 ```
-.venv/bin/python -m valence.narrator.service                 # shipped arm (prompt-only today)
-VALENCE_NARRATOR_SHIP=lora .venv/bin/python -m valence.narrator.service   # LoRA arm
+.venv/bin/python -m valence.narrator.service                 # shipped arm (LoRA)
+VALENCE_NARRATOR_SHIP=prompt .venv/bin/python -m valence.narrator.service   # prompt-only arm
 bash scripts/spikes/run_demo.sh                               # demo launcher uses the shipped arm
 ```
 
 ## Limitations
 
-- Deadline latency for the adapter is unmeasured. The only unthrottled adapter numbers come from
-  the smoke run (first try ~1 s). The compact prompt prefills the same ~150 sheet tokens as the
-  few-shot style, but adapter outputs are longer (median ~80 tokens, budget 128 vs 90), so its
-  generation time per attempt is somewhat higher than prompt-only's.
-- The lifted-deadline comparison is 60 sheets, not 300, and without the YOLO load; first-try
-  rates on 60 sheets carry about +/-6 points of sampling noise.
+- The adapter lives in `adapters/narrator/` (gitignored, ~20 MB per checkpoint). A fresh clone has no
+  adapter, so the service logs a warning and serves prompt-only; rebuild with
+  `python -m valence.narrator.build_lora_data && python -m valence.narrator.train_lora` (~48 min on AC).
+- Adapter p50 latency is ~1.0 s under the YOLO load (longer answers, unfused LoRA). Fusing the adapter
+  into the weights would recover the base decode speed; not done, since p95 already meets the rule.
+- 300 test sheets give about +/-3 points of sampling noise on first-try rates.
 - Grammar targets are deterministic templates with variation, not human writing; distinct-n of
   the adapter is bounded by the grammar's variety, and the adapter may sound more uniform than
   the few-shot model over a long session.

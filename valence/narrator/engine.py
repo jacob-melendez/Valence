@@ -79,7 +79,7 @@ SOURCES = ("llm", "llm_retry", "template")
 # What ships (the A/B decision in docs/NARRATOR.md): "lora" serves SHIPPED_ADAPTER with the compact
 # prompt, "prompt" serves the base model with the few-shot prompt. ``VALENCE_NARRATOR_SHIP`` overrides
 # it; ``--adapter`` / ``VALENCE_NARRATOR_ADAPTER`` override both ("none" forces prompt-only).
-SHIP = "prompt"
+SHIP = "lora"  # 300-sheet A/B on AC with YOLO at 10 Hz: first-try 93% vs 75%, p95 1.90 s (docs/NARRATOR.md)
 SHIPPED_ADAPTER = "adapters/narrator"
 SHIP_CHOICES = ("lora", "prompt")
 NO_ADAPTER = ("none", "off", "false", "0")
