@@ -40,3 +40,7 @@ e2e:             ## pre-demo end-to-end check: own replay server, or API=http://
 .PHONY: audit-verify
 audit-verify:    ## verify audit hash chains (FILE=path/to/session.jsonl or a dir; default var/audit; HEAD=<audit_hash>)
 	$(PY) scripts/audit_verify.py $(or $(FILE),$(or $(VALENCE_AUDIT_DIR),var/audit)) $(if $(HEAD),--head $(HEAD))
+
+.PHONY: soak
+soak:            ## 10-minute memory soak -> reports/mem_soak.json + reports/figs/memory_flat.png
+	$(PY) scripts/mem_soak.py --minutes $(or $(MINUTES),10)

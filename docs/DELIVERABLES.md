@@ -167,8 +167,9 @@ next push.
 - [x] **`e2e_check.py`** (pre-demo replay check, `--speed 20`): P0 · CLOUD · H12:30–15:30 ·
   `scripts/e2e_check.py` (`d5eec2f`, `make e2e` or `make e2e API=...`; schema-validates every WS message;
   9/9 PASS against a replay server, `tests/test_e2e_check.py`)
-- [ ] **`mem_soak.py`** (memory + governance counters over 60 min): P1 · CLOUD · H12:30–15:30 ·
-  `scripts/mem_soak.py`
+- [x] **`mem_soak.py`** (memory + governance counters over 60 min): P1 · CLOUD · H12:30–15:30 ·
+  `scripts/mem_soak.py` (`make soak`; offline `Runtime.step` loop of full_demo, RSS / open fds / history
+  length / audit entries every 15 s; run for 10 min, not 60)
 
 ### A4. Simulator and scenarios
 
@@ -355,8 +356,9 @@ next push.
   implemented (capture counts decoded frames; derived copies use their own kinds). Show it on the Mac.
 - [ ] **`/api/governance/stats` after a 60-min soak** (0 violations, 0 `live_raw_buffers`, `retention_s`):
   P1 · LOCAL · H15:30–17:00 · `reports/soak_governance.json` (*proposed*)
-- [ ] **`memory_flat.png`**: P1 · CLOUD (script) + LOCAL (run) · H15:30–17:00 ·
-  `reports/figs/memory_flat.png` via `scripts/mem_soak.py`
+- [x] **`memory_flat.png`**: P1 · CLOUD (script) + LOCAL (run) · H15:30–17:00 ·
+  `reports/figs/memory_flat.png` via `scripts/mem_soak.py` (10-min cloud run, 29,386 ticks: RSS 266 → 286 MB,
+  second-half slope +0.019 MB/min, fds 4 throughout, history capped at 1,440; `reports/mem_soak.json`)
 - [x] **`audit_verify.py` prints OK**: P1 · CLOUD · H12:30–15:30 · `scripts/audit_verify.py` (on a replay
   session's audit file: 30 entries, chain intact; an edited entry exits 1)
 - [ ] **`lsof` during a live run shows only the audit log open for writing**: P1 · YOU · H17–20 ·
