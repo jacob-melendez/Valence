@@ -1035,7 +1035,7 @@ it is pushed, so break clocks start when the replayed person appears (not at the
 
 | Body field | Type | Default | Notes |
 |---|---|---|---|
-| `speed` | float | `1.0` | Playback speed, in (0, 1000] (`422` otherwise) |
+| `speed` | float | `1.0` | Playback speed, in (0, 1000] (`422` otherwise). Ticks run at the same speed, so each tick still holds 5 s of the recording. |
 | `loop` | bool | `true` | Restart at the end of the file |
 
 ```json

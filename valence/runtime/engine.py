@@ -210,7 +210,7 @@ class Runtime:
         self.aggregator.source = "replay"
         self.aggregator.start_baseline(mode="auto")  # the recording's own room
         self.mode = "replay"
-        self.speed = 1.0
+        self.speed = speed  # ticks follow the playback speed, so each tick still holds 5 s of the recording
         self.feeder = JsonlFeeder(path, self.push_obs, speed=speed, loop=loop)
         self.feeder.start()
         self._audit("operator", {"action": "replay_recording", "recording": str(getattr(path, "name", path))[:80]})

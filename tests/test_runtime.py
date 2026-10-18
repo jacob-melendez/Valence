@@ -263,3 +263,17 @@ def test_room_relative_features_follow_the_baseline():
     assert x[FEATURE_INDEX["lux_room_mean_5m"]] == pytest.approx(-1.0)  # half the baseline light
     room["room_db_base"] = np.full(n, np.nan)  # no baseline yet: relative features are missing, not zero
     assert math.isnan(compute(person, room)[FEATURE_INDEX["db_room_now"]])
+
+
+def test_recording_ticks_follow_playback_speed(runtime):
+    """At speed k each tick must still hold 5 s of the recording (the feeder and the ticker share the speed)."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "data" / "real" / "capture_typing.jsonl"
+    if not path.exists():
+        pytest.skip("capture not present")
+    runtime.use_recording(path, speed=10.0, loop=False)
+    try:
+        assert runtime.speed == 10.0 and runtime.feeder.speed == 10.0
+    finally:
+        runtime._stop_feeder()
