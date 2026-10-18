@@ -7,6 +7,8 @@
 #   uv pip install --no-deps --reinstall opencv-contrib-python==4.14.0.94
 # MediaPipe ships no x86_64 macOS wheel: a Rosetta Python will fail to resolve it.
 
+-r requirements.txt
+
 # perception
 mediapipe==1.1.1
 ultralytics==8.4.171

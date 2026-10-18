@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 import numpy as np  # noqa: E402
 
+from valence.edge import calibration_store  # noqa: E402
 from valence.perception import calibration  # noqa: E402
 from valence.perception.audio_features import mean_power, power_to_db, resample_48k_to_16k  # noqa: E402
 from valence.perception.gate import purge  # noqa: E402
@@ -151,7 +152,7 @@ def main(argv: list[str] | None = None) -> None:
 
     offset = summarize(offsets)
     if args.yes or input(f"\nsave to {calibration.CALIBRATION_PATH}? [Y/n] ").strip().lower() in {"", "y", "yes"}:
-        calibration.save({"spl_offset_db": round(offset, 2), "spl_calibrated": True})
+        calibration_store.save({"spl_offset_db": round(offset, 2), "spl_calibrated": True})
         print("saved")
     else:
         print("not saved")

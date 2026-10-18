@@ -1,15 +1,15 @@
 """Audio perception: one ~1 s mono 16 kHz float32 block in, one ``AudioObs`` out.
 
-Loudness is smoothed in the power domain and converted to dB SPL with the calibrated offset.
-YAMNet (AUDIO_STREAM, allowlisted classes) scores laughter and speech; laughter onsets are
-debounced. Compliments come from Vosk with a restricted grammar (the phrases + "[unk]"), so
+Loudness is the block's Leq: mean power -> dB SPL with the calibrated offset (the aggregator
+averages ``rms_power`` in the power domain; dB values are never averaged).
+YAMNet (AUDIO_CLIPS, allowlisted classes) runs synchronously on the block's last 0.975 s, so its
+laughter/speech scores belong to exactly this block; laughter onsets are debounced. Compliments come from Vosk with a restricted grammar (the phrases + "[unk]"), so
 no free transcript ever exists; recognized words never leave ``count_compliments``. Every
 block and the int16 copy Vosk reads are purged before ``process`` returns.
 """
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 import numpy as np
@@ -19,28 +19,24 @@ from mediapipe.tasks.python.components.containers.audio_data import AudioData
 from valence.contracts import AudioObs
 from valence.perception import calibration
 from valence.perception.audio_features import (
-    YAMNET_ALLOWLIST, LaughterTracker, PowerSmoother, count_compliments, mean_power, vosk_grammar)
-from valence.perception.gate import purge
+    YAMNET_ALLOWLIST, LaughterTracker, count_compliments, mean_power, power_to_db, vosk_grammar)
+from valence.perception.gate import note_transcript_purged, purge_derived
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / "models"
 SR = 16000
+YAMNET_WINDOW = 15600  # 0.975 s at 16 kHz
 
 
 class AudioPerceiver:
     def __init__(self, models_dir: Path = MODELS, *, spl_offset_db: float | None = None,
                  compliments: bool = True) -> None:
         self.offset = calibration.spl_offset_db() if spl_offset_db is None else spl_offset_db
-        self.smoother = PowerSmoother()
         self.laughter = LaughterTracker()
-        self._lock = threading.Lock()
-        self._results: list[dict[str, float]] = []
-        self._speech = 0.0
-        self._ts_ms = 0
         self.classifier = mp_audio.AudioClassifier.create_from_options(mp_audio.AudioClassifierOptions(
             base_options=BaseOptions(model_asset_path=str(models_dir / "yamnet.tflite")),
-            running_mode=mp_audio.RunningMode.AUDIO_STREAM, category_allowlist=list(YAMNET_ALLOWLIST),
-            max_results=len(YAMNET_ALLOWLIST), result_callback=self._on_yamnet))
+            running_mode=mp_audio.RunningMode.AUDIO_CLIPS, category_allowlist=list(YAMNET_ALLOWLIST),
+            max_results=len(YAMNET_ALLOWLIST)))
         self.recognizer = None
         if compliments:
             import vosk
@@ -53,24 +49,19 @@ class AudioPerceiver:
     def close(self) -> None:
         self.classifier.close()
 
-    def _on_yamnet(self, result, timestamp_ms: int) -> None:  # MediaPipe's thread: copy scores, nothing else
-        scores = {c.category_name: float(c.score) for cl in result.classifications for c in cl.categories}
-        with self._lock:
-            self._results.append(scores)
-
     def process(self, block: np.ndarray, t: float, wall: float, seq: int) -> AudioObs:
         power = mean_power(block)
-        self.smoother.update(power)
 
-        self.classifier.classify_async(AudioData.create_from_array(block, SR), self._ts_ms)
-        self._ts_ms += max(1, round(1000 * len(block) / SR))
-        with self._lock:
-            results, self._results = self._results, []
-        if results:
-            self._speech = 0.0
-        for scores in results:  # async: usually the previous block's result
-            _, speech, _ = self.laughter.update(scores, t)
-            self._speech = max(self._speech, speech)
+        # A tail slice is a view: AudioData copies it, and purging the view would zero the whole block
+        # before Vosk reads it, so the block itself is purged once, at the end.
+        results = self.classifier.classify(AudioData.create_from_array(block[-YAMNET_WINDOW:], SR))
+        scores: dict[str, float] = {}
+        for res in results:
+            for cl in res.classifications:
+                for c in cl.categories:
+                    scores[c.category_name] = max(scores.get(c.category_name, 0.0), float(c.score))
+        del results
+        _, speech, _ = self.laughter.update(scores, t)
 
         hits = 0
         if self.recognizer is not None:
@@ -80,11 +71,12 @@ class AudioPerceiver:
             view = _ffi.from_buffer(pcm)  # zero-copy, so the int16 copy can be purged too
             if self.recognizer.AcceptWaveform(view):
                 hits = sum(count_compliments(self.recognizer.Result()).values())
+                note_transcript_purged()
             del view
-            purge(pcm, "audio")
+            purge_derived(pcm, "audio")
             del pcm
-        purge(block, "audio")
+        purge_derived(block, "audio")
         del block
 
-        return AudioObs(t=t, wall=wall, block_seq=seq, db_spl=self.smoother.db(self.offset), rms_power=power,
-                        speech_prob=self._speech, laughter_onsets=self.laughter.take_onsets(), compliment_hits=hits)
+        return AudioObs(t=t, wall=wall, block_seq=seq, db_spl=power_to_db(power, self.offset), rms_power=power,
+                        speech_prob=speech, laughter_onsets=self.laughter.take_onsets(), compliment_hits=hits)

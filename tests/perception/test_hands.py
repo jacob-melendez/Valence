@@ -6,6 +6,12 @@ import numpy as np
 import pytest
 
 from valence.perception.hands import FistTracker, assign_hands, curled_fingers, is_curl_fist
+from valence.perception.debounce import HysteresisDebouncer
+
+
+def legacy_fist() -> HysteresisDebouncer:
+    """Original 0.6 x 3-sample entry: these tests cover FistTracker bookkeeping, not thresholds."""
+    return HysteresisDebouncer(on=0.6, off=0.4, on_count=3, off_hold_s=1.0, refractory_s=3.0)
 
 W = 1000
 NAN = math.nan
@@ -122,16 +128,16 @@ def clench(tracker: FistTracker, pid: int, side: str, t0: float, step: float = 0
 
 class TestFistTracker:
     def test_onset_reported_as_delta(self) -> None:
-        ft = FistTracker()
+        ft = FistTracker(factory=legacy_fist)
         assert clench(ft, 1, "L", 0.0) == [False, False, True]
         assert ft.person_state(1) == (1, True)
         assert ft.person_state(1) == (0, True)
 
-    def test_both_hands_sum_and_any_active(self) -> None:
-        ft = FistTracker()
+    def test_both_hands_together_are_one_onset(self) -> None:
+        ft = FistTracker(factory=legacy_fist)
         clench(ft, 1, "L", 0.0)
         clench(ft, 1, "R", 0.0)
-        assert ft.person_state(1) == (2, True)
+        assert ft.person_state(1) == (1, True)
         for i in range(1, 8):
             ft.update(1, "L", 0.0, 0.4 + i * 0.2)
         assert ft.person_state(1) == (0, True)
@@ -140,24 +146,33 @@ class TestFistTracker:
         assert ft.person_state(1) == (0, False)
 
     def test_people_are_independent(self) -> None:
-        ft = FistTracker()
+        ft = FistTracker(factory=legacy_fist)
         clench(ft, 1, "L", 0.0)
         assert ft.person_state(2) == (0, False)
         assert ft.person_state(1) == (1, True)
 
-    def test_refractory_is_per_hand(self) -> None:
-        ft = FistTracker()
-        clench(ft, 1, "L", 0.0)
+    def test_refractory_is_per_person(self) -> None:
+        ft = FistTracker(factory=legacy_fist)
+        clench(ft, 1, "L", 0.0)  # onset at 0.4
         for i in range(1, 8):
             ft.update(1, "L", 0.0, 0.4 + i * 0.2)
         assert ft.person_state(1) == (1, False)
-        assert clench(ft, 1, "L", 2.0)[-1] is False
+        assert clench(ft, 1, "R", 2.0)[-1] is False  # other hand, but within 3 s of the person's onset
         assert ft.person_state(1) == (0, True)
-        assert clench(ft, 1, "R", 2.0)[-1] is True
+        for i in range(1, 8):
+            ft.update(1, "R", 0.0, 2.4 + i * 0.2)
+        assert clench(ft, 1, "L", 5.0)[-1] is True  # after the refractory
         assert ft.person_state(1) == (1, True)
 
+    def test_second_hand_while_first_clenched_adds_nothing(self) -> None:
+        ft = FistTracker(factory=legacy_fist)
+        clench(ft, 1, "L", 0.0)
+        ft.person_state(1)
+        assert clench(ft, 1, "R", 4.0)[-1] is False  # L still clenched (no low samples fed)
+        assert ft.person_state(1) == (0, True)
+
     def test_mark_unobserved_ends_unseen_fists(self) -> None:
-        ft = FistTracker()
+        ft = FistTracker(factory=legacy_fist)
         clench(ft, 1, "L", 0.0)
         clench(ft, 2, "R", 0.0)
         for i in range(1, 8):
@@ -168,7 +183,7 @@ class TestFistTracker:
         assert ft.person_state(2) == (1, True)
 
     def test_mark_unobserved_breaks_unseen_streaks_only(self) -> None:
-        ft = FistTracker()
+        ft = FistTracker(factory=legacy_fist)
         for key in [(1, "L"), (1, "R")]:
             ft.update(*key, 0.9, 0.0)
             ft.update(*key, 0.9, 0.2)
@@ -177,7 +192,7 @@ class TestFistTracker:
         assert ft.update(1, "R", 0.9, 0.4) is True
 
     def test_drop_forgets_person(self) -> None:
-        ft = FistTracker()
+        ft = FistTracker(factory=legacy_fist)
         clench(ft, 3, "L", 0.0)
         clench(ft, 4, "L", 0.0)
         ft.drop(3)
@@ -189,3 +204,9 @@ class TestFistTracker:
     def test_rejects_unknown_side(self) -> None:
         with pytest.raises(ValueError):
             FistTracker().update(1, "left", 0.9, 0.0)
+
+
+def test_default_tracker_uses_the_contract_fist_rule() -> None:
+    ft = FistTracker()
+    onsets = [ft.update(1, "L", 0.75, t) for t in (0.0, 0.2, 0.4, 0.6)]
+    assert onsets == [False, False, False, True]  # >= 0.7 held >= 0.5 s

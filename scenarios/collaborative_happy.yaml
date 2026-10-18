@@ -1,0 +1,9 @@
+description: Two people fresh off a break, laughing and complimenting each other in a bright, lively room.
+seed: 104
+people: 2
+start_hour: 11.0
+start_hours_since_break: 0.3
+lux_base: 520
+face_hidden: 0.05
+segments:
+  - {minutes: 12, state: Collaborative_Happy}

@@ -126,7 +126,7 @@ class VideoObs:
     t: float
     wall: float
     frame_seq: int
-    frames_decoded: int  # cumulative frames retrieved from the camera; must equal frames purged
+    frames_decoded: int = 0  # cumulative frames retrieved from the camera; must equal frames purged
     lux: float = NAN  # estimated lux; NaN if not updated this frame
     lux_quality: float = 0.0  # 0..1
     frame_w: int = 0
@@ -356,14 +356,15 @@ class Governance(_Model):
     t: float
     tick: int
     message: str = GOVERNANCE_LINE
-    frames_decoded: int
-    frames_purged: int
+    frames_decoded: int  # since the current source began (live: across capture restarts)
+    frames_purged: int  # video frames purged since the current source began
     audio_blocks_purged: int
     transcripts_purged: int
     violations: int
     live_raw_buffers: int
     audit_hash: str | None = None
     retention_s: int
+    purge_gap: int = 0  # frames decoded but not (yet) purged; > 2 for 3 ticks raises status "purge_gap"
 
 
 class StateVector(_Model):

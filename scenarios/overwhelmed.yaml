@@ -1,0 +1,9 @@
+description: (P1 state) Head in hands, slumped, noisy crunch after hours without a break; the face is mostly hidden behind the hands.
+seed: 107
+people: 1
+start_hour: 22.5
+start_hours_since_break: 2.5
+lux_base: 260
+segments:
+  - {minutes: 3, state: Focused}
+  - {minutes: 10, state: Overwhelmed}

@@ -34,7 +34,25 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from valence.contracts import AudioObs, VideoObs
+for _k, _v in (("YOLO_OFFLINE", "1"), ("YOLO_AUTOINSTALL", "false"), ("HF_HUB_OFFLINE", "1"),
+               ("TRANSFORMERS_OFFLINE", "1")):
+    os.environ.setdefault(_k, _v)  # fully offline after the one-time model downloads
+
+# libomp: torch and LightGBM (Homebrew libomp) each bring an OpenMP runtime. Two runtimes in one
+# process segfault as soon as either runs a multi-threaded region (YOLO's conv/bn fusion, LightGBM
+# parsing a model file). Measured on the demo Mac (docs/BENCHMARKS.md): torch imported first plus
+# OMP_NUM_THREADS=1 is stable; DYLD_LIBRARY_PATH=<torch>/lib at launch is better still (LightGBM then
+# shares torch's runtime). Set before torch/LightGBM initialize OpenMP, i.e. import this module first.
+_omp = os.environ.setdefault("OMP_NUM_THREADS", "1")
+if _omp != "1" and "torch/lib" not in os.environ.get("DYLD_LIBRARY_PATH", ""):
+    logging.getLogger("valence.edge").warning("OMP_NUM_THREADS=%s with torch + LightGBM: expect a segfault", _omp)
+if "lightgbm" in sys.modules and "torch" not in sys.modules:
+    logging.getLogger("valence.edge").warning(
+        "lightgbm was imported before torch: expect a segfault; import valence.edge.run first")
+import torch  # noqa: E402,F401
+
+from valence.config import settings  # noqa: E402
+from valence.contracts import AudioObs, VideoObs, obs_to_dict  # noqa: E402
 
 log = logging.getLogger("valence.edge")
 Sink = Callable[[VideoObs | AudioObs], None]
@@ -46,6 +64,7 @@ class EdgeStats:
     video_hz: float = 0.0
     video_ms: float = 0.0
     camera_dropped: int = 0
+    frames_decoded: int = 0
     audio_blocks: int = 0
     mic_overflows: int = 0
     sink_errors: int = 0
@@ -56,7 +75,7 @@ class EdgeRunner:
     """Owns the capture and perception threads; calling the instance stops everything."""
 
     def __init__(self, sink: Sink, *, video: bool, audio: bool, obscure_face: bool, camera: int | None,
-                 mic: str | None, fps: float, imgsz: int, min_person_h: float = 0.0) -> None:
+                 mic: str | None, fps: float, imgsz: int, min_person_h: float) -> None:
         self.sink, self.fps, self.imgsz, self.obscure_face = sink, fps, imgsz, obscure_face
         self.min_person_h = min_person_h
         self.stats = EdgeStats()
@@ -66,7 +85,7 @@ class EdgeRunner:
         if video:
             from valence.edge.capture import CameraCapture
 
-            self.camera = CameraCapture(camera)  # raises on black frames (permission)
+            self.camera = CameraCapture(camera, fps=fps)  # raises on black frames (permission)
         if audio:
             from valence.edge.capture import MicCapture
 
@@ -116,10 +135,10 @@ class EdgeRunner:
                 item = self.camera.take(timeout=1.0)
                 if item is None:
                     continue
-                frame, t, wall = item
+                frame, t, wall, decoded = item
                 del item
                 t0 = time.perf_counter()
-                obs = perceiver.process(frame, t, wall, seq)
+                obs = perceiver.process(frame, t, wall, seq, frames_decoded=decoded)
                 del frame
                 s = self.stats
                 s.video_ms = 0.9 * s.video_ms + 0.1 * (time.perf_counter() - t0) * 1e3 if seq else (time.perf_counter() - t0) * 1e3
@@ -127,6 +146,7 @@ class EdgeRunner:
                     s.video_hz = 0.9 * s.video_hz + 0.1 / (t - last_t) if s.video_hz else 1.0 / (t - last_t)
                 last_t, seq = t, seq + 1
                 s.video_frames, s.camera_dropped = seq, self.camera.frames_dropped
+                s.frames_decoded = self.camera.frames_decoded
                 self._emit(obs)
                 next_t += period
                 delay = next_t - time.monotonic()
@@ -169,16 +189,18 @@ class EdgeRunner:
 
 
 def start(sink: Sink, *, video: bool = True, audio: bool = True, obscure_face: bool = False,
-          camera: int | None = None, mic: str | None = None, fps: float = 10.0, imgsz: int = 640,
+          camera: int | None = None, mic: str | None = None, fps: float | None = None, imgsz: int = 640,
           min_person_h: float | None = None) -> Callable[[], None]:
     """Start live perception; returns ``stop()``. Raises if the camera/mic deliver no real signal.
 
-    Env defaults: VALENCE_CAMERA (index), VALENCE_MIC (name substring), VALENCE_MIN_PERSON_H (0..1).
+    Env defaults: VALENCE_CAMERA (index), VALENCE_MIC (name substring); fps and the minimum
+    person height come from ``valence.config.settings`` (VALENCE_PERCEPTION_HZ, VALENCE_MIN_BOX_HEIGHT).
     """
     camera = camera if camera is not None else _env_int("VALENCE_CAMERA")
     mic = mic or os.environ.get("VALENCE_MIC")
+    fps = settings.perception_hz if fps is None else fps
     if min_person_h is None:
-        min_person_h = float(os.environ.get("VALENCE_MIN_PERSON_H") or 0.0)
+        min_person_h = settings.min_box_height
     return EdgeRunner(sink, video=video, audio=audio, obscure_face=obscure_face, camera=camera, mic=mic,
                       fps=fps, imgsz=imgsz, min_person_h=min_person_h)
 
@@ -188,29 +210,22 @@ def _env_int(name: str) -> int | None:
     return int(v) if v not in (None, "") else None
 
 
-def obs_to_dict(obs: VideoObs | AudioObs) -> dict[str, Any]:
-    """JSON-safe dict of an observation (NaN -> null), tagged with its type."""
-    if dataclasses.is_dataclass(obs):
-        d = dataclasses.asdict(obs)
-    elif hasattr(obs, "model_dump"):
-        d = obs.model_dump()
-    else:
-        d = dict(vars(obs))
-    return {"type": "video" if isinstance(obs, VideoObs) else "audio", **_json_safe(d)}
-
-
-def _json_safe(x: Any) -> Any:
-    if isinstance(x, float):
-        return None if math.isnan(x) or math.isinf(x) else float(f"{x:.7g}")
-    if isinstance(x, dict):
-        return {k: _json_safe(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple)):
-        return [_json_safe(v) for v in x]
-    return x
+def participants_only(obs: VideoObs, rel_height: float | None = None) -> VideoObs:
+    """Drop bystanders: keep people whose box is at least ``rel_height`` x the tallest box in the
+    frame (the aggregator's participant rule, ``settings.participant_rel_height``)."""
+    if len(obs.persons) < 2:
+        return obs
+    rel = settings.participant_rel_height if rel_height is None else rel_height
+    tallest = max(p.bbox[3] - p.bbox[1] for p in obs.persons)
+    keep = tuple(p for p in obs.persons if p.bbox[3] - p.bbox[1] >= rel * tallest)
+    return obs if len(keep) == len(obs.persons) else dataclasses.replace(obs, persons=keep)
 
 
 class JsonlSink:
-    """Features-only recorder: one observation per line, text mode, never media."""
+    """Features-only recorder: one ``contracts.obs_to_dict`` per line, text mode, never media.
+
+    Recordings keep only the people at the desk (``participants_only``): a bystander's features
+    never reach disk, even though perception tracks them so they can mask the lux background."""
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +234,9 @@ class JsonlSink:
         self.lines = 0
 
     def __call__(self, obs: VideoObs | AudioObs) -> None:
-        line = json.dumps(obs_to_dict(obs), separators=(",", ":"))
+        if isinstance(obs, VideoObs):
+            obs = participants_only(obs)
+        line = json.dumps(obs_to_dict(obs), separators=(",", ":"), allow_nan=False)
         with self._lock:
             self._f.write(line + "\n")
             self.lines += 1
@@ -286,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--obscure-face", action="store_true", help="black out faces before MediaPipe (anti-bias proof)")
     ap.add_argument("--camera", type=int, default=None, help="AVFoundation index (env VALENCE_CAMERA)")
     ap.add_argument("--mic", default=None, help="input device name substring (env VALENCE_MIC)")
-    ap.add_argument("--fps", type=float, default=10.0)
+    ap.add_argument("--fps", type=float, default=None, help="perception rate (default settings.perception_hz)")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--min-person-h", type=float, default=None,
                     help="ignore people shorter than this share of the frame (e.g. 0.35: near the camera only)")

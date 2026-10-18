@@ -7,6 +7,10 @@ to disk:
 * ``valence/edge/``: may write features-only JSONL in text mode, but no binary writes and none of
   the banned calls.
 
+A write that provably carries no media (e.g. validated calibration scalars) can be allowed with an
+explicit comment on the call's line: ``# persistence-ok: <reason>``. Every exception is listed by
+``--exceptions`` so reviewers can audit them.
+
 Run ``python -m valence.governance.persistence_scan`` to print violations (exit code 1 if any).
 """
 
@@ -36,6 +40,10 @@ BANNED_MODULE_CALLS = {
     ("scipy.io.wavfile", "write"),
     ("wavfile", "write"),
 }
+MEDIA_MODULES = {"cv2", "numpy", "np", "pickle", "joblib", "torch", "soundfile", "wave", "scipy.io.wavfile", "PIL.Image"}
+COPY_CALLS = {("shutil", "copy"), ("shutil", "copy2"), ("shutil", "copyfile"), ("shutil", "copyfileobj"),
+              ("shutil", "move")}
+PRAGMA = "# persistence-ok:"
 STRICT_DIRS = ("valence/perception",)
 TEXT_WRITES_OK_DIRS = ("valence/edge",)
 
@@ -58,8 +66,15 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
-def _open_mode(call: ast.Call) -> str | None:
+def _looks_like_mode(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str) and 0 < len(node.value) <= 3 \
+        and set(node.value) <= set("rwxabt+U")
+
+
+def _open_mode(call: ast.Call, method: bool = False) -> str | None:
     mode_node = call.args[1] if len(call.args) > 1 else None
+    if method and call.args and _looks_like_mode(call.args[0]):  # Path.open("wb"): mode is the first argument
+        mode_node = call.args[0]
     for kw in call.keywords:
         if kw.arg == "mode":
             mode_node = kw.value
@@ -70,18 +85,58 @@ def _open_mode(call: ast.Call) -> str | None:
     return None  # dynamic mode: treat as a write
 
 
+def exceptions_in(source: str, path: str) -> list[Violation]:
+    return [Violation(path, i, line.split(PRAGMA, 1)[1].strip() or "(no reason given)")
+            for i, line in enumerate(source.splitlines(), start=1) if PRAGMA in line]
+
+
 def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violation]:
     out: list[Violation] = []
-    for node in ast.walk(ast.parse(source, filename=path)):
-        if not isinstance(node, ast.Call):
+    allowed = {v.line for v in exceptions_in(source, path) if v.reason != "(no reason given)"}
+    tree = ast.parse(source, filename=path)
+    # Resolve aliases: "import shutil as sh" -> sh = shutil; "from os import write" -> write = os.write.
+    modules: dict[str, str] = {}
+    bare: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                full = f"{node.module}.{alias.name}"
+                if node.module in MEDIA_MODULES and (alias.name in BANNED_ATTRS or alias.name in ("open", "write")):
+                    bare[alias.asname or alias.name] = full
+                elif (node.module, alias.name) in COPY_CALLS or full in ("os.write", "os.fdopen", "os.open", "os.writev"):
+                    bare[alias.asname or alias.name] = full
+
+    def resolve(func: ast.AST) -> str:
+        dotted = _dotted(func)
+        head, _, rest = dotted.partition(".")
+        return f"{modules[head]}.{rest}" if head in modules and rest else dotted
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or node.lineno in allowed:
             continue
         func = node.func
-        name = _dotted(func)
+        name = resolve(func)
+        if isinstance(func, ast.Name) and func.id in bare:
+            target = bare[func.id]
+            is_copy = tuple(target.rsplit(".", 1)) in COPY_CALLS
+            is_low = target in ("os.write", "os.fdopen", "os.open", "os.writev")
+            if is_copy or not is_low or not allow_text_writes:
+                out.append(Violation(path, node.lineno, f"banned call {target}() (imported as {func.id})"))
+            continue
+        if isinstance(func, ast.Attribute) and tuple(name.rsplit(".", 1)) in COPY_CALLS:
+            out.append(Violation(path, node.lineno, f"file copy {name}()"))
+            continue
+        if not allow_text_writes and name in ("os.write", "os.fdopen", "os.open", "os.writev"):
+            out.append(Violation(path, node.lineno, f"low-level file write {name}()"))
+            continue
         if isinstance(func, ast.Attribute):
             if func.attr in BANNED_ATTRS:
                 out.append(Violation(path, node.lineno, f"banned call {name or func.attr}()"))
                 continue
-            owner = _dotted(func.value)
+            owner = resolve(func.value)
             if (owner, func.attr) in BANNED_MODULE_CALLS:
                 out.append(Violation(path, node.lineno, f"banned call {name}()"))
                 continue
@@ -89,7 +144,7 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
                 out.append(Violation(path, node.lineno, f"file write {name}()"))
                 continue
         if name in ("open", "io.open") or (isinstance(func, ast.Attribute) and func.attr == "open" and name != "wave.open"):
-            mode = _open_mode(node)
+            mode = _open_mode(node, method=isinstance(func, ast.Attribute) and name not in ("io.open", "gzip.open", "bz2.open", "lzma.open"))
             writes = mode is None or any(c in mode for c in "wax+")
             if not writes:
                 continue
@@ -98,23 +153,36 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
     return out
 
 
+def _sources(root: Path):
+    for rel_dir, allow_text in [(d, False) for d in STRICT_DIRS] + [(d, True) for d in TEXT_WRITES_OK_DIRS]:
+        base = root / rel_dir
+        if base.exists():
+            for py in sorted(base.rglob("*.py")):
+                if ".venv" not in py.parts:
+                    yield py, allow_text
+
+
+def list_exceptions(root: str | Path = ".") -> list[Violation]:
+    root = Path(root)
+    return [v for py, _ in _sources(root) for v in exceptions_in(py.read_text(encoding="utf-8"), str(py.relative_to(root)))]
+
+
 def scan_repo(root: str | Path = ".") -> list[Violation]:
     root = Path(root)
     found: list[Violation] = []
-    for rel_dir, allow_text in [(d, False) for d in STRICT_DIRS] + [(d, True) for d in TEXT_WRITES_OK_DIRS]:
-        base = root / rel_dir
-        if not base.exists():
-            continue
-        for py in sorted(base.rglob("*.py")):
-            if ".venv" in py.parts:
-                continue
-            found.extend(scan_source(py.read_text(encoding="utf-8"), str(py.relative_to(root)), allow_text))
+    for py, allow_text in _sources(root):
+        found.extend(scan_source(py.read_text(encoding="utf-8"), str(py.relative_to(root)), allow_text))
     return found
 
 
 if __name__ == "__main__":
-    violations = scan_repo(sys.argv[1] if len(sys.argv) > 1 else ".")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    root = args[0] if args else "."
+    if "--exceptions" in sys.argv:
+        for v in list_exceptions(root):
+            print(f"{v.path}:{v.line}: allowed: {v.reason}")
+    violations = scan_repo(root)
     for v in violations:
         print(v)
-    print(f"{len(violations)} violation(s)")
+    print(f"{len(violations)} violation(s), {len(list_exceptions(root))} documented exception(s)")
     sys.exit(1 if violations else 0)

@@ -7,12 +7,10 @@ or derived signals, and writes are atomic (temp file in the same directory, fsyn
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import json
 import math
 import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -96,27 +94,6 @@ def load(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     except (OSError, ValueError):
         stored = {}
     return _merge(DEFAULTS, _sanitize(DEFAULTS, stored) if isinstance(stored, Mapping) else {})
-
-
-def save(updates: Mapping[str, Any], path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
-    """Deep-merge ``updates`` into the stored constants and write atomically; returns the result."""
-    _check_constants(updates)
-    target = _resolve(path)
-    merged = _merge(load(target), updates)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(merged, f, indent=2, sort_keys=True, allow_nan=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, target)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
-    return merged
 
 
 def lux_model(cfg: Mapping[str, Any] | None = None) -> LuxModel:

@@ -1,0 +1,10 @@
+description: Focused work turns into masked frustration - a forced smile over clenched fists, rising noise and a long stretch without a break.
+seed: 102
+people: 1
+start_hour: 16.0
+start_hours_since_break: 3.6
+lux_base: 230
+face_hidden: 0.05
+segments:
+  - {minutes: 4, state: Focused}
+  - {minutes: 10, state: Frustrated_Masked, overrides: {mask_p: 1.0}}

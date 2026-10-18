@@ -3,6 +3,7 @@
  * Every component reads through useValence() and writes through sendCommand(); switching
  * mock <-> live changes nothing outside this module.
  * Camera frames never pass through here: the webcam is preview-only in the UI.
+ * Message shapes follow contract 1.0 (valence/contracts.py, docs/API.md).
  */
 import { useSyncExternalStore } from "react";
 
@@ -17,49 +18,90 @@ export const STATE_DISPLAY: Record<StateKey, string> = {
 };
 export const LAYERS = ["Ambient Physics", "Time Dynamics", "Somatic & Social", "Facial Surface"] as const;
 
-export interface TrackPerson { id: number; label: string; bbox: [number, number, number, number] }
-export interface TracksMsg { type: "tracks"; t: number; persons: TrackPerson[] }
+/** Full name of a state id; unknown ids (e.g. the P1 states) fall back to the id itself. */
+export const stateName = (id: string | null | undefined): string =>
+  id ? ((STATE_DISPLAY as Record<string, string | undefined>)[id] ?? id.replace(/_/g, " ")) : "—";
+
+/** Null-safe number formatting: the backend sends `null` when a sensor had no reading. */
+export function fmt(v: number | null | undefined, digits = 1, fallback = "—"): string {
+  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : fallback;
+}
+
+export interface TrackPerson { id: number; label: string; bbox: [number, number, number, number]; fist_active: boolean; slump: boolean }
+export interface TracksMsg {
+  type: "tracks"; t: number; capture_ts_ms: number; frame_w: number; frame_h: number; mirrored: boolean;
+  persons: TrackPerson[];
+}
 export interface GovernanceMsg {
   type: "governance"; t: number; tick: number; message: string;
-  frames_purged: number; audio_blocks_purged: number; transcripts_purged: number;
-  violations: number; live_raw_buffers: number;
+  frames_decoded: number; frames_purged: number; audio_blocks_purged: number; transcripts_purged: number;
+  violations: number; live_raw_buffers: number; audit_hash: string | null; retention_s: number; purge_gap: number;
 }
 export interface StateVectorMsg {
-  type: "state_vector"; t: number; person_id: number; ambient_db: number; light_lux: number;
-  hours_since_break: number; time_of_day: string; clenched_fists_5m: number; compliments_15m: number;
-  laughter_15m: number; posture_slump: number; social_withdrawal: number; face_visible: boolean;
-  facial_valence: number; window_fill_min: number;
+  type: "state_vector"; t: number; person_id: number; ambient_db: number | null; light_lux: number | null;
+  hours_since_break: number | null; time_of_day: string; clenched_fists_5m: number; compliments_15m: number;
+  laughter_15m: number; posture_slump: number | null; head_in_hands: number | null; social_withdrawal: number;
+  face_visible: boolean; facial_valence: number | null; window_fill_min: number;
+  source: string; simulated_fields: string[];
 }
-export interface Driver { feature: string; display: string; value: number; unit: string; shap: number }
+export interface Driver {
+  feature: string; display: string; value: number | null; unit: string; shap: number;
+  level?: "high" | "elevated" | "normal" | "low"; effect?: "supports" | "opposes"; scope?: "room" | "person";
+}
 export interface Layer { name: string; contribution: number; drivers: Driver[] }
 export type ExplanationSource = "llm" | "llm_retry" | "template";
+export interface DataQuality { face_visible_frac: number; lux: number | null; ood_features: string[] }
 export interface PredictionMsg {
-  type: "prediction"; event_id: string; t: number; person_id: number; label: StateKey;
-  label_display: string; confidence: number; probabilities: Record<StateKey, number>;
-  face_only: { label: StateKey; confidence: number }; mask_override: boolean; warming_up: boolean;
-  layers: Layer[]; explanation: { text: string; source: ExplanationSource; latency_ms?: number };
+  type: "prediction"; event_id: string; t: number; person_id: number; label: string;
+  label_display: string; confidence: number; probabilities: Record<string, number>;
+  /** Face-only baseline; both fields are null when no face was visible. */
+  face_only: { label: string | null; confidence: number | null }; mask_override: boolean; warming_up: boolean;
+  layers: Layer[]; data_quality: DataQuality;
+  explanation: { text: string; source: ExplanationSource; latency_ms?: number };
+  source: string; simulated_fields: string[];
 }
 export interface ExplanationMsg {
   type: "explanation"; event_id: string; person_id: number; text: string;
   source: ExplanationSource; latency_ms: number;
 }
 export interface StatusMsg {
-  type: "status"; mode: "live" | "replay"; camera: boolean; mic: boolean; fps: number;
+  type: "status"; mode: "live" | "replay" | "hybrid"; camera: boolean; mic: boolean; fps: number;
   loop_latency_ms: number; narrator: string; offline: boolean; uptime_s: number;
+  degraded: string[]; purge_violation: boolean;
 }
-export type ServerMessage = TracksMsg | GovernanceMsg | StateVectorMsg | PredictionMsg | ExplanationMsg | StatusMsg;
+export interface StateInfo { id: string; display: string; tier: string }
+export interface HelloMsg {
+  type: "hello"; contract_version: string; mode: "live" | "replay" | "hybrid"; room_only: boolean;
+  states: StateInfo[]; feature_version: string; frame_w: number; frame_h: number; mirrored: boolean;
+}
+export interface HeartbeatMsg { type: "heartbeat"; t: number }
+export type ServerMessage =
+  | HelloMsg | TracksMsg | GovernanceMsg | StateVectorMsg | PredictionMsg | ExplanationMsg | StatusMsg | HeartbeatMsg;
 
 export interface HistoryPoint {
-  t: number; person_id: number; label?: StateKey; confidence?: number;
-  ambient_db?: number; light_lux?: number; hours_since_break?: number;
-  posture_slump?: number; facial_valence?: number; window_fill_min?: number;
+  t: number; person_id: number; label?: string; confidence?: number;
+  ambient_db?: number | null; light_lux?: number | null; hours_since_break?: number | null;
+  posture_slump?: number | null; facial_valence?: number | null; window_fill_min?: number;
+}
+/** Mock-only placeholder row. */
+export interface EvalMetricRow { model: string; accuracy: number; macro_f1: number; ece: number }
+/** reports/metrics.json as served in GET /api/eval/summary `metrics` (keys defined by valence/eval/evaluate.py). */
+export interface EvalReport {
+  states?: string[];
+  models?: Record<string, { macro_f1?: number; balanced_accuracy?: number; [k: string]: unknown }>;
+  calibration_m2?: { ece_before?: number; ece_after?: number; [k: string]: unknown };
+  generated_at?: string;
+  disclosure?: string;
+  [k: string]: unknown;
 }
 export interface EvalSummary {
+  /** false until reports/metrics.json exists. */
+  available?: boolean;
   accuracy_vs_history?: { minutes: number; context: number; face_only: number }[];
   robustness?: { condition: string; context: number; face_only: number }[];
-  confusion?: { name: string; labels: StateKey[]; matrix: number[][] }[];
+  confusion?: { name: string; labels: string[]; matrix: number[][] }[];
   calibration?: { predicted: number; observed: number }[];
-  metrics?: { model: string; accuracy: number; macro_f1: number; ece: number }[];
+  metrics?: EvalMetricRow[] | EvalReport;
   figures?: string[];
   [k: string]: unknown;
 }
@@ -70,16 +112,24 @@ export type Command =
   | { kind: "replay"; scenario: Scenario }
   | { kind: "sim"; which: "face_occlusion" | "low_light"; enabled: boolean };
 
+/** Latest narrator text for a person, kept while its label_display is still the current one. */
+export interface LlmExplanation {
+  event_id: string; label_display: string; text: string; source: ExplanationSource; latency_ms: number;
+}
+
 export type ConnState = "mock" | "connecting" | "open" | "closed";
 export interface ValenceState {
   source: "mock" | "live";
   conn: ConnState;
   baseUrl: string;
   persons: TrackPerson[];
+  /** Box coordinates are in mirrored image space (tracks.mirrored). */
+  mirrored: boolean;
   govLog: GovernanceMsg[];
   gov: GovernanceMsg | null;
   vectors: Record<number, StateVectorMsg>;
   predictions: Record<number, PredictionMsg>;
+  llm: Record<number, LlmExplanation>;
   history: HistoryPoint[];
   status: StatusMsg | null;
   retention: Record<string, unknown> | null;
@@ -90,10 +140,28 @@ export interface ValenceState {
   lastMessageAt: number;
 }
 
+// ---------- Backend URL ----------
+// 127.0.0.1, not localhost: macOS resolves localhost to ::1 first and the API binds IPv4 loopback.
+export const DEFAULT_API = "http://127.0.0.1:8000";
+const API_STORAGE_KEY = "valence.api";
+const cleanBase = (u: string) => u.trim().replace(/\/+$/, "");
+const validBase = (u: string | null | undefined) => (u && /^https?:\/\/[^\s/]+/i.test(cleanBase(u)) ? cleanBase(u) : null);
+function saveBase(u: string) {
+  try { window.localStorage.setItem(API_STORAGE_KEY, u); } catch { /* storage blocked */ }
+}
+/** `?api=http://host:port` wins, then the last URL saved in localStorage, then DEFAULT_API. Client-only. */
+export function resolveBaseUrl(): string {
+  if (typeof window === "undefined") return DEFAULT_API;
+  let fromQuery: string | null = null;
+  try { fromQuery = validBase(new URLSearchParams(window.location.search).get("api")); } catch { /* ignore */ }
+  if (fromQuery) { saveBase(fromQuery); return fromQuery; }
+  try { return validBase(window.localStorage.getItem(API_STORAGE_KEY)) ?? DEFAULT_API; } catch { return DEFAULT_API; }
+}
+
 // ---------- Store ----------
 let state: ValenceState = {
-  source: "mock", conn: "mock", baseUrl: "http://localhost:8000",
-  persons: [], govLog: [], gov: null, vectors: {}, predictions: {}, history: [],
+  source: "mock", conn: "mock", baseUrl: DEFAULT_API,
+  persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [],
   status: null, retention: null, evalSummary: null,
   sim: { face_occlusion: false, low_light: false }, running: "running",
   lastCommand: null, lastMessageAt: 0,
@@ -103,6 +171,7 @@ function set(patch: Partial<ValenceState>) {
   state = { ...state, ...patch };
   listeners.forEach((l) => l());
 }
+export const getState = (): ValenceState => state;
 export function useValence(): ValenceState {
   return useSyncExternalStore(
     (l) => { listeners.add(l); return () => listeners.delete(l); },
@@ -119,10 +188,31 @@ function pushHistory(p: HistoryPoint) {
   return h;
 }
 
+// event_id -> label_display of each person's recent predictions, to pair late `explanation` messages.
+const RECENT_EVENTS = 20;
+let recentEvents: Record<number, { event_id: string; label_display: string }[]> = {};
+let lastTracksAt = 0;
+const labelKey = (p: { label_display?: string; label: string }) => p.label_display || p.label;
+
+/**
+ * Explanation to show for a prediction (docs/API.md section 5): the narrator text while the person's
+ * label_display is unchanged since the narrated event, otherwise the prediction's own template text.
+ */
+export function shownExplanation(p: PredictionMsg, llm: LlmExplanation | undefined) {
+  if (llm && llm.label_display === labelKey(p))
+    return { text: llm.text, source: llm.source, latency_ms: llm.latency_ms as number | null, asOf: llm.event_id === p.event_id ? null : llm.event_id };
+  return { text: p.explanation?.text ?? "", source: p.explanation?.source ?? "template", latency_ms: p.explanation?.latency_ms ?? null, asOf: null as string | null };
+}
+
 export function handleMessage(msg: ServerMessage) {
   const now = Date.now();
   switch (msg.type) {
-    case "tracks": return set({ persons: msg.persons, lastMessageAt: now });
+    case "hello":
+    case "heartbeat":
+      return set({ lastMessageAt: now });
+    case "tracks":
+      lastTracksAt = now;
+      return set({ persons: Array.isArray(msg.persons) ? msg.persons : [], mirrored: !!msg.mirrored, lastMessageAt: now });
     case "governance":
       return set({ gov: msg, govLog: [...state.govLog, msg].slice(-200), lastMessageAt: now });
     case "state_vector":
@@ -135,34 +225,70 @@ export function handleMessage(msg: ServerMessage) {
         }),
         lastMessageAt: now,
       });
-    case "prediction":
+    case "prediction": {
+      const pid = msg.person_id, label = labelKey(msg);
+      recentEvents[pid] = [...(recentEvents[pid] ?? []), { event_id: msg.event_id, label_display: label }].slice(-RECENT_EVENTS);
+      const llm = state.llm[pid];
+      let nextLlm = state.llm;
+      if (llm && llm.label_display !== label) { nextLlm = { ...state.llm }; delete nextLlm[pid]; } // label changed
       return set({
-        predictions: { ...state.predictions, [msg.person_id]: msg },
-        history: pushHistory({ t: msg.t, person_id: msg.person_id, label: msg.label, confidence: msg.confidence }),
+        predictions: { ...state.predictions, [pid]: msg },
+        llm: nextLlm,
+        history: pushHistory({ t: msg.t, person_id: pid, label: msg.label, confidence: msg.confidence }),
         lastMessageAt: now,
       });
+    }
     case "explanation": {
-      const p = state.predictions[msg.person_id];
-      if (!p || p.event_id !== msg.event_id) return;
+      const recent = recentEvents[msg.person_id] ?? [];
+      const idx = recent.findIndex((e) => e.event_id === msg.event_id);
+      const hit = recent[idx];
+      if (!hit) return; // unknown event id (e.g. from before a reset or reconnect): drop
+      const cur = state.llm[msg.person_id];
+      if (cur && recent.findIndex((e) => e.event_id === cur.event_id) > idx) return; // never replace newer text
       return set({
-        predictions: {
-          ...state.predictions,
-          [msg.person_id]: { ...p, explanation: { text: msg.text, source: msg.source, latency_ms: msg.latency_ms } },
+        llm: {
+          ...state.llm,
+          [msg.person_id]: { event_id: msg.event_id, label_display: hit.label_display, text: msg.text, source: msg.source, latency_ms: msg.latency_ms },
         },
         lastMessageAt: now,
       });
     }
-    case "status": return set({ status: msg, lastMessageAt: now });
+    case "status": {
+      const stale = state.persons.length > 0 && now - lastTracksAt > 1500; // clear boxes once tracks stop
+      return set({ status: msg, lastMessageAt: now, ...(stale ? { persons: [] } : {}) });
+    }
   }
 }
 
+/** Provenance badges for the header: MOCK, or (when connected) REPLAY / HYBRID / SIMULATED, else LIVE. */
+export function provenanceBadges(s: ValenceState): { label: string; tone: "mock" | "live" | "warn"; title: string }[] {
+  if (s.source === "mock") return [{ label: "MOCK", tone: "mock", title: "Generated in the browser, no backend" }];
+  if (s.conn !== "open") return [];
+  const latest = [...Object.values(s.predictions), ...Object.values(s.vectors)];
+  const sim = [...new Set(latest.flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
+  const out: { label: string; tone: "mock" | "live" | "warn"; title: string }[] = [];
+  if (s.status?.mode === "replay" || latest.some((m) => m.source === "replay"))
+    out.push({ label: "REPLAY", tone: "warn", title: "Replayed scenario or recording, not live sensors" });
+  else if (s.status?.mode === "hybrid")
+    out.push({ label: "HYBRID", tone: "warn", title: "One modality live, the other replayed or simulated" });
+  if (sim.length) out.push({ label: `SIMULATED: ${sim.join(", ")}`, tone: "warn", title: "Simulated or operator-set data in the 15-minute window" });
+  if (!out.length) out.push({ label: "LIVE", tone: "live", title: "Live camera and microphone" });
+  return out;
+}
+
 function resetData() {
-  set({ persons: [], govLog: [], gov: null, vectors: {}, predictions: {}, history: [], status: null, retention: null, evalSummary: null });
+  recentEvents = {};
+  set({ persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null });
 }
 
 // ---------- Mock engine ----------
 const CYCLE_S = 120;
 const PHASE: StateKey[] = ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"];
+const GOV_LINES = [
+  "[GOVERNANCE] Raw biometric frame purged successfully. Appended state vector to timeline.",
+  "[GOVERNANCE] Audio block reduced to dB level and purged. 0 raw samples retained.",
+  "[GOVERNANCE] Transcript tokenized for compliment/laughter counts and purged.",
+] as const;
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -180,11 +306,12 @@ const mock = {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; },
   stateAt(t: number, pid: number): StateKey {
     const sc = this.scenario;
-    if (sc !== "full_demo") return PHASE[["focused", "frustrated_masked", "exhausted", "collaborative_happy"].indexOf(sc)];
+    if (sc !== "full_demo") return PHASE[["focused", "frustrated_masked", "exhausted", "collaborative_happy"].indexOf(sc)] ?? "Focused";
     const offset = pid === 2 ? 3 : 0; // person 2 lags slightly
     const idx = Math.floor((((t - offset) % CYCLE_S) + CYCLE_S) % CYCLE_S / (CYCLE_S / 4));
-    if (pid === 2 && PHASE[idx] === "Frustrated_Masked") return "Focused";
-    return PHASE[idx];
+    const s = PHASE[idx] ?? "Focused";
+    if (pid === 2 && s === "Frustrated_Masked") return "Focused";
+    return s;
   },
   vector(t: number, pid: number, s: StateKey, fill: number): StateVectorMsg {
     const base = {
@@ -205,10 +332,13 @@ const mock = {
       clenched_fists_5m: base.fists + (base.fists ? Math.round(rnd(-1, 1)) : 0),
       compliments_15m: base.comp, laughter_15m: base.laugh,
       posture_slump: +clamp(base.slump + rnd(-0.05, 0.05), 0, 1).toFixed(2),
-      social_withdrawal: +clamp(base.wd + rnd(-0.05, 0.05), 0, 1).toFixed(2),
+      head_in_hands: s === "Exhausted" ? +rnd(0.05, 0.2).toFixed(2) : 0,
+      social_withdrawal: base.wd > 0.5 ? 1 : 0,
       face_visible: !hidden,
-      facial_valence: hidden ? 0 : +(base.val + rnd(-0.05, 0.05)).toFixed(2),
+      facial_valence: hidden ? null : +(base.val + rnd(-0.05, 0.05)).toFixed(2),
       window_fill_min: +fill.toFixed(1),
+      source: this.scenario === "full_demo" ? "live" : "replay",
+      simulated_fields: [...(hidden ? ["face_occlusion"] : []), ...(low ? ["low_light"] : [])],
     };
   },
   prediction(v: StateVectorMsg, s: StateKey): PredictionMsg {
@@ -218,48 +348,55 @@ const mock = {
     const w = others.map(() => rnd(0.2, 1));
     const ws = w.reduce((a, b) => a + b, 0);
     probs[s] = conf;
-    others.forEach((o, i) => (probs[o] = ((1 - conf) * w[i]) / ws));
-    const faceLabel: StateKey = !v.face_visible ? "Focused"
-      : v.facial_valence > 0.4 ? "Collaborative_Happy" : v.facial_valence < -0.1 ? "Exhausted" : "Focused";
-    const faceConf = v.face_visible ? rnd(0.6, 0.78) : 0.31;
-    const mask = faceLabel !== s && v.face_visible && s === "Frustrated_Masked";
+    others.forEach((o, i) => (probs[o] = ((1 - conf) * (w[i] ?? 0)) / ws));
+    const val = v.facial_valence;
+    const db = v.ambient_db ?? 0, lux = v.light_lux ?? 0, hrs = v.hours_since_break ?? 0, slump = v.posture_slump ?? 0;
+    const faceLabel: StateKey | null = !v.face_visible || val === null ? null
+      : val > 0.4 ? "Collaborative_Happy" : val < -0.1 ? "Exhausted" : "Focused";
+    const faceConf = faceLabel ? +rnd(0.6, 0.78).toFixed(2) : null;
+    const mask = faceLabel !== null && faceLabel !== s && s === "Frustrated_Masked";
     const L = (name: string, drivers: Driver[]): Layer => ({ name, contribution: +drivers.reduce((a, d) => a + d.shap, 0).toFixed(2), drivers });
     const sign = (good: boolean, m: number) => +((good ? 1 : -1) * m * rnd(0.85, 1.15)).toFixed(2);
     const layers: Layer[] = [
       L("Somatic & Social", [
         { feature: "clenched_fists_count_5m", display: `${v.clenched_fists_5m} clenched-fist events in the last 5 minutes`, value: v.clenched_fists_5m, unit: "events", shap: sign(s === "Frustrated_Masked" ? true : v.clenched_fists_5m === 0, s === "Frustrated_Masked" ? 0.38 : 0.06) },
-        { feature: "posture_slump", display: `posture slump ${Math.round(v.posture_slump * 100)}%`, value: v.posture_slump, unit: "", shap: sign(s === "Exhausted", s === "Exhausted" ? 0.34 : 0.05) },
+        { feature: "posture_slump", display: `posture slump ${Math.round(slump * 100)}%`, value: v.posture_slump, unit: "", shap: sign(s === "Exhausted", s === "Exhausted" ? 0.34 : 0.05) },
         { feature: "laughter_15m", display: `${v.laughter_15m} laughs and ${v.compliments_15m} compliments in 15 min`, value: v.laughter_15m, unit: "events", shap: sign(s === "Collaborative_Happy", s === "Collaborative_Happy" ? 0.36 : 0.04) },
       ]),
       L("Ambient Physics", [
-        { feature: "ambient_db_mean_15m", display: `average noise of ${Math.round(v.ambient_db)} dB over 15 minutes`, value: v.ambient_db, unit: "dB", shap: sign(s !== "Focused" || v.ambient_db < 55, s === "Frustrated_Masked" ? 0.22 : 0.1) },
-        { feature: "light_lux_mean_15m", display: `room light ${v.light_lux} lux`, value: v.light_lux, unit: "lux", shap: sign(s === "Exhausted" ? v.light_lux < 200 : v.light_lux > 300, 0.07) },
+        { feature: "ambient_db_mean_15m", display: `average noise of ${Math.round(db)} dB over 15 minutes`, value: v.ambient_db, unit: "dB", shap: sign(s !== "Focused" || db < 55, s === "Frustrated_Masked" ? 0.22 : 0.1) },
+        { feature: "light_lux_mean_15m", display: `room light ${lux} lux`, value: v.light_lux, unit: "lux", shap: sign(s === "Exhausted" ? lux < 200 : lux > 300, 0.07) },
       ]),
       L("Time Dynamics", [
-        { feature: "hours_since_break", display: `${v.hours_since_break} hours since the last break`, value: v.hours_since_break, unit: "h", shap: sign(s === "Exhausted" || s === "Frustrated_Masked", s === "Exhausted" ? 0.28 : 0.15) },
+        { feature: "hours_since_break", display: `${hrs} hours since the last break`, value: v.hours_since_break, unit: "h", shap: sign(s === "Exhausted" || s === "Frustrated_Masked", s === "Exhausted" ? 0.28 : 0.15) },
       ]),
       L("Facial Surface", [
-        v.face_visible
-          ? { feature: "face_last", display: `${v.facial_valence > 0.3 ? "smiling" : v.facial_valence < -0.1 ? "drooping" : "neutral"} expression (valence ${v.facial_valence >= 0 ? "+" : ""}${v.facial_valence.toFixed(2)})`, value: v.facial_valence, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
+        faceLabel !== null && val !== null
+          ? { feature: "face_last", display: `${val > 0.3 ? "smiling" : val < -0.1 ? "drooping" : "neutral"} expression (valence ${val >= 0 ? "+" : ""}${fmt(val, 2)})`, value: val, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
           : { feature: "face_visible", display: "face not visible — facial layer ignored", value: 0, unit: "", shap: 0 },
       ]),
     ];
-    const disp = STATE_DISPLAY[s];
+    // Same rule as the backend's display_label(): with the core states, Frustrated_Masked reads "Frustrated" unless the mask override fired.
+    const disp = s === "Frustrated_Masked" && !mask ? "Frustrated" : STATE_DISPLAY[s];
     const pid = v.person_id;
+    const top = layers.slice().sort((a, b) => b.contribution - a.contribution)[0]?.name.toLowerCase() ?? "context";
     const tpl = mask
-      ? `Model predicted ${disp} (${Math.round(conf * 100)}%). Person #${pid} appears to smile, but ${v.clenched_fists_5m} clenched-fist events, ${Math.round(v.ambient_db)} dB of sustained noise and ${v.hours_since_break} hours without a break point to masked stress.`
-      : `Model predicted ${disp} (${Math.round(conf * 100)}%) for Person #${pid} based on ${layers.slice().sort((a, b) => b.contribution - a.contribution)[0].name.toLowerCase()} signals.`;
+      ? `Model predicted ${disp} (${Math.round(conf * 100)}%). Person #${pid} appears to smile, but ${v.clenched_fists_5m} clenched-fist events, ${Math.round(db)} dB of sustained noise and ${hrs} hours without a break point to masked stress.`
+      : `Model predicted ${disp} (${Math.round(conf * 100)}%) for Person #${pid} based on ${top} signals.`;
     return {
       type: "prediction", event_id: `p${pid}-${String(this.tick).padStart(6, "0")}`, t: v.t, person_id: pid,
       label: s, label_display: disp, confidence: +conf.toFixed(2), probabilities: probs,
-      face_only: { label: faceLabel, confidence: +faceConf.toFixed(2) }, mask_override: mask,
-      warming_up: v.window_fill_min < 5, layers, explanation: { text: tpl, source: "template" },
+      face_only: { label: faceLabel, confidence: faceConf }, mask_override: mask,
+      warming_up: v.window_fill_min < 5, layers,
+      data_quality: { face_visible_frac: v.face_visible ? 1 : 0, lux: v.light_lux, ood_features: [] },
+      explanation: { text: tpl, source: "template" },
+      source: v.source, simulated_fields: v.simulated_fields,
     };
   },
   llmText(p: PredictionMsg): string {
     const top = p.layers.flatMap((l) => l.drivers).sort((a, b) => b.shap - a.shap).slice(0, 2).map((d) => d.display);
     if (p.mask_override)
-      return `Although Person #${p.person_id}'s face reads as ${STATE_DISPLAY[p.face_only.label].toLowerCase()}, the surrounding context tells a different story: ${top.join(" and ")}. Taken together, Valence judges the smile to be a mask over stress and suggests checking in or offering a short break.`;
+      return `Although Person #${p.person_id}'s face reads as ${stateName(p.face_only.label).toLowerCase()}, the surrounding context tells a different story: ${top.join(" and ")}. Taken together, Valence judges the smile to be a mask over stress and suggests checking in or offering a short break.`;
     return `Person #${p.person_id} most likely feels ${p.label_display.toLowerCase()} (${Math.round(p.confidence * 100)}%). The strongest evidence is ${top.join(", plus ")}. No facial imagery was retained to reach this conclusion.`;
   },
   step() {
@@ -268,9 +405,9 @@ const mock = {
     const ids = [1, 2];
     const persons: TrackPerson[] = ids.map((id) => {
       const cx = (id === 1 ? 0.3 : 0.7) + Math.sin(t / 6 + id) * 0.02;
-      return { id, label: `Person #${id}`, bbox: [+(cx - 0.14).toFixed(3), 0.2, +(cx + 0.14).toFixed(3), 0.95] };
+      return { id, label: `Person #${id}`, bbox: [+(cx - 0.14).toFixed(3), 0.2, +(cx + 0.14).toFixed(3), 0.95], fist_active: false, slump: false };
     });
-    handleMessage({ type: "tracks", t, persons });
+    handleMessage({ type: "tracks", t, capture_ts_ms: Date.now(), frame_w: 1280, frame_h: 720, mirrored: true, persons });
     const fill = Math.min(15, 5 + (t - 1000) / 60);
     for (const id of ids) {
       const s = this.stateAt(t, id);
@@ -288,17 +425,16 @@ const mock = {
     if (this.tick % 5 === 0) {
       handleMessage({
         type: "governance", t, tick: this.tick,
-        message: ["[GOVERNANCE] Raw biometric frame purged successfully. Appended state vector to timeline.",
-          "[GOVERNANCE] Audio block reduced to dB level and purged. 0 raw samples retained.",
-          "[GOVERNANCE] Transcript tokenized for compliment/laughter counts and purged."][Math.floor(this.tick / 5) % 3],
-        frames_purged: this.counters.frames, audio_blocks_purged: this.counters.audio,
+        message: GOV_LINES[Math.floor(this.tick / 5) % 3] ?? GOV_LINES[0],
+        frames_decoded: this.counters.frames, frames_purged: this.counters.frames, audio_blocks_purged: this.counters.audio,
         transcripts_purged: this.counters.transcripts, violations: 0, live_raw_buffers: 0,
+        audit_hash: null, retention_s: 86400, purge_gap: 0,
       });
     }
     handleMessage({
       type: "status", mode: this.scenario === "full_demo" ? "live" : "replay", camera: true, mic: true,
       fps: +rnd(9.2, 10).toFixed(1), loop_latency_ms: Math.round(rnd(70, 95)), narrator: "ready",
-      offline: true, uptime_s: t - 1000 + 1820,
+      offline: true, uptime_s: t - 1000 + 1820, degraded: [], purge_violation: false,
     });
   },
   backfill() {
@@ -356,15 +492,20 @@ const wsUrl = (base: string) => base.replace(/^http/, "ws").replace(/\/$/, "") +
 const api = (path: string) => state.baseUrl.replace(/\/$/, "") + path;
 export const figureUrl = (name: string) => api(`/api/eval/figures/${name}.png`);
 
+async function getJson(path: string): Promise<unknown> {
+  const r = await fetch(api(path));
+  if (!r.ok) throw new Error(`GET ${path} → ${r.status}`);
+  return r.json();
+}
+
 async function loadRest() {
   try {
-    const r = await fetch(api("/api/history?minutes=15"));
-    const j = await r.json();
-    const pts: HistoryPoint[] = Array.isArray(j) ? j : j.points ?? j.history ?? [];
+    const j = await getJson("/api/history?minutes=15");
+    const pts = (Array.isArray(j) ? j : []) as HistoryPoint[];
     set({ history: [...pts, ...state.history].sort((a, b) => a.t - b.t) });
   } catch { /* backend may not be up yet */ }
-  try { set({ retention: await (await fetch(api("/api/retention"))).json() }); } catch { /* ignore */ }
-  try { set({ evalSummary: await (await fetch(api("/api/eval/summary"))).json() }); } catch { /* ignore */ }
+  try { set({ retention: (await getJson("/api/retention")) as Record<string, unknown> }); } catch { /* ignore */ }
+  try { set({ evalSummary: (await getJson("/api/eval/summary")) as EvalSummary }); } catch { /* ignore */ }
 }
 
 function connectWs() {
@@ -390,18 +531,20 @@ function stopLive() {
 
 // ---------- Public API ----------
 export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
+  const base = cleanBase(baseUrl) || state.baseUrl;
   stopLive(); mock.stop(); resetData();
-  set({ source, baseUrl, running: "running" });
+  set({ source, baseUrl: base, running: "running" });
   if (source === "mock") {
     set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL });
     mock.backfill(); mock.start();
   } else {
+    if (validBase(base)) saveBase(base);
     liveActive = true; backoff = 1000; connectWs();
   }
 }
 
 let booted = false;
-export function boot() { if (!booted) { booted = true; setSource("mock"); } }
+export function boot() { if (!booted) { booted = true; setSource("mock", resolveBaseUrl()); } }
 
 function describe(c: Command) {
   switch (c.kind) {
@@ -419,13 +562,11 @@ export async function sendCommand(c: Command) {
     return set({ lastCommand: { text: `POST ${path} (mock)`, ok: true } });
   }
   try {
-    const r = await fetch(api(path), {
-      method: "POST",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (c.kind === "sim") set({ sim: { ...state.sim, [c.which]: c.enabled } });
-    if (c.kind === "control") set({ running: c.action === "start" ? "running" : c.action === "pause" ? "paused" : "stopped" });
+    const init: RequestInit = { method: "POST" };
+    if (body) { init.headers = { "Content-Type": "application/json" }; init.body = JSON.stringify(body); }
+    const r = await fetch(api(path), init);
+    if (r.ok && c.kind === "sim") set({ sim: { ...state.sim, [c.which]: c.enabled } });
+    if (r.ok && c.kind === "control") set({ running: c.action === "start" ? "running" : c.action === "pause" ? "paused" : "stopped" });
     set({ lastCommand: { text: `POST ${path} → ${r.status}`, ok: r.ok } });
   } catch {
     set({ lastCommand: { text: `POST ${path} failed (backend unreachable)`, ok: false } });

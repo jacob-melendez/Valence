@@ -86,8 +86,22 @@ def test_allowlist_constants() -> None:
     assert list(LAUGH_FAMILY) == ["Laughter", "Giggle", "Snicker", "Belly laugh", "Chuckle, chortle"]
 
 
-def test_laughter_onset_semantics() -> None:
+def _legacy():
+    """Original 0.30 x 2 rule: these tests cover LaughterTracker bookkeeping, not thresholds."""
+    from valence.perception.debounce import HysteresisDebouncer
+
+    return HysteresisDebouncer(on=0.30, off=0.15, on_count=2, off_hold_s=0.0, refractory_s=3.0)
+
+
+def test_default_tracker_uses_the_measured_laughter_rule() -> None:
     tr = LaughterTracker()
+    assert tr.update({"Speech": 0.98, "Laughter": 0.0}, 0.0)[2] is False
+    assert tr.update({"Speech": 0.15, "Laughter": 0.08, "Snicker": 0.06}, 1.0)[2] is True
+    assert tr.take_onsets() == 1
+
+
+def test_laughter_onset_semantics() -> None:
+    tr = LaughterTracker(debouncer=_legacy())
     assert tr.update({"Laughter": 0.35, "Speech": 0.2}, 0.0) == (0.35, 0.2, False)
     laugh, speech, onset = tr.update({"Laughter": 0.1, "Giggle": 0.4}, 0.5)
     assert (laugh, onset) == (0.4, True)
@@ -106,7 +120,7 @@ def test_laughter_onset_semantics() -> None:
 
 
 def test_speech_alone_never_counts_as_laughter() -> None:
-    tr = LaughterTracker()
+    tr = LaughterTracker(debouncer=_legacy())
     for k in range(10):
         laugh, speech, onset = tr.update({"Speech": 0.95}, 0.5 * k)
         assert laugh == 0.0 and speech == 0.95 and not onset
@@ -114,7 +128,7 @@ def test_speech_alone_never_counts_as_laughter() -> None:
 
 
 def test_onsets_accumulate_between_takes() -> None:
-    tr = LaughterTracker()
+    tr = LaughterTracker(debouncer=_legacy())
     t = 0.0
     for _ in range(3):
         tr.update({"Laughter": 0.6}, t)
