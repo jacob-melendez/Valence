@@ -141,6 +141,8 @@ class Runtime:
         self.fps = 0.0
         self.purge_gap = 0
         self._gap_ticks = 0
+        self._purged_base = 0  # purged video frames before the current source began
+        self.frames_purged = 0
 
     # --- lifecycle --------------------------------------------------------------------------------
     def start(self) -> None:
@@ -178,6 +180,7 @@ class Runtime:
     # --- sources and operator actions ----------------------------------------------------------------
     def use_scenario(self, df: pd.DataFrame, name: str, *, speed: float = 1.0, loop: bool = False) -> None:
         self._stop_feeder()
+        self._new_source_counters()
         self.source = ScenarioSource(df, name, loop=loop)
         self.mode = "replay"
         self.speed = speed
@@ -186,6 +189,7 @@ class Runtime:
 
     def use_live(self) -> None:
         self._stop_feeder()
+        self._new_source_counters()
         self.source = LiveSource(self.aggregator)
         self.aggregator.source = "live"
         self.mode = "live"
@@ -197,6 +201,7 @@ class Runtime:
         from valence.runtime.recording import JsonlFeeder
 
         self._stop_feeder()
+        self._new_source_counters()
         self.reset_people(keep_room=False)
         self.source = LiveSource(self.aggregator, label="replay")
         self.aggregator.source = "replay"
@@ -205,6 +210,12 @@ class Runtime:
         self.feeder = JsonlFeeder(path, self.push_obs, speed=speed, loop=loop)
         self.feeder.start()
         self._audit("operator", {"action": "replay_recording", "recording": str(getattr(path, "name", path))[:80]})
+
+    def _new_source_counters(self) -> None:
+        """Align the decoded/purged frame pair to the source that is starting now."""
+        self.aggregator.reset_frame_counter()
+        self._purged_base = self.gate.stats().purged.get("video", 0)
+        self._gap_ticks = 0
 
     def _stop_feeder(self) -> None:
         feeder = getattr(self, "feeder", None)
@@ -293,14 +304,16 @@ class Runtime:
         for r in records:
             self.window.append(r)
         purge = self.gate.end_tick()
-        # Replayed recordings carry the original capture's frame counter; this process decoded no frames.
-        decoded = self.aggregator.frames_decoded if self.source.label == "live" else purge.purged.get("video", 0)
+        # Both counters cover the current source only. Replayed recordings carry the original capture's
+        # counter, and this process decodes no frames for them, so replay reports its own purged count.
+        self.frames_purged = purge.purged.get("video", 0) - self._purged_base
+        decoded = self.aggregator.frames_decoded if self.source.label == "live" else self.frames_purged
         # Every decoded frame must be purged; allow the capture's in-flight slot (<= 2 frames).
-        self.purge_gap = max(0, decoded - purge.purged.get("video", 0))
+        self.purge_gap = max(0, decoded - self.frames_purged)
         self._gap_ticks = self._gap_ticks + 1 if self.purge_gap > 2 else 0
         self.bus.publish(Governance(
             t=wall, tick=self._tick_i, frames_decoded=decoded,
-            frames_purged=purge.purged.get("video", 0), audio_blocks_purged=purge.purged.get("audio", 0),
+            frames_purged=self.frames_purged, audio_blocks_purged=purge.purged.get("audio", 0),
             transcripts_purged=purge.transcripts_purged, violations=purge.violations,
             live_raw_buffers=purge.live_raw_buffers, audit_hash=self.audit.last_hash[:16],
             retention_s=self.s.audit_ttl_s, purge_gap=self.purge_gap,

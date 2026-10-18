@@ -174,3 +174,28 @@ def test_absent_people_are_evicted_and_reset_clears_history(runtime):
     assert 7 not in runtime.window.people()
     runtime.reset_people()
     assert not runtime.history
+
+
+def test_frame_counter_survives_capture_restart_and_source_change(runtime):
+    runtime.use_live()
+    p = PersonObs(track_id=1, bbox=(0.2, 0.05, 0.7, 0.98))
+    for i in range(1, 6):
+        runtime.push_obs(_video(i * 0.1, [p], i))  # first capture: counter 1..5
+    for i in range(1, 4):
+        runtime.push_obs(_video(1 + i * 0.1, [p], i))  # capture restarted (pause/start): counter 1..3
+    assert runtime.aggregator.frames_decoded == 8
+    runtime.use_recording  # attribute exists; switching source re-aligns the pair
+    runtime.use_live()
+    assert runtime.aggregator.frames_decoded == 0
+
+
+def test_reset_clears_narration_cache(runtime):
+    class Narrator:
+        cleared = 0
+
+        def clear_cache(self):
+            self.cleared += 1
+
+    runtime.narrator = Narrator()
+    runtime.reset_people()
+    assert runtime.narrator.cleared == 1

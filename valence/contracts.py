@@ -356,8 +356,8 @@ class Governance(_Model):
     t: float
     tick: int
     message: str = GOVERNANCE_LINE
-    frames_decoded: int
-    frames_purged: int
+    frames_decoded: int  # since the current source began (live: across capture restarts)
+    frames_purged: int  # video frames purged since the current source began
     audio_blocks_purged: int
     transcripts_purged: int
     violations: int

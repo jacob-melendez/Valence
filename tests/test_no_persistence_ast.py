@@ -57,3 +57,23 @@ def test_scanner_catches_aliases_low_level_writes_and_copies():
     )
     found = scan_source(src, "perception/x.py", allow_text_writes=False)
     assert [v.line for v in found] == [4, 5, 6, 7, 8], [str(v) for v in found]
+
+
+def test_scanner_resolves_module_aliases_and_path_open_modes():
+    src = (
+        "import shutil as sh\n"
+        "import os as o\n"
+        "from shutil import copy\n"
+        "from os import write\n"
+        "from soundfile import write as sfw\n"
+        "from pathlib import Path\n"
+        "sh.copy('a', 'b')\n"
+        "copy('a', 'b')\n"
+        "write(fd, b'x')\n"
+        "o.write(fd, b'x')\n"
+        "sfw('a.wav', block, 16000)\n"
+        "Path('x.bin').open('wb')\n"
+        "Path('cfg.yaml').open()\n"
+    )
+    found = scan_source(src, "perception/x.py", allow_text_writes=False)
+    assert [v.line for v in found] == [7, 8, 9, 10, 11, 12], [str(v) for v in found]

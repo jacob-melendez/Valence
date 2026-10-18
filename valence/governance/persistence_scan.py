@@ -66,8 +66,15 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
-def _open_mode(call: ast.Call) -> str | None:
+def _looks_like_mode(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str) and 0 < len(node.value) <= 3 \
+        and set(node.value) <= set("rwxabt+U")
+
+
+def _open_mode(call: ast.Call, method: bool = False) -> str | None:
     mode_node = call.args[1] if len(call.args) > 1 else None
+    if method and call.args and _looks_like_mode(call.args[0]):  # Path.open("wb"): mode is the first argument
+        mode_node = call.args[0]
     for kw in call.keywords:
         if kw.arg == "mode":
             mode_node = kw.value
@@ -87,22 +94,39 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
     out: list[Violation] = []
     allowed = {v.line for v in exceptions_in(source, path) if v.reason != "(no reason given)"}
     tree = ast.parse(source, filename=path)
-    # Names imported directly from media/serialization modules ("from cv2 import imwrite as w").
+    # Resolve aliases: "import shutil as sh" -> sh = shutil; "from os import write" -> write = os.write.
+    modules: dict[str, str] = {}
     bare: dict[str, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in MEDIA_MODULES:
+        if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in BANNED_ATTRS or (node.module == "wave" and alias.name == "open"):
-                    bare[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+                modules[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                full = f"{node.module}.{alias.name}"
+                if node.module in MEDIA_MODULES and (alias.name in BANNED_ATTRS or alias.name in ("open", "write")):
+                    bare[alias.asname or alias.name] = full
+                elif (node.module, alias.name) in COPY_CALLS or full in ("os.write", "os.fdopen", "os.open", "os.writev"):
+                    bare[alias.asname or alias.name] = full
+
+    def resolve(func: ast.AST) -> str:
+        dotted = _dotted(func)
+        head, _, rest = dotted.partition(".")
+        return f"{modules[head]}.{rest}" if head in modules and rest else dotted
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or node.lineno in allowed:
             continue
         func = node.func
-        name = _dotted(func)
+        name = resolve(func)
         if isinstance(func, ast.Name) and func.id in bare:
-            out.append(Violation(path, node.lineno, f"banned call {bare[func.id]}() (imported as {func.id})"))
+            target = bare[func.id]
+            is_copy = tuple(target.rsplit(".", 1)) in COPY_CALLS
+            is_low = target in ("os.write", "os.fdopen", "os.open", "os.writev")
+            if is_copy or not is_low or not allow_text_writes:
+                out.append(Violation(path, node.lineno, f"banned call {target}() (imported as {func.id})"))
             continue
-        if isinstance(func, ast.Attribute) and (_dotted(func.value), func.attr) in COPY_CALLS:
+        if isinstance(func, ast.Attribute) and tuple(name.rsplit(".", 1)) in COPY_CALLS:
             out.append(Violation(path, node.lineno, f"file copy {name}()"))
             continue
         if not allow_text_writes and name in ("os.write", "os.fdopen", "os.open", "os.writev"):
@@ -112,7 +136,7 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
             if func.attr in BANNED_ATTRS:
                 out.append(Violation(path, node.lineno, f"banned call {name or func.attr}()"))
                 continue
-            owner = _dotted(func.value)
+            owner = resolve(func.value)
             if (owner, func.attr) in BANNED_MODULE_CALLS:
                 out.append(Violation(path, node.lineno, f"banned call {name}()"))
                 continue
@@ -120,7 +144,7 @@ def scan_source(source: str, path: str, allow_text_writes: bool) -> list[Violati
                 out.append(Violation(path, node.lineno, f"file write {name}()"))
                 continue
         if name in ("open", "io.open") or (isinstance(func, ast.Attribute) and func.attr == "open" and name != "wave.open"):
-            mode = _open_mode(node)
+            mode = _open_mode(node, method=isinstance(func, ast.Attribute) and name not in ("io.open", "gzip.open", "bz2.open", "lzma.open"))
             writes = mode is None or any(c in mode for c in "wax+")
             if not writes:
                 continue
