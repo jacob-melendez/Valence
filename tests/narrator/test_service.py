@@ -174,6 +174,23 @@ def test_cli_starts_uvicorn_on_loopback(monkeypatch):
     assert main(["--adapter", "adapters/x"]) == 0
     assert isinstance(seen["narrator"], Narrator) and seen["narrator"].adapter_path == "adapters/x"
     seen["narrator"].close()
+    assert main(["--no-adapter"]) == 0
+    assert seen["narrator"].adapter_path is None and seen["narrator"].prompt_style == "few_shot"
+    seen["narrator"].close()
+
+
+def test_cli_uses_the_ship_switch(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr("uvicorn.run", lambda app, host, port, **kwargs: seen.update(narrator=app.state.narrator))
+    monkeypatch.delenv("VALENCE_NARRATOR_ADAPTER", raising=False)
+    monkeypatch.setattr("valence.narrator.service.startup_adapter", lambda path: path or "adapters/shipped")
+    assert main([]) == 0
+    assert seen["narrator"].adapter_path == "adapters/shipped" and seen["narrator"].prompt_style == "compact"
+    seen["narrator"].close()
+    monkeypatch.setattr("valence.narrator.service.startup_adapter", lambda path: path)
+    assert main([]) == 0
+    assert seen["narrator"].adapter_path is None and seen["narrator"].prompt_style == "few_shot"
+    seen["narrator"].close()
 
 
 # --- the core's real client against a live local server ---------------------------------------------

@@ -9,7 +9,13 @@ otherwise, with the model, warm-up state, load error and per-source counts in th
 The model is loaded, its prompt caches prefilled and warmed once at startup; if that fails the
 service keeps answering ``/narrate`` with templates and ``/health`` says 503.
 
-    python -m valence.narrator.service [--port 8081] [--template-only] [--adapter PATH] [--model PATH]
+    python -m valence.narrator.service [--port 8081] [--template-only] [--adapter PATH | --no-adapter] \\
+        [--model PATH] [--prompt-style few_shot|compact]
+
+Which arm runs is the A/B ship decision (``engine.SHIP``, overridable with ``VALENCE_NARRATOR_SHIP=lora|prompt``):
+with "lora" and ``adapters/narrator`` present the service loads that adapter, otherwise the base model.
+``--adapter`` / ``VALENCE_NARRATOR_ADAPTER`` override it, and ``--no-adapter`` (or the env value
+"none") forces prompt-only.
 """
 
 from __future__ import annotations
@@ -25,7 +31,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from valence.contracts import FactSheet, NarrationResult
-from valence.narrator.engine import Narrator, TemplateOnlyNarrator
+from valence.narrator.engine import Narrator, TemplateOnlyNarrator, ship_choice, startup_adapter
+from valence.narrator.prompt import PROMPT_STYLES
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +86,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--template-only", action="store_true", help="never load the LLM")
     parser.add_argument("--model", default=None, help="local mlx model dir (default: VALENCE_NARRATOR_MODEL)")
-    parser.add_argument("--adapter", default=None, help="local LoRA adapter dir (default: VALENCE_NARRATOR_ADAPTER)")
+    parser.add_argument("--adapter", default=None,
+                        help="local LoRA adapter dir (default: VALENCE_NARRATOR_ADAPTER, else the shipped choice)")
+    parser.add_argument("--no-adapter", action="store_true", help="serve the base model (prompt-only)")
+    parser.add_argument("--prompt-style", choices=PROMPT_STYLES, default=None,
+                        help="default: compact with an adapter, few_shot without")
     args = parser.parse_args(argv)
 
     import uvicorn
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    narrator = TemplateOnlyNarrator() if args.template_only else Narrator(args.model, args.adapter)
+    if args.template_only:
+        narrator: Narrator = TemplateOnlyNarrator()
+    else:
+        adapter = None if args.no_adapter else startup_adapter(args.adapter)
+        narrator = Narrator(args.model, adapter or "none", prompt_style=args.prompt_style)
+        logger.info("narrator arm: %s (ship=%s, adapter=%s, prompt_style=%s)", "lora" if adapter else "prompt",
+                    ship_choice(), adapter, narrator.prompt_style)
     uvicorn.run(create_app(narrator), host=HOST, port=args.port, log_level="info")
     return 0
 

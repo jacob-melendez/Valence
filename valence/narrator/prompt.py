@@ -11,6 +11,15 @@ as the validator expects it; SHAP values, feature names and layer sums are never
 The system prompt depends only on the state set (the sheet's probability keys), so the system turn
 plus the few-shot turns form a fixed prefix per state set that the engine prefills once into an
 mlx_lm prompt cache (``prompt_prefix``).
+
+Two prompt styles (``PROMPT_STYLES``):
+
+- ``few_shot`` (prompt-only base model): system prompt, the three few-shot pairs, then the sheet.
+- ``compact`` (with a LoRA adapter): the same system prompt and fact-sheet rendering but no
+  few-shot turns, since the adapter has learned the style (about 2.4x shorter cached prefix; the
+  system prompt stays). The LoRA
+  training rows are ``training_messages(sheet, target)``: exactly ``build_messages(sheet,
+  style="compact")`` plus the assistant target, so training and inference render identically.
 """
 
 from __future__ import annotations
@@ -34,6 +43,15 @@ from valence.narrator.schema import (
 from valence.narrator.validator import MAX_SENTENCES
 
 Message = dict[str, str]
+
+PROMPT_STYLES: tuple[str, ...] = ("few_shot", "compact")
+DEFAULT_STYLE = "few_shot"
+
+
+def check_style(style: str) -> str:
+    if style not in PROMPT_STYLES:
+        raise ValueError(f"prompt style must be one of {PROMPT_STYLES}, got {style!r}")
+    return style
 
 STATE_MEANINGS: dict[str, str] = {
     "Focused": "steady, low-movement work",
@@ -142,7 +160,9 @@ def avoid_words(sheet: Mapping[str, Any] | BaseModel) -> list[str]:
     if int(sheet.get("n_people") or 0) == 1 and "collaborative" not in words:
         words.append("collaborative")
     if not sheet.get("mask_override"):
-        words += MASK_WORDS
+        # never a word the state's own display uses ("Frustrated / Masked Stress" names "mask")
+        label = str(sheet.get("label_display") or "").lower()
+        words += [w for w in MASK_WORDS if w not in label]
     return words
 
 
@@ -316,19 +336,28 @@ def user_content(sheet: Mapping[str, Any] | BaseModel, feedback: Iterable[str] |
     return f"{content}\n{hint}" if hint else content
 
 
-def base_messages(states: tuple[str, ...] = CORE_STATES) -> list[Message]:
-    """System prompt plus the few-shot turns: identical for every request of a state set."""
+def base_messages(states: tuple[str, ...] = CORE_STATES, style: str = DEFAULT_STYLE) -> list[Message]:
+    """System prompt plus (``few_shot`` style) the few-shot turns: identical for every request of a
+    state set."""
     messages: list[Message] = [{"role": "system", "content": system_prompt(tuple(states))}]
+    if check_style(style) == "compact":
+        return messages
     for sheet, answer in few_shots(tuple(states)):
         messages.append({"role": "user", "content": render_fact_sheet(sheet)})
         messages.append({"role": "assistant", "content": answer})
     return messages
 
 
-def build_messages(sheet: Mapping[str, Any] | BaseModel, feedback: Iterable[str] | None = None) -> list[Message]:
-    """System prompt, few-shot user/assistant pairs, then the real user turn."""
+def build_messages(sheet: Mapping[str, Any] | BaseModel, feedback: Iterable[str] | None = None,
+                   style: str = DEFAULT_STYLE) -> list[Message]:
+    """System prompt, few-shot user/assistant pairs (``few_shot`` style only), then the real user turn."""
     sheet = as_dict(sheet)
-    return [*base_messages(sheet_states(sheet)), {"role": "user", "content": user_content(sheet, feedback)}]
+    return [*base_messages(sheet_states(sheet), style), {"role": "user", "content": user_content(sheet, feedback)}]
+
+
+def training_messages(sheet: Mapping[str, Any] | BaseModel, target: str) -> list[Message]:
+    """One LoRA chat row: the compact-style inference messages plus the assistant target."""
+    return [*build_messages(sheet, style="compact"), {"role": "assistant", "content": target}]
 
 
 def _merge_system(messages: Sequence[Message]) -> list[Message]:
@@ -357,17 +386,26 @@ def render_chat(tokenizer: Any, messages: Sequence[Message]) -> str:
     return tokenizer.apply_chat_template(_merge_system(messages), **kwargs)
 
 
-def build_prompt(tokenizer: Any, sheet: Mapping[str, Any] | BaseModel, feedback: Iterable[str] | None = None) -> str:
-    return render_chat(tokenizer, build_messages(sheet, feedback))
+def encode_text(tokenizer: Any, text: str) -> list[int]:
+    """Token ids for rendered chat text, as the engine feeds them: special tokens are added only when
+    the tokenizer has a BOS the text does not already start with (Qwen3 has none)."""
+    bos = getattr(tokenizer, "bos_token", None)
+    add_special = bos is None or not text.startswith(bos)
+    return list(tokenizer.encode(text, add_special_tokens=add_special))
+
+
+def build_prompt(tokenizer: Any, sheet: Mapping[str, Any] | BaseModel, feedback: Iterable[str] | None = None,
+                 style: str = DEFAULT_STYLE) -> str:
+    return render_chat(tokenizer, build_messages(sheet, feedback, style))
 
 
 _SENTINEL = "⁣VALENCE_FACT_SHEET⁣"
 
 
-def prompt_prefix(tokenizer: Any, states: tuple[str, ...] = CORE_STATES) -> str:
-    """Rendered text every prompt of a state set starts with (system, few-shots, opening of the
-    final user turn): what the engine prefills into the prompt cache."""
-    text = render_chat(tokenizer, [*base_messages(tuple(states)), {"role": "user", "content": _SENTINEL}])
+def prompt_prefix(tokenizer: Any, states: tuple[str, ...] = CORE_STATES, style: str = DEFAULT_STYLE) -> str:
+    """Rendered text every prompt of a state set and style starts with (system, few-shots in the
+    ``few_shot`` style, opening of the final user turn): what the engine prefills into the prompt cache."""
+    text = render_chat(tokenizer, [*base_messages(tuple(states), style), {"role": "user", "content": _SENTINEL}])
     index = text.find(_SENTINEL)
     return text[:index] if index >= 0 else ""
 

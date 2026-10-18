@@ -258,12 +258,15 @@ def test_env_defaults(monkeypatch):
     monkeypatch.setenv("VALENCE_NARRATOR_ADAPTER", "adapters/v1")
     narrator = Narrator()
     assert (narrator.model_path, narrator.adapter_path) == ("models/llm/Other", "adapters/v1")
-    assert narrator.deadline_s == 2.5 and narrator.max_tokens == 90
+    assert narrator.deadline_s == 2.5 and narrator.max_tokens == 128  # compact style with an adapter
     narrator.close()
     monkeypatch.delenv("VALENCE_NARRATOR_MODEL")
     monkeypatch.delenv("VALENCE_NARRATOR_ADAPTER")
     narrator = Narrator()
     assert narrator.model_path == "models/llm/Qwen3-1.7B-4bit" and narrator.adapter_path is None
+    assert narrator.max_tokens == 90
+    with Narrator(max_tokens=64) as explicit:
+        assert explicit.max_tokens == 64
     narrator.close()
 
 
@@ -323,3 +326,30 @@ def test_request_cache_deep_copies_and_never_mutates_the_base():
 def test_request_cache_disabled():
     backend = MLXBackend(None, prompt_cache=False)
     assert backend.request_cache([1, 2, 3], "SYS") == (None, 0)
+
+
+def test_ship_switch(monkeypatch, tmp_path):
+    from valence.narrator import engine
+
+    monkeypatch.delenv("VALENCE_NARRATOR_ADAPTER", raising=False)
+    monkeypatch.delenv("VALENCE_NARRATOR_SHIP", raising=False)
+    monkeypatch.setattr(engine, "SHIP", "prompt")
+    assert engine.ship_choice() == "prompt" and engine.startup_adapter() is None
+    adapter = tmp_path / "narrator"
+    adapter.mkdir()
+    monkeypatch.setattr(engine, "SHIPPED_ADAPTER", str(adapter))
+    monkeypatch.setenv("VALENCE_NARRATOR_SHIP", "lora")
+    assert engine.startup_adapter() is None  # files missing: degrade to prompt-only
+    for name in ("adapters.safetensors", "adapter_config.json"):
+        (adapter / name).write_text("{}")
+    assert engine.startup_adapter() == str(adapter)
+    assert engine.startup_adapter("adapters/x") == "adapters/x"
+    assert engine.startup_adapter("none") is None
+    monkeypatch.setenv("VALENCE_NARRATOR_ADAPTER", "none")
+    assert engine.startup_adapter() is None
+    with Narrator() as narrator:  # "none" in the env is no adapter, not a path
+        assert narrator.adapter_path is None and narrator.prompt_style == "few_shot"
+    monkeypatch.setenv("VALENCE_NARRATOR_SHIP", "bogus")
+    monkeypatch.delenv("VALENCE_NARRATOR_ADAPTER")
+    with pytest.raises(ValueError):
+        engine.ship_choice()

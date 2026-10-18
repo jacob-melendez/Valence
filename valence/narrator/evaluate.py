@@ -1,7 +1,13 @@
 """Offline narrator evaluation: faithfulness, fallback and latency over a batch of fact sheets.
 
     python -m valence.narrator.evaluate --n 100 --seed 0 --mode llm|template [--states core|all] \\
-        [--adapter PATH] [--model PATH] [--sheets FILE.jsonl] [--out FILE.json] [--no-prompt-cache]
+        [--adapter PATH] [--model PATH] [--sheets FILE.jsonl] [--out FILE.json] [--no-prompt-cache] \\
+        [--prompt-style few_shot|compact] [--deadline S] [--max-tokens N] [--no-probe]
+
+``--sheets`` takes plain fact-sheet rows or dataset rows that carry a ``"sheet"`` field
+(``data/narrator/test.jsonl``). In llm mode the report also holds a decode-throughput probe taken
+before and after the run (``decode_tok_s``) and the power source, so a run on a throttled laptop
+(low-power battery mode) shows up as such instead of as a slow model.
 
 Prints one JSON report. Rates over raw LLM attempts (hallucinated numbers, false mask language,
 banned terms) measure the model itself; ``pass_rate`` measures what users would actually see
@@ -14,8 +20,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import platform
 import re
+import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -23,6 +32,7 @@ from typing import Any
 
 from valence.narrator.engine import Narrator, TemplateOnlyNarrator
 from valence.narrator.fake_fact_sheets import make_batch
+from valence.narrator.prompt import PROMPT_STYLES
 from valence.narrator.validator import validate
 
 _TOKEN = re.compile(r"[a-z0-9]+(?:[.'%-][a-z0-9]+)*%?")
@@ -33,8 +43,43 @@ _QUALIFIER_KINDS = ("qualifier:", "contrast:", "effect:", "direction:")
 
 
 def load_sheets(path: str | Path) -> list[dict[str, Any]]:
+    """Fact sheets from JSONL: plain sheets, or dataset rows whose ``"sheet"`` field holds one."""
     lines = Path(path).read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
+    rows = [json.loads(line) for line in lines if line.strip()]
+    return [row["sheet"] if isinstance(row.get("sheet"), dict) else row for row in rows]
+
+
+def power_source() -> str | None:
+    """macOS power source and battery line (``pmset -g batt``), None elsewhere."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        out = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return " | ".join(" ".join(line.split()) for line in out.splitlines() if line.strip()) or None
+
+
+def decode_probe(narrator: Narrator, sheet: Mapping[str, Any], tokens: int = 64) -> float | None:
+    """Greedy decode tokens/s of the loaded backend on one sheet's prompt (None without a backend).
+
+    Runs on the narrator's worker thread (MLX is single-threaded) with a 60 s deadline.
+    """
+    backend = narrator.backend
+    if backend is None:
+        return None
+    from valence.narrator.engine import SamplingParams
+    from valence.narrator.prompt import build_messages
+
+    messages = build_messages(sheet, None, narrator.prompt_style)
+    params = SamplingParams(temp=0.0, max_tokens=tokens, seed=0)
+
+    def _run() -> float:
+        started = time.perf_counter()
+        generation = backend.generate(messages, params, time.monotonic() + 60)
+        return generation.tokens / max(time.perf_counter() - started, 1e-6)
+
+    return round(narrator._executor.submit(_run).result(), 1)
 
 
 def percentile(values: Sequence[float], q: float) -> float | None:
@@ -150,21 +195,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--states", choices=("core", "all"), default="core", help="state set of synthetic sheets")
     parser.add_argument("--sheets", default=None, help="JSONL fact sheets (default: synthetic make_batch)")
     parser.add_argument("--no-prompt-cache", action="store_true", help="prefill the whole prompt every request")
+    parser.add_argument("--prompt-style", choices=PROMPT_STYLES, default=None,
+                        help="default: compact with an adapter, few_shot without")
+    parser.add_argument("--deadline", type=float, default=None, help="per-request deadline in s (default 2.5)")
+    parser.add_argument("--max-tokens", type=int, default=None, help="token budget per attempt (default by style)")
+    parser.add_argument("--no-probe", action="store_true", help="skip the decode-throughput probe")
     parser.add_argument("--out", default=None, help="also write the JSON report here")
     args = parser.parse_args(argv)
 
     sheets = load_sheets(args.sheets)[: args.n] if args.sheets else make_batch(args.n, args.seed, args.states)
-    narrator = (TemplateOnlyNarrator() if args.mode == "template"
-                else Narrator(args.model, args.adapter, prompt_cache=not args.no_prompt_cache, reuse_texts=False))
+    extra: dict[str, Any] = {} if args.deadline is None else {"deadline_s": args.deadline}
+    narrator = (TemplateOnlyNarrator(**extra) if args.mode == "template"
+                else Narrator(args.model, args.adapter, max_tokens=args.max_tokens, prompt_cache=not args.no_prompt_cache,
+                              reuse_texts=False, prompt_style=args.prompt_style, **extra))
+    probe = args.mode == "llm" and not args.no_prompt_cache and not args.no_probe and bool(sheets)
+    throughput: dict[str, float | None] = {}
+    power = {"start": power_source()}
+    started = time.monotonic()
     with narrator:
         narrator.load()
+        if probe:
+            throughput["start"] = decode_probe(narrator, sheets[0])
         results = run(narrator, sheets)
+        if probe:
+            throughput["end"] = decode_probe(narrator, sheets[0])
+    power["end"] = power_source()
     report = {
         "mode": args.mode,
         "model": narrator.model_path,
         "adapter": narrator.adapter_path,
         "sheets": args.sheets or f"make_batch(n={args.n}, seed={args.seed}, states={args.states!r})",
         "prompt_cache": not args.no_prompt_cache,
+        "prompt_style": narrator.prompt_style,
+        "deadline_s": narrator.deadline_s,
+        "max_tokens": narrator.max_tokens if args.mode == "llm" else None,
+        "wall_s": round(time.monotonic() - started, 1),
+        "decode_tok_s": throughput or None,
+        "power": power,
         **summarize(sheets, results, narrator.deadline_s),
     }
     text = json.dumps(report, indent=2)

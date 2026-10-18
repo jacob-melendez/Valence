@@ -31,3 +31,23 @@ def test_cli_template_mode(capsys, tmp_path):
     report = json.loads(out.read_text())
     assert report["n"] == 12 and report["pass_rate"] == 1.0 and "states='all'" in report["sheets"]
     assert json.loads(capsys.readouterr().out) == report
+
+
+def test_load_sheets_unwraps_dataset_rows(tmp_path):
+    from valence.narrator.evaluate import load_sheets
+
+    sheets = make_batch(3, seed=2)
+    path = tmp_path / "rows.jsonl"
+    path.write_text("\n".join([json.dumps({"messages": [], "sheet": sheets[0]}), json.dumps(sheets[1]), "",
+                               json.dumps({"messages": [], "sheet": sheets[2]})]) + "\n")
+    assert load_sheets(path) == sheets
+
+
+def test_cli_template_on_dataset_rows(tmp_path):
+    rows = tmp_path / "test.jsonl"
+    rows.write_text("".join(json.dumps({"messages": [], "sheet": s}) + "\n" for s in make_batch(5, seed=3)))
+    out = tmp_path / "r.json"
+    assert main(["--n", "5", "--mode", "template", "--sheets", str(rows), "--deadline", "1.5", "--out", str(out)]) == 0
+    report = json.loads(out.read_text())
+    assert report["n"] == 5 and report["pass_rate"] == 1.0 and report["deadline_s"] == 1.5
+    assert report["decode_tok_s"] is None and "power" in report

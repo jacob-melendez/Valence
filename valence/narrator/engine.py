@@ -1,7 +1,7 @@
 """Narrator engine: a validated local-LLM explanation inside a hard deadline, else a template.
 
 Each request gets up to three sampled attempts (temperature 0.7, then 0.4, then greedy; top_p 0.8,
-top_k 20, repetition penalty 1.05, max 90 tokens), each checked by :func:`validate`; the first one
+top_k 20, repetition penalty 1.05, max 90 tokens, or 128 in the ``compact`` style), each checked by :func:`validate`; the first one
 that passes is shown (source ``llm`` on the first attempt, ``llm_retry`` after). A retry carries a
 ``fix:`` line built from the previous draft's rejection reasons. When nothing passes before the
 2.5 s deadline, the deterministic template for the event is returned (source ``template``), so the
@@ -15,6 +15,11 @@ so a request queued behind a slow one does not tie up the worker.
 
 Recently accepted texts are kept per situation (person, label, face case, key drivers) and reused
 only after re-validation against the *current* sheet, so a stale number never survives a reuse.
+
+The prompt style follows the adapter: with a LoRA adapter loaded the engine sends the ``compact``
+prompt (system prompt plus the sheet, no few-shots: what the adapter was trained on), otherwise the
+``few_shot`` prompt; ``prompt_style`` (or ``VALENCE_NARRATOR_PROMPT_STYLE``) overrides it. Each
+style prefills its own prefix cache.
 
 MLX is not thread-safe, so model loading, prompt-cache prefill, warm-up and every generation run
 on one dedicated worker thread; ``narrate`` only submits work and waits up to the deadline. The
@@ -46,6 +51,8 @@ from valence.narrator.prompt import (
     STANDARD_STATE_SETS,
     Message,
     build_messages,
+    check_style,
+    encode_text,
     few_shots,
     prompt_prefix,
     render_chat,
@@ -61,12 +68,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = "models/llm/Qwen3-1.7B-4bit"
 DEADLINE_S = 2.5
 MAX_TOKENS = 90
+MAX_TOKENS_COMPACT = 128  # adapter targets run up to ~118 tokens; 90 would cut ~25% of them
 MIN_ATTEMPT_S = 0.4  # a retry needs a prefill plus most of a short answer
 MIN_FIRST_ATTEMPT_S = 0.3  # a first attempt needs at least the (cached) prefill and a few tokens
 RESERVE_S = 0.05  # generation stops this long before the deadline, leaving time to validate
 TEMPLATE_RESERVE_S = 0.02  # the caller stops waiting this long before the deadline, to render the template
 TEXT_CACHE_SIZE = 256
 SOURCES = ("llm", "llm_retry", "template")
+
+# What ships (the A/B decision in docs/NARRATOR.md): "lora" serves SHIPPED_ADAPTER with the compact
+# prompt, "prompt" serves the base model with the few-shot prompt. ``VALENCE_NARRATOR_SHIP`` overrides
+# it; ``--adapter`` / ``VALENCE_NARRATOR_ADAPTER`` override both ("none" forces prompt-only).
+SHIP = "prompt"
+SHIPPED_ADAPTER = "adapters/narrator"
+SHIP_CHOICES = ("lora", "prompt")
+NO_ADAPTER = ("none", "off", "false", "0")
+_ADAPTER_FILES = ("adapters.safetensors", "adapter_config.json")
 _SENTENCE_DONE = re.compile(r"[.!?][\"'”’)\]]*$")
 
 
@@ -163,6 +180,49 @@ def _as_generation(output: str | Generation) -> Generation:
     return output if isinstance(output, Generation) else Generation(str(output or ""))
 
 
+def resolve_style(adapter_path: str | None, prompt_style: str | None = None) -> str:
+    """Explicit style, else ``VALENCE_NARRATOR_PROMPT_STYLE``, else ``compact`` with an adapter and
+    ``few_shot`` without."""
+    style = prompt_style or os.environ.get("VALENCE_NARRATOR_PROMPT_STYLE") or (
+        "compact" if adapter_path else "few_shot")
+    return check_style(style)
+
+
+def default_max_tokens(style: str) -> int:
+    """Token budget per attempt: the adapter (``compact``) was trained on longer targets than the few-shots."""
+    return MAX_TOKENS_COMPACT if check_style(style) == "compact" else MAX_TOKENS
+
+
+def ship_choice() -> str:
+    """The shipped arm: ``VALENCE_NARRATOR_SHIP`` if set, else :data:`SHIP`."""
+    choice = (os.environ.get("VALENCE_NARRATOR_SHIP") or SHIP).strip().lower()
+    if choice not in SHIP_CHOICES:
+        raise ValueError(f"VALENCE_NARRATOR_SHIP must be one of {SHIP_CHOICES}, got {choice!r}")
+    return choice
+
+
+def shipped_adapter(ship: str | None = None) -> str | None:
+    """:data:`SHIPPED_ADAPTER` when the ship choice is "lora" and its files exist locally, else None
+    (a missing adapter degrades to prompt-only rather than failing the service)."""
+    if (ship or ship_choice()) != "lora":
+        return None
+    root = Path(SHIPPED_ADAPTER)
+    root = root if root.is_absolute() else REPO_ROOT / root
+    if all((root / name).is_file() for name in _ADAPTER_FILES):
+        return SHIPPED_ADAPTER
+    logger.warning("ship choice is lora but %s is incomplete; serving prompt-only", SHIPPED_ADAPTER)
+    return None
+
+
+def startup_adapter(adapter_path: str | None = None) -> str | None:
+    """The adapter a service starts with: ``adapter_path`` (CLI), else ``VALENCE_NARRATOR_ADAPTER``,
+    else the shipped one. "none" (either source) means no adapter."""
+    for value in (adapter_path, os.environ.get("VALENCE_NARRATOR_ADAPTER")):
+        if value:
+            return None if value.strip().lower() in NO_ADAPTER else value
+    return shipped_adapter()
+
+
 def _resolve_local(path: str | None, what: str) -> str | None:
     """Local path only: the narrator never downloads weights or adapters."""
     if not path:
@@ -184,7 +244,7 @@ class Narrator:
         model_path: str | None = None,
         adapter_path: str | None = None,
         deadline_s: float = DEADLINE_S,
-        max_tokens: int = MAX_TOKENS,
+        max_tokens: int | None = None,
         *,
         generate_fn: GenerateFn | None = None,
         schedule: Sequence[SamplingParams] = SCHEDULE,
@@ -192,11 +252,14 @@ class Narrator:
         min_first_attempt_s: float = MIN_FIRST_ATTEMPT_S,
         prompt_cache: bool = True,
         reuse_texts: bool = True,
+        prompt_style: str | None = None,
     ) -> None:
         self.model_path = model_path or os.environ.get("VALENCE_NARRATOR_MODEL") or DEFAULT_MODEL
-        self.adapter_path = adapter_path or os.environ.get("VALENCE_NARRATOR_ADAPTER") or None
+        adapter = adapter_path or os.environ.get("VALENCE_NARRATOR_ADAPTER") or None
+        self.adapter_path = None if adapter is None or adapter.strip().lower() in NO_ADAPTER else adapter
+        self.prompt_style = resolve_style(self.adapter_path, prompt_style)
         self.deadline_s = float(deadline_s)
-        self.max_tokens = int(max_tokens)
+        self.max_tokens = int(max_tokens) if max_tokens is not None else default_max_tokens(self.prompt_style)
         self.schedule = tuple(replace(p, max_tokens=self.max_tokens) for p in schedule)
         self.min_attempt_s = float(min_attempt_s)
         # capped at half the deadline so that short test deadlines still get one attempt
@@ -233,7 +296,7 @@ class Narrator:
     def _load_on_worker(self) -> None:
         started = time.monotonic()
         backend = MLXBackend(_resolve_local(self.model_path, "model"), _resolve_local(self.adapter_path, "adapter"),
-                             prompt_cache=self.prompt_cache)
+                             prompt_cache=self.prompt_cache, prompt_style=self.prompt_style)
         backend.load()
         loaded = time.monotonic()
         backend.warm_up()
@@ -363,7 +426,7 @@ class Narrator:
 
     def _attempt(self, sheet: dict[str, Any], params: SamplingParams, deadline: float, feedback: list[str]) -> Attempt:
         started = time.monotonic()
-        generation = _as_generation(self._generate(build_messages(sheet, feedback or None), params, deadline))
+        generation = _as_generation(self._generate(build_messages(sheet, feedback or None, self.prompt_style), params, deadline))
         result = validate(generation.text, sheet)
         reasons = list(result.reasons)
         if generation.finish in ("length", "deadline"):
@@ -400,6 +463,7 @@ class Narrator:
                 "mode": "llm" if ready else "template",
                 "model": self.model_path if self.backend is not None else None,
                 "adapter": self.adapter_path,
+                "prompt_style": self.prompt_style,
                 "warm": self.warm,
                 "requests": self._requests,
                 "reused": self._reused,
@@ -439,16 +503,19 @@ class _Prefix:
 
 
 class MLXBackend:
-    """mlx-lm generation with a KV cache of the fixed prompt prefix (system prompt + few-shots).
+    """mlx-lm generation with a KV cache of the fixed prompt prefix (system prompt, plus the
+    few-shots in the ``few_shot`` style).
 
-    One prefix per state set is prefilled at load. Each request deep-copies that cache (the way
+    One prefix per state set (for the backend's prompt style) is prefilled at load. Each request deep-copies that cache (the way
     mlx_lm's own ``LRUPromptCache`` hands out cached prefixes) and feeds only the tokens after the
     longest common prefix, so the base cache is never mutated. Must be used from a single thread.
     """
 
-    def __init__(self, model_path: str | None, adapter_path: str | None = None, *, prompt_cache: bool = True) -> None:
+    def __init__(self, model_path: str | None, adapter_path: str | None = None, *, prompt_cache: bool = True,
+                 prompt_style: str | None = None) -> None:
         self.model_path = model_path
         self.adapter_path = adapter_path
+        self.prompt_style = resolve_style(adapter_path, prompt_style)
         self.use_prompt_cache = prompt_cache
         self.model: Any = None
         self.tokenizer: Any = None
@@ -474,14 +541,12 @@ class MLXBackend:
         """Short generations with the real sampling settings (sampled and greedy) for every cached
         state set, so Metal kernels and the cache-copy path are compiled before the first request."""
         for states in STANDARD_STATE_SETS:
-            messages = build_messages(few_shots(states)[1][0])
+            messages = build_messages(few_shots(states)[1][0], style=self.prompt_style)
             for params in (SCHEDULE[0], SCHEDULE[-1]):
                 self.generate(messages, replace(params, max_tokens=8, seed=0), time.monotonic() + 60)
 
     def encode(self, text: str) -> list[int]:
-        bos = getattr(self.tokenizer, "bos_token", None)
-        add_special = bos is None or not text.startswith(bos)
-        return list(self.tokenizer.encode(text, add_special_tokens=add_special))
+        return encode_text(self.tokenizer, text)
 
     def _prefix_for(self, system: str, states: tuple[str, ...] | None = None) -> _Prefix | None:
         """Prefilled prefix for a system prompt, built on first use."""
@@ -496,14 +561,14 @@ class MLXBackend:
         import mlx.core as mx
         from mlx_lm.models.cache import can_trim_prompt_cache, make_prompt_cache
 
-        tokens = self.encode(prompt_prefix(self.tokenizer, states))
+        tokens = self.encode(prompt_prefix(self.tokenizer, states, self.prompt_style))
         cache = make_prompt_cache(self.model)
         if not tokens or not can_trim_prompt_cache(cache):
             return None
         for start in range(0, len(tokens), 512):
             self.model(mx.array(tokens[start:start + 512])[None], cache=cache)
             mx.eval([c.state for c in cache])
-        self._prefixes[system] = prefix = _Prefix(state_set_name(states), tokens, cache)
+        self._prefixes[system] = prefix = _Prefix(f"{state_set_name(states)}/{self.prompt_style}", tokens, cache)
         return prefix
 
     def request_cache(self, tokens: list[int], system: str) -> tuple[list[Any] | None, int]:
