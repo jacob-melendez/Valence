@@ -136,3 +136,28 @@ Replay-mode note: `/api/replay_recording` shows the recording's `frames_decoded`
 reads as a governance mismatch on screen; consider hiding the comparison (or labelling it "recorded") in replay.
 Venue note: background people >= 25% of frame height still get predictions; `VALENCE_MIN_BOX_HEIGHT=0.35` keeps only
 people at the desk.
+
+## Round 4 (edge -> core): venue room baseline — loud demo hall will bias Ambient Physics
+
+The demo venue will be loud and lit unlike the capture room (judges talking nearby, ~65-75 dB). The served model's
+Ambient Physics features are mostly **absolute** (`db_now`, `db_mean_*`, `db_max_*`, `db_ewm_*`, `lux_mean_*`, ...);
+only `db_rel_15m` / `db_d1m15m` / `lux_rel_15m` are relative, and only to the last 15 minutes. In the simulator, loud
+rooms are what Frustrated_Masked (66 dB) and Collaborative_Happy (63 dB) look like, so at the venue every person
+will drift toward those states regardless of their behaviour.
+
+Ask (user's proposal, endorsed by the edge session): **room baseline relative to the venue.**
+1. A control to capture the room baseline at the venue, e.g. `POST /api/control/baseline` (or `/api/room/baseline`):
+   for ~60-120 s with the person sitting neutral, record the room's dB median/IQR and lux median from the live
+   stream (the edge already emits calibrated `db_spl`, `lux`, `lux_quality` every step; nothing new is needed from
+   the edge). Persist it for the session (constants only), show it in `/api/health` / status, reset on demand.
+2. Room features relative to that baseline (`db_rel_room = db - room_median`, `lux_rel_room = log(lux/room_lux)`,
+   etc.), with the simulator drawing a random venue baseline per session (e.g. 40-75 dB, 100-800 lux) so the model
+   learns "louder/darker than this room's normal", not "loud". Keep absolute dB/lux in the display strings so the
+   narrator still quotes real numbers ("72 dB, 6 dB above this room's baseline").
+3. Until that lands, a fallback switch for the demo would help: e.g. `VALENCE_ROOM_RELATIVE=1` that drops or
+   down-weights the absolute dB/lux features (room-only explanations still quote the absolute values).
+
+Edge side, unchanged: per-person baselines (face valence, posture) already reset at the start of each session
+(first 20 s); dB is calibrated by a mic-only offset that transfers to the venue; lux gets a 2-point re-check at the
+venue (`scripts/calibrate_lux.py --two-point`). Laughter/compliment near-field gating (your `near_field_db`) will
+matter more in a noisy hall; please keep it relative to the same room baseline.
