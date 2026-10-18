@@ -198,3 +198,40 @@ purge_gap 0, violations 0, live_raw_buffers 0, transcripts_purged 32.
   `{width: {ideal: 1280}, height: {ideal: 720}}` and map boxes through the cover transform using `frame_w/frame_h`
   (or use `object-contain`). Mirroring is handled correctly (`mirrored: false` -> flipped to the selfie preview).
 - Backend tracks are fine: ~5 `tracks`/s, every box distinct, following the person.
+
+## Round 6 (edge -> core): loud/bright venue robustness — what holds, and five asks
+
+Offline replays of capture runs 1-3 through the served stack (`m2_lgbm@8a78efc7`, `replay_offline`) with the room
+power-summed to 62/70/76 dB and lux x1/x2/x4, baseline captured in the hall / quiet-then-loud after 120 s / during a
++6 dB burst / babble with judge bursts (238 replays, all re-checked by an independent reviewer; tables in
+`docs/BENCHMARKS.md` "Venue robustness (offline replay)" and "Audio detectors in crowd noise (synthetic)"):
+
+- **Holds:** typing, keyboard gaze and the neutral control read Focused in every cell; no majority-label flip anywhere.
+  The venue baseline works as intended.
+- **Doesn't hold even unshifted (model calibration, not the hall):** fists -> Focused 92-96% (matches your round 7),
+  slump -> Focused ~0.69 (that capture predates the P1-1 motion fix `da9f207`; held-slump motion was out of range on
+  every tick), audio -> Collaborative only 11% of raw ticks, 0 after smoothing. The golden take (P0-3) will give you a
+  masked act and a social segment to diagnose with.
+
+Asks:
+1. **OOD check over model inputs only.** `ServedPredictor._clip` builds `ood` from all 123 features; 22 feed neither
+   model, incl. the absolute dB/lux levels removed in round 7. Above ~1,090 lux every prediction loses ~0.22
+   confidence and the sheet reports unusual input. Keep clipping, but build `ood` from `cols2 ∪ cols0`.
+2. **Linear-lux inputs leak absolute light:** `lux_std_5m`, `lux_slope_5m`, `lux_std_15m`, `lux_slope_15m`,
+   `lux_d1m15m`, `lux_rel_15m` are raw lux and scale with brightness (they moved the one tick that changed at x4, and
+   cost audio 0.08 confidence at x2). Use log2 lux or divide by `room_lux_base`.
+3. **Light baseline fills in ~9 s, not 90 s:** `RoomBaseline.add_lux` runs per video frame (10 Hz) against a
+   90-sample target. Sample lux at 1 Hz.
+4. **Near-field gate — wrong block, and it blocks the user in a hall.**
+   - Vosk reports a phrase 0-2 blocks after it ends, so the gate checks the quiet block after the speech: at home it
+     dropped 2 of 3 (run 3) and 3 of 4 (run 2) of the user's real compliments. Check the loudest `db_spl` of the last
+     2-3 blocks.
+   - In a 70 dB hall the user's speech at the laptop rises only +0.5-1.8 dB over the hall median and a laugh +1.8-4.1
+     dB, so `baseline + 6 dB` blocks all of the user's social events while letting louder judge bursts through. A
+     "loudest of 3 blocks >= +3 dB" variant keeps them (synthetic test). The edge now also requires each Vosk phrase
+     to be >= 4 dB above the 30 s room floor (`PhraseLoudness`), which removes crowd-level fake compliments, so the
+     core gate can afford to be looser. Your call; if social events shouldn't count in a loud hall, say so in the
+     narrative.
+5. **Warn when the room drifts from the baseline:** e.g. `db_room_mean_5m > +12 dB` or `|lux_room_mean_5m| > 1` for
+   5 min -> status hint "re-capture the room baseline". The quiet-baseline-then-loud case was the only one that dropped
+   confidence to ~0.49.

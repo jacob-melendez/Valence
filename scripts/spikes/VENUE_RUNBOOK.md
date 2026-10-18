@@ -33,6 +33,16 @@ Everything below runs from **Terminal.app** (Claude Code's shell can't get camer
    until the badge reads **LIVE · CONNECTED**, and check your box follows you.
 8. **First minute is warm-up** (the window fills); predictions say `warming_up` until then.
 
+### Loud/bright hall: what to expect (offline replays, docs/BENCHMARKS.md)
+
+- Capture the baseline **after** you arrive and settle, not during an announcement or a crowd burst. If the hall
+  gets much louder later (keynote starts), re-run it: `curl -X POST 127.0.0.1:8000/api/room/baseline -H
+  'content-type: application/json' -d '{"seconds": 90}'`.
+- Focused reads stay Focused at 62-76 dB and 2-4x the light. If `lux_median` prints above ~1,000, confidence is
+  lower (known core-side issue) but labels hold.
+- Compliments and laughter only count when they are clearly louder than the hall at the mic: say "great job" toward
+  the laptop, at arm's length. In a 70 dB hall, don't rely on them registering.
+
 ## If something goes wrong
 
 | symptom | fix |

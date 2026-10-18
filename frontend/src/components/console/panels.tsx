@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
+  LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
   shownExplanation, stateName, useValence,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
@@ -228,7 +228,8 @@ export function CameraView() {
   useEffect(() => {
     let stream: MediaStream | null = null;
     if (!navigator.mediaDevices?.getUserMedia) { setCam("off"); return; }
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+    // Ask for 16:9: the default 640x480 makes macOS switch the shared camera (and so the backend frame) to 4:3.
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
       .then((st) => { stream = st; if (videoRef.current) videoRef.current.srcObject = st; setCam("on"); })
       .catch(() => setCam("off"));
     return () => stream?.getTracks().forEach((t) => t.stop());
@@ -248,7 +249,8 @@ export function CameraView() {
         {s.persons.map((p) => {
           const pred = s.predictions[p.id];
           const color = stateColor(pred?.label);
-          const [b1, y1, b2, y2] = p.bbox;
+          // Boxes are normalized to the backend frame; the 16:9 view shows it like object-cover (4:3 is cropped).
+          const [b1, y1, b2, y2] = coverBox(p.bbox, s.frameW, s.frameH);
           // The preview is shown mirrored (selfie view), so unmirrored box coordinates are flipped to match (docs/API.md 4.2).
           const [x1, x2] = s.mirrored ? [b1, b2] : [1 - b2, 1 - b1];
           return (
