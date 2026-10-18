@@ -100,7 +100,7 @@ def history_chart(curves: dict[str, list], path: Path) -> None:
         ys = [p[1] for p in pts]
         _line(ax, xs, ys, key, lo=[p[2] for p in pts], hi=[p[3] for p in pts])
         ends[key] = ys[-1]
-    for key, y in _spread_labels(ends, 0.035).items():
+    for key, y in _spread_labels(ends, 0.045).items():
         ax.annotate(f"{SHORT[key]}  {ends[key]:.2f}", (15, y), xytext=(12, 0),
                     textcoords="offset points", va="center", fontsize=8.5, color=TEXT, annotation_clip=False)
     ax.set_xticks(list(sorted({p[0] for pts in curves.values() for p in pts})))
@@ -128,7 +128,7 @@ def robustness_chart(series: dict[str, list], kind: str, path: Path) -> None:
         ys = [p[1] for p in series[key]]
         _line(ax, xs, ys, key)
         ends[key] = (xs[-1], ys[-1])
-    for key, y in _spread_labels({k: v[1] for k, v in ends.items()}, 0.035).items():
+    for key, y in _spread_labels({k: v[1] for k, v in ends.items()}, 0.045).items():
         ax.annotate(f"{SHORT[key]}  {ends[key][1]:.2f}", (ends[key][0], y), xytext=(12, 0),
                     textcoords="offset points", va="center", fontsize=8.5, color=TEXT, annotation_clip=False)
     if kind == "low_light":

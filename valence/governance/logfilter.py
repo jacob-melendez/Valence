@@ -7,6 +7,7 @@ so a stray ``log.debug("frame %s", frame)`` can never put pixels or audio into a
 from __future__ import annotations
 
 import logging
+import sys
 
 import numpy as np
 
@@ -35,6 +36,14 @@ class RawMediaFilter(logging.Filter):
         return True
 
 
+class _StderrHandler(logging.StreamHandler):
+    """Writes to whatever ``sys.stderr`` is at emit time (servers and test runners replace it)."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
 def install(logger: logging.Logger | None = None) -> RawMediaFilter:
     """Filter raw media out of logging.
 
@@ -59,7 +68,7 @@ def install(logger: logging.Logger | None = None) -> RawMediaFilter:
         logging.lastResort.addFilter(flt)
     valence = logging.getLogger("valence")
     if not any(getattr(h, "valence_filtered", False) for h in valence.handlers):
-        handler = logging.StreamHandler()
+        handler = _StderrHandler()
         handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         handler.valence_filtered = True
         valence.addHandler(handler)
