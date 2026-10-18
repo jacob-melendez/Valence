@@ -589,9 +589,9 @@
     "m0t": 0.9672659421854932,
     "m1": 0.8984838582611243,
     "m2_noface": 0.9615705981635821,
-    "m2_noabsdb": 0.9061516595920358,
-    "m2_notime": 0.9749424263576503,
-    "m2": 0.9510378944934529
+    "m2_noabsdb": 0.9362279857932745,
+    "m2_notime": 0.9504035690044854,
+    "m2": 0.9540511783755271
   },
   "summary": {
     "m0": {
@@ -619,23 +619,23 @@
       "temperature": 0.962
     },
     "m2_noabsdb": {
-      "test_macro_f1": 0.8005,
-      "rounds": 168,
+      "test_macro_f1": 0.7934,
+      "rounds": 312,
       "features": 101,
-      "temperature": 0.906
+      "temperature": 0.936
     },
     "m2_notime": {
-      "test_macro_f1": 0.7835,
-      "rounds": 333,
+      "test_macro_f1": 0.7795,
+      "rounds": 312,
       "features": 107,
-      "temperature": 0.975
+      "temperature": 0.95
     },
     "m2": {
-      "test_macro_f1": 0.7974,
-      "rounds": 278,
+      "test_macro_f1": 0.7965,
+      "rounds": 377,
       "features": 110,
-      "temperature": 0.951
+      "temperature": 0.954
     }
   },
-  "trained_at": "2026-10-17 23:59:46"
+  "trained_at": "2026-10-18 00:15:34"
 }
