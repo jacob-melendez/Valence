@@ -17,10 +17,13 @@ export const STATE_DISPLAY: Record<StateKey, string> = {
   Collaborative_Happy: "Collaborative / Happy",
 };
 export const LAYERS = ["Ambient Physics", "Time Dynamics", "Somatic & Social", "Facial Surface"] as const;
+/** The core state set, used until the backend's hello / GET /api/states arrives. */
+export const CORE_STATES: StateInfo[] = STATES.map((id) => ({ id, display: STATE_DISPLAY[id], tier: "P0" }));
 
-/** Full name of a state id; unknown ids (e.g. the P1 states) fall back to the id itself. */
+/** Full name of a state id from the active state set (hello.states), then the core names, then the id itself. */
 export const stateName = (id: string | null | undefined): string =>
-  id ? ((STATE_DISPLAY as Record<string, string | undefined>)[id] ?? id.replace(/_/g, " ")) : "—";
+  id ? (state.states.find((x) => x.id === id)?.display
+    ?? (STATE_DISPLAY as Record<string, string | undefined>)[id] ?? id.replace(/_/g, " ")) : "—";
 
 /** Null-safe number formatting: the backend sends `null` when a sensor had no reading. */
 export function fmt(v: number | null | undefined, digits = 1, fallback = "—"): string {
@@ -105,11 +108,26 @@ export interface EvalSummary {
   figures?: string[];
   [k: string]: unknown;
 }
-export type Scenario = "focused" | "frustrated_masked" | "exhausted" | "collaborative_happy" | "full_demo";
+export type Scenario = string;
+/** GET /api/room/baseline, and `room_baseline` in GET /api/health (docs/API.md 7.4.12). */
+export interface RoomBaseline {
+  mode: "auto" | "capturing" | "captured"; complete: boolean; target_samples: number;
+  db_samples: number; lux_samples: number; db_median: number | null; db_iqr: number | null; lux_median: number | null;
+}
+export interface ScenarioInfo { name: string; description?: string; minutes?: number }
+export interface RecordingInfo { name: string; bytes?: number }
+export interface ReplayOpts { speed: number; loop: boolean }
+export const REPLAY_SPEEDS = [1, 4, 8, 20] as const;
 export type Command =
   | { kind: "control"; action: "start" | "stop" | "pause" }
   | { kind: "break" }
-  | { kind: "replay"; scenario: Scenario }
+  | ({ kind: "replay"; scenario: Scenario } & Partial<ReplayOpts>)
+  | ({ kind: "replay_recording"; name: string } & Partial<ReplayOpts>)
+  | { kind: "live" }
+  | { kind: "demo_reset" }
+  | { kind: "mode"; room_only: boolean }
+  | { kind: "baseline"; seconds: number }
+  | { kind: "baseline_reset" }
   | { kind: "sim"; which: "face_occlusion" | "low_light"; enabled: boolean };
 
 /** Latest narrator text for a person, kept while its label_display is still the current one. */
@@ -134,6 +152,15 @@ export interface ValenceState {
   status: StatusMsg | null;
   retention: Record<string, unknown> | null;
   evalSummary: EvalSummary | null;
+  /** Active state set from hello.states or GET /api/states (4 core, or 6 with the P1 states). */
+  states: StateInfo[];
+  roomOnly: boolean;
+  baseline: RoomBaseline | null;
+  /** Why the edge runner (camera) or the mic failed to start, from POST /api/live or GET /api/health. */
+  edgeError: string | null;
+  micError: string | null;
+  scenarios: ScenarioInfo[];
+  recordings: RecordingInfo[];
   sim: { face_occlusion: boolean; low_light: boolean };
   running: "running" | "paused" | "stopped";
   lastCommand: { text: string; ok: boolean } | null;
@@ -163,6 +190,7 @@ let state: ValenceState = {
   source: "mock", conn: "mock", baseUrl: DEFAULT_API,
   persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [],
   status: null, retention: null, evalSummary: null,
+  states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   sim: { face_occlusion: false, low_light: false }, running: "running",
   lastCommand: null, lastMessageAt: 0,
 };
@@ -207,7 +235,10 @@ export function shownExplanation(p: PredictionMsg, llm: LlmExplanation | undefin
 export function handleMessage(msg: ServerMessage) {
   const now = Date.now();
   switch (msg.type) {
-    case "hello":
+    case "hello": {
+      const states = validStates(msg.states);
+      return set({ ...(states ? { states } : {}), roomOnly: !!msg.room_only, lastMessageAt: now });
+    }
     case "heartbeat":
       return set({ lastMessageAt: now });
     case "tracks":
@@ -260,6 +291,41 @@ export function handleMessage(msg: ServerMessage) {
   }
 }
 
+/** A usable state list from hello.states / GET /api/states, or null to keep the current one. */
+export function validStates(v: unknown): StateInfo[] | null {
+  if (!Array.isArray(v)) return null;
+  const out = v.filter((x): x is StateInfo => !!x && typeof x === "object" && typeof (x as StateInfo).id === "string")
+    .map((x) => ({ id: x.id, display: typeof x.display === "string" && x.display ? x.display : x.id.replace(/_/g, " "), tier: String(x.tier ?? "P0") }));
+  return out.length ? out : null;
+}
+
+/** A room baseline object from GET /api/room/baseline, a baseline POST response or health.room_baseline. */
+export function parseBaseline(v: unknown): RoomBaseline | null {
+  if (!v || typeof v !== "object") return null;
+  const b = v as { [K in keyof RoomBaseline]?: unknown };
+  const mode = b.mode === "capturing" || b.mode === "captured" || b.mode === "auto" ? b.mode : null;
+  if (!mode) return null;
+  const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  return {
+    mode, complete: !!b.complete, target_samples: n(b.target_samples) ?? 0,
+    db_samples: n(b.db_samples) ?? 0, lux_samples: n(b.lux_samples) ?? 0,
+    db_median: n(b.db_median), db_iqr: n(b.db_iqr), lux_median: n(b.lux_median),
+  };
+}
+
+/** Capture progress 0-1: the dB channel's samples of the target (lux when no audio has arrived). */
+export function baselineProgress(b: RoomBaseline | null): number {
+  if (!b) return 0;
+  if (b.mode === "captured" || (b.complete && b.mode !== "capturing")) return 1;
+  if (!b.target_samples) return 0;
+  return Math.max(0, Math.min(1, Math.max(b.db_samples, b.lux_samples) / b.target_samples));
+}
+
+/** Live sensors without a captured venue baseline: the operator should capture one before judging. */
+export function baselineWarning(s: Pick<ValenceState, "source" | "conn" | "status" | "baseline">): boolean {
+  return s.source === "live" && s.conn === "open" && s.status?.mode === "live" && s.baseline?.mode !== "captured";
+}
+
 /** Provenance badges for the header: MOCK, or (when connected) REPLAY / HYBRID / SIMULATED, else LIVE. */
 export function provenanceBadges(s: ValenceState): { label: string; tone: "mock" | "live" | "warn"; title: string }[] {
   if (s.source === "mock") return [{ label: "MOCK", tone: "mock", title: "Generated in the browser, no backend" }];
@@ -278,7 +344,16 @@ export function provenanceBadges(s: ValenceState): { label: string; tone: "mock"
 
 function resetData() {
   recentEvents = {};
-  set({ persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null });
+  set({
+    persons: [], mirrored: false, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
+    states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
+  });
+}
+
+/** The backend forgot its people (demo reset, mode or source change): drop their cards, boxes and narrator text. */
+function clearPeople(history = false) {
+  recentEvents = {};
+  set({ persons: [], vectors: {}, predictions: {}, llm: {}, ...(history ? { history: [] } : {}) });
 }
 
 // ---------- Mock engine ----------
@@ -299,6 +374,15 @@ const mock = {
   counters: { frames: 17000, audio: 3400, transcripts: 200 },
   scenario: "full_demo" as Scenario,
   lastBreakT: 1000 - 3.6 * 3600,
+  /** Mock baseline capture: one dB and one lux sample per mock second. */
+  stepBaseline() {
+    const b = state.baseline;
+    if (!b || !baselineFilling(b)) return;
+    const n = Math.min(b.target_samples, b.db_samples + 1);
+    const done = n >= b.target_samples;
+    set({ baseline: { ...b, db_samples: n, lux_samples: n, complete: done, mode: done && b.mode === "capturing" ? "captured" : b.mode,
+      db_median: +(57 + rnd(-0.3, 0.3)).toFixed(1), db_iqr: 2.3, lux_median: Math.round(410 + rnd(-5, 5)) } });
+  },
   start() {
     if (this.timer) return;
     this.timer = setInterval(() => this.step(), 1000);
@@ -401,11 +485,12 @@ const mock = {
   },
   step() {
     this.t += 1; this.tick += 1;
+    this.stepBaseline();
     const t = this.t;
-    const ids = [1, 2];
+    const ids = state.roomOnly ? [0] : [1, 2];
     const persons: TrackPerson[] = ids.map((id) => {
       const cx = (id === 1 ? 0.3 : 0.7) + Math.sin(t / 6 + id) * 0.02;
-      return { id, label: `Person #${id}`, bbox: [+(cx - 0.14).toFixed(3), 0.2, +(cx + 0.14).toFixed(3), 0.95], fist_active: false, slump: false };
+      return { id, label: id === 0 ? "Room" : `Person #${id}`, bbox: [+(cx - 0.14).toFixed(3), 0.2, +(cx + 0.14).toFixed(3), 0.95], fist_active: false, slump: false };
     });
     handleMessage({ type: "tracks", t, capture_ts_ms: Date.now(), frame_w: 1280, frame_h: 720, mirrored: true, persons });
     const fill = Math.min(15, 5 + (t - 1000) / 60);
@@ -454,7 +539,14 @@ const mock = {
       if (c.action === "start") { this.start(); set({ running: "running" }); }
       else { this.stop(); set({ running: c.action === "pause" ? "paused" : "stopped" }); }
     } else if (c.kind === "break") this.lastBreakT = this.t;
-    else if (c.kind === "replay") { this.scenario = c.scenario; this.start(); set({ running: "running" }); }
+    else if (c.kind === "replay" || c.kind === "replay_recording" || c.kind === "live") {
+      this.scenario = c.kind === "replay" ? c.scenario : "full_demo";
+      clearPeople(); this.start(); set({ running: "running" });
+    } else if (c.kind === "demo_reset") clearPeople();
+    else if (c.kind === "mode") { clearPeople(); set({ roomOnly: c.room_only }); }
+    else if (c.kind === "baseline")
+      set({ baseline: { mode: "capturing", complete: false, target_samples: Math.round(c.seconds), db_samples: 0, lux_samples: 0, db_median: null, db_iqr: null, lux_median: null } });
+    else if (c.kind === "baseline_reset") set({ baseline: { ...MOCK_BASELINE, mode: "auto", complete: false, db_samples: 0, lux_samples: 0 } });
     else set({ sim: { ...state.sim, [c.which]: c.enabled } });
   },
 };
@@ -476,11 +568,19 @@ export const MOCK_EVAL: EvalSummary = {
     { model: "Face-only baseline", accuracy: 0.57, macro_f1: 0.51, ece: 0.14 },
   ],
 };
+// Same shape as GET /api/retention.
 const MOCK_RETENTION = {
-  raw_video_frames_retained: 0, raw_audio_retained: 0, transcripts_retained: 0,
-  state_vector_retention: "15 minutes rolling", predictions_retention: "session only",
-  storage_location: "local RAM only", network_egress: "none (offline)",
+  raw_media_stored: 0,
+  held: [
+    { what: "rolling state vector (numeric TickRecords)", where: "RAM", how_long: "15 minutes" },
+    { what: "recent messages for /api/history", where: "RAM", how_long: "about 20 minutes" },
+    { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "var/audit (mock)", how_long: "deleted at session end; TTL 86400 s after a crash" },
+  ],
+  never_kept: ["video frames (zeroed and released each frame)", "audio blocks (zeroed each block)", "transcripts (Vosk grammar: only lexicon hits exist)", "pose keypoints (stay inside perception)", "face images or embeddings"],
 };
+const MOCK_BASELINE: RoomBaseline = { mode: "captured", complete: true, target_samples: 90, db_samples: 90, lux_samples: 90, db_median: 57.2, db_iqr: 2.3, lux_median: 410 };
+const MOCK_SCENARIOS: ScenarioInfo[] = ["full_demo", "focused", "frustrated_masked", "exhausted", "collaborative_happy"].map((name) => ({ name }));
+const MOCK_RECORDINGS: RecordingInfo[] = [{ name: "golden_demo" }, { name: "capture_typing" }];
 
 // ---------- Live transport ----------
 let ws: WebSocket | null = null;
@@ -498,7 +598,55 @@ async function getJson(path: string): Promise<unknown> {
   return r.json();
 }
 
+/** Latest card per person from GET /api/state, so the console is filled before the next tick arrives. */
+export function applyStateSnapshot(j: unknown) {
+  if (!j || typeof j !== "object") return;
+  const { people, status } = j as { people?: Record<string, { state_vector?: StateVectorMsg; prediction?: PredictionMsg }>; status?: StatusMsg };
+  for (const [key, entry] of Object.entries(people && typeof people === "object" ? people : {})) {
+    // /api/state can keep the other mode's people after a room-only toggle: take person 0 only in room-only mode.
+    if ((Number(key) === 0) !== state.roomOnly) continue;
+    if (entry?.state_vector && typeof entry.state_vector === "object") handleMessage({ ...entry.state_vector, type: "state_vector" });
+    if (entry?.prediction && typeof entry.prediction === "object") handleMessage({ ...entry.prediction, type: "prediction" });
+  }
+  if (status && typeof status === "object" && !state.status) handleMessage({ ...status, type: "status" });
+}
+
+/** /api/health: room baseline plus the edge / mic start errors. */
+export function applyHealth(j: unknown) {
+  if (!j || typeof j !== "object") return;
+  const h = j as { room_baseline?: unknown; edge_error?: unknown; mic_error?: unknown };
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  set({ baseline: parseBaseline(h.room_baseline) ?? state.baseline, edgeError: str(h.edge_error), micError: str(h.mic_error) });
+}
+
+// Room-baseline poll: every 2 s while a capture (or the automatic baseline) is still filling, else health every 10 s.
+const BASELINE_POLL_MS = 2000;
+const HEALTH_EVERY = 5;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollCount = 0;
+export const baselineFilling = (b: RoomBaseline | null) => !!b && (b.mode === "capturing" || !b.complete);
+async function pollOnce() {
+  pollCount += 1;
+  try {
+    if (baselineFilling(state.baseline) && pollCount % HEALTH_EVERY !== 0) {
+      const b = parseBaseline(await getJson("/api/room/baseline"));
+      if (b) set({ baseline: b });
+    } else if (pollCount % HEALTH_EVERY === 0) applyHealth(await getJson("/api/health"));
+  } catch { /* backend restarting: the WebSocket shows the connection state */ }
+}
+function startPoll() {
+  stopPoll();
+  pollCount = 0;
+  pollTimer = setInterval(() => { if (liveActive && state.conn === "open") void pollOnce(); }, BASELINE_POLL_MS);
+}
+function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
 async function loadRest() {
+  try { set({ states: validStates(await getJson("/api/states")) ?? state.states }); } catch { /* hello carries them too */ }
+  try { applyStateSnapshot(await getJson("/api/state")); } catch { /* ignore */ }
+  try { applyHealth(await getJson("/api/health")); } catch { /* ignore */ }
+  try { const j = await getJson("/api/scenarios"); set({ scenarios: Array.isArray(j) ? (j as ScenarioInfo[]).filter((x) => typeof x?.name === "string") : [] }); } catch { /* ignore */ }
+  try { const j = await getJson("/api/recordings"); set({ recordings: Array.isArray(j) ? (j as RecordingInfo[]).filter((x) => typeof x?.name === "string") : [] }); } catch { /* ignore */ }
   try {
     const j = await getJson("/api/history?minutes=15");
     const pts = (Array.isArray(j) ? j : []) as HistoryPoint[];
@@ -525,6 +673,7 @@ function scheduleReconnect() {
 }
 function stopLive() {
   liveActive = false;
+  stopPoll();
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
@@ -535,23 +684,62 @@ export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
   stopLive(); mock.stop(); resetData();
   set({ source, baseUrl: base, running: "running" });
   if (source === "mock") {
-    set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL });
+    set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL, baseline: { ...MOCK_BASELINE }, scenarios: MOCK_SCENARIOS, recordings: MOCK_RECORDINGS });
     mock.backfill(); mock.start();
   } else {
     if (validBase(base)) saveBase(base);
-    liveActive = true; backoff = 1000; connectWs();
+    liveActive = true; backoff = 1000; connectWs(); startPoll();
   }
 }
 
 let booted = false;
 export function boot() { if (!booted) { booted = true; setSource("mock", resolveBaseUrl()); } }
 
-function describe(c: Command) {
+const replayBody = (c: Partial<ReplayOpts>, loopDefault: boolean) => ({ speed: c.speed ?? 1, loop: c.loop ?? loopDefault });
+
+/** Path and JSON body of a command (docs/API.md section 7.4). */
+export function describe(c: Command): readonly [string, Record<string, unknown> | undefined] {
   switch (c.kind) {
-    case "control": return [`/api/control/${c.action}`, undefined] as const;
-    case "break": return ["/api/events/break", undefined] as const;
-    case "replay": return [`/api/replay/${c.scenario}`, undefined] as const;
-    case "sim": return [`/api/sim/${c.which}`, { enabled: c.enabled }] as const;
+    case "control": return [`/api/control/${c.action}`, undefined];
+    case "break": return ["/api/events/break", undefined];
+    case "replay": return [`/api/replay/${encodeURIComponent(c.scenario)}`, replayBody(c, false)];
+    case "replay_recording": return [`/api/replay_recording/${encodeURIComponent(c.name)}`, replayBody(c, true)];
+    case "live": return ["/api/live", undefined];
+    case "demo_reset": return ["/api/demo/reset", undefined];
+    case "mode": return ["/api/mode", { room_only: c.room_only }];
+    case "baseline": return ["/api/room/baseline", { seconds: c.seconds }];
+    case "baseline_reset": return ["/api/room/baseline/reset", undefined];
+    case "sim": return [`/api/sim/${c.which}`, { enabled: c.enabled }];
+  }
+}
+
+/** The fields of a command response the console reads. */
+export interface CommandReply { ok?: unknown; detail?: unknown; edge_error?: unknown; mic_error?: unknown; room_only?: unknown }
+
+/** Store update for a successful command response (`j` is the parsed JSON body, if any). */
+export function applyCommandResult(c: Command, j: CommandReply) {
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  switch (c.kind) {
+    case "sim": return set({ sim: { ...state.sim, [c.which]: c.enabled } });
+    case "control":
+      if (c.action === "stop") clearPeople();
+      return set({ running: c.action === "start" ? "running" : c.action === "pause" ? "paused" : "stopped" });
+    case "live":
+      clearPeople(true);
+      return set({ running: "running", edgeError: str(j.edge_error), micError: str(j.mic_error) });
+    case "replay":
+    case "replay_recording":
+      clearPeople(true);
+      return set({ running: "running" });
+    case "demo_reset": return clearPeople();
+    case "mode":
+      clearPeople();
+      return set({ roomOnly: typeof j.room_only === "boolean" ? j.room_only : c.room_only });
+    case "baseline":
+    case "baseline_reset": {
+      const b = parseBaseline(j);
+      return b ? set({ baseline: b }) : undefined;
+    }
   }
 }
 
@@ -565,9 +753,12 @@ export async function sendCommand(c: Command) {
     const init: RequestInit = { method: "POST" };
     if (body) { init.headers = { "Content-Type": "application/json" }; init.body = JSON.stringify(body); }
     const r = await fetch(api(path), init);
-    if (r.ok && c.kind === "sim") set({ sim: { ...state.sim, [c.which]: c.enabled } });
-    if (r.ok && c.kind === "control") set({ running: c.action === "start" ? "running" : c.action === "pause" ? "paused" : "stopped" });
-    set({ lastCommand: { text: `POST ${path} → ${r.status}`, ok: r.ok } });
+    let j: CommandReply = {};
+    try { const parsed: unknown = await r.json(); if (parsed && typeof parsed === "object") j = parsed as CommandReply; } catch { /* no JSON body */ }
+    if (r.ok) applyCommandResult(c, j);
+    const ok = r.ok && j.ok !== false;
+    const detail = typeof j.detail === "string" ? ` · ${j.detail}` : !ok && typeof j.edge_error === "string" ? ` · ${j.edge_error}` : "";
+    set({ lastCommand: { text: `POST ${path} → ${r.status}${detail}`, ok } });
   } catch {
     set({ lastCommand: { text: `POST ${path} failed (backend unreachable)`, ok: false } });
   }
