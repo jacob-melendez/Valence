@@ -79,5 +79,11 @@ def fist_debouncer() -> HysteresisDebouncer:
 
 
 def laughter_debouncer() -> HysteresisDebouncer:
-    """YAMNet laughter family: ON >= 0.30 for 2 results, OFF below 0.15, 3 s refractory."""
-    return HysteresisDebouncer(on=0.30, off=0.15, on_count=2, off_hold_s=0.0, refractory_s=3.0)
+    """YAMNet laughter family: ON >= 0.05 for 1 result, OFF below 0.02, 4 s refractory.
+
+    Measured on the laptop mic (docs/BENCHMARKS.md, laugh probe): real laughter scored mostly as
+    Speech, with the laughter family at 0.04-0.08 and a single 0.50; quiet and normal talking scored
+    exactly 0.00 even at Speech 0.99. The original 0.30 x 2-results rule never fired. The family
+    is specific enough for a low threshold; other people's laughter is removed downstream by the
+    near-field gate (only events well above the room's level count)."""
+    return HysteresisDebouncer(on=0.05, off=0.02, on_count=1, off_hold_s=0.0, refractory_s=4.0)

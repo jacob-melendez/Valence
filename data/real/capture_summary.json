@@ -1,0 +1,155 @@
+{
+  "captured_at": "2026-10-18 08:06",
+  "segments": [
+    {
+      "segment": "baseline",
+      "seconds": 25,
+      "video_obs": 250,
+      "audio_obs": 25,
+      "video_hz": 10.01,
+      "people_seen": [
+        1
+      ],
+      "person": 1,
+      "present_frac": 1.0,
+      "fist_onsets": 0,
+      "fist_onsets_per_min": 0.0,
+      "slump_duty": 0.0,
+      "head_in_hands_frac": 0.0,
+      "face_visible_frac": 1.0,
+      "face_valence_p10_p50_p90": [
+        0.014,
+        0.024,
+        0.034
+      ],
+      "motion_p10_p50_p90": [
+        0.008,
+        0.01,
+        0.015
+      ],
+      "db_p10_p50_p90": [
+        39.3,
+        39.6,
+        39.8
+      ],
+      "speech_p50": 0.059,
+      "laughter_onsets": 0,
+      "compliment_hits": 0,
+      "lux_p50": 298.3,
+      "frames_decoded_last": 11586
+    },
+    {
+      "segment": "keyboard_gaze",
+      "seconds": 180.0,
+      "video_obs": 1801,
+      "audio_obs": 180,
+      "video_hz": 10.0,
+      "people_seen": [
+        1
+      ],
+      "person": 1,
+      "present_frac": 1.0,
+      "fist_onsets": 0,
+      "fist_onsets_per_min": 0.0,
+      "slump_duty": 0.0,
+      "head_in_hands_frac": 0.0,
+      "face_visible_frac": 1.0,
+      "face_valence_p10_p50_p90": [
+        -0.009,
+        0.012,
+        0.024
+      ],
+      "motion_p10_p50_p90": [
+        0.013,
+        0.021,
+        0.048
+      ],
+      "db_p10_p50_p90": [
+        39.6,
+        40.5,
+        44.7
+      ],
+      "speech_p50": 0.031,
+      "laughter_onsets": 0,
+      "compliment_hits": 0,
+      "lux_p50": 396.5,
+      "frames_decoded_last": 13593
+    },
+    {
+      "segment": "slump",
+      "seconds": 180.0,
+      "video_obs": 1801,
+      "audio_obs": 180,
+      "video_hz": 10.0,
+      "people_seen": [
+        1
+      ],
+      "person": 1,
+      "present_frac": 1.0,
+      "fist_onsets": 0,
+      "fist_onsets_per_min": 0.0,
+      "slump_duty": 0.449,
+      "head_in_hands_frac": 0.0,
+      "face_visible_frac": 0.551,
+      "face_valence_p10_p50_p90": [
+        -0.141,
+        0.014,
+        0.034
+      ],
+      "motion_p10_p50_p90": [
+        0.02,
+        0.077,
+        1.941
+      ],
+      "slump_hit_rate_in_cue": 0.714,
+      "slump_false_rate_upright": 0.027,
+      "db_p10_p50_p90": [
+        39.3,
+        39.5,
+        39.9
+      ],
+      "speech_p50": 0.059,
+      "laughter_onsets": 0,
+      "compliment_hits": 0,
+      "lux_p50": 307.2,
+      "frames_decoded_last": 15470
+    },
+    {
+      "segment": "audio",
+      "seconds": 45,
+      "video_obs": 450,
+      "audio_obs": 45,
+      "video_hz": 10.0,
+      "people_seen": [
+        1
+      ],
+      "person": 1,
+      "present_frac": 1.0,
+      "fist_onsets": 0,
+      "fist_onsets_per_min": 0.0,
+      "slump_duty": 0.0,
+      "head_in_hands_frac": 0.0,
+      "face_visible_frac": 1.0,
+      "face_valence_p10_p50_p90": [
+        0.036,
+        0.04,
+        0.972
+      ],
+      "motion_p10_p50_p90": [
+        0.01,
+        0.02,
+        0.051
+      ],
+      "db_p10_p50_p90": [
+        39.8,
+        41.2,
+        58.2
+      ],
+      "speech_p50": 0.109,
+      "laughter_onsets": 0,
+      "compliment_hits": 4,
+      "lux_p50": 374.9,
+      "frames_decoded_last": 16190
+    }
+  ]
+}

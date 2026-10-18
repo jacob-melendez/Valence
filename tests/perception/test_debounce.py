@@ -128,15 +128,20 @@ class TestRefractory:
         assert sum(results) == 1 and deb.onsets == 1
 
 
+def legacy_laughter() -> HysteresisDebouncer:
+    """The original laughter parameters (0.30 x 2 results): exercises the generic machine."""
+    return HysteresisDebouncer(on=0.30, off=0.15, on_count=2, off_hold_s=0.0, refractory_s=3.0)
+
+
 class TestLaughter:
     def test_on_after_two_results(self) -> None:
-        deb = laughter_debouncer()
+        deb = legacy_laughter()
         assert deb.update(0.30, 0.0) is False
         assert deb.update(0.30, 0.48) is True
         assert deb.active
 
     def test_off_on_first_low_result(self) -> None:
-        deb = laughter_debouncer()
+        deb = legacy_laughter()
         feed(deb, [(0.0, 0.5), (0.48, 0.5)])
         deb.update(0.15, 0.96)
         assert deb.active
@@ -144,7 +149,7 @@ class TestLaughter:
         assert not deb.active
 
     def test_band_holds_and_breaks_streak(self) -> None:
-        deb = laughter_debouncer()
+        deb = legacy_laughter()
         feed(deb, [(0.0, 0.4), (0.48, 0.2), (0.96, 0.4)])
         assert not deb.active
         feed(deb, [(1.44, 0.4)])
@@ -153,12 +158,12 @@ class TestLaughter:
         assert deb.active
 
     def test_nan_turns_off(self) -> None:
-        deb = laughter_debouncer()
+        deb = legacy_laughter()
         feed(deb, [(0.0, 0.5), (0.48, 0.5), (0.96, NAN)])
         assert not deb.active
 
     def test_refractory_three_seconds(self) -> None:
-        deb = laughter_debouncer()
+        deb = legacy_laughter()
         feed(deb, [(0.0, 0.5), (0.5, 0.5), (1.0, 0.0), (1.5, 0.5), (2.0, 0.5)])
         assert deb.active and deb.onsets == 1
         feed(deb, [(2.5, 0.0), (3.0, 0.5), (3.5, 0.5)])
@@ -224,3 +229,19 @@ class TestFistRule:
     def test_nan_restarts_the_hold(self):
         deb = fist_debouncer()
         assert not any(feed(deb, [(0.0, 0.9), (0.2, 0.9), (0.3, float("nan")), (0.4, 0.9), (0.6, 0.9)]))
+
+
+class TestLaughterRule:
+    """Measured rule: ON >= 0.05 for 1 result, OFF < 0.02, 4 s refractory (laugh probe, 1 s results)."""
+
+    def test_probe_laugh_phases_count_once_each(self) -> None:
+        deb = laughter_debouncer()
+        phase2 = [0.00, 0.04, 0.08, 0.00, 0.08, 0.00]  # laughter-family max per second, real laugh
+        phase3 = [0.00, 0.00, 0.50, 0.00, 0.00, 0.04]
+        onsets = [deb.update(x, 20.0 + i) for i, x in enumerate(phase2)]
+        onsets += [deb.update(x, 40.0 + i) for i, x in enumerate(phase3)]
+        assert sum(onsets) == 2
+
+    def test_speech_and_quiet_never_fire(self) -> None:
+        deb = laughter_debouncer()
+        assert not any(deb.update(x, float(i)) for i, x in enumerate([0.0, 0.0, 0.01, 0.0, 0.01, 0.0]))

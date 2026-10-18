@@ -84,8 +84,10 @@ dB values are never averaged.
 
 ### Laughter and speech
 YAMNet (AUDIO_CLIPS, synchronous on the block's last 0.975 s, allowlist Speech / Laughter / Giggle / Snicker /
-Belly laugh / Chuckle, chortle). `laugh` = max of the laughter family: ON at ≥ 0.30 for 2 results, OFF below 0.15,
-onsets with a 3 s refractory. `speech_prob` = the Speech score. Near-field gating happens downstream.
+Belly laugh / Chuckle, chortle). `laugh` = max of the laughter family: ON at ≥ 0.05 for one result, OFF below 0.02, onsets
+with a 4 s refractory. (Measured: the laptop mic hears a real laugh mostly as Speech, laughter family
+0.04-0.08 with one 0.50, while quiet and normal talking score exactly 0.00; the planned 0.30 x 2 rule
+never fired. Other people's laughter is removed downstream by the near-field gate.) `speech_prob` = the Speech score. Near-field gating happens downstream.
 
 ### Compliments
 Vosk small-en-us with a **restricted grammar**: "great job", "nice work", "well done", "thank you", "love it",

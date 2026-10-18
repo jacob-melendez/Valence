@@ -107,7 +107,7 @@ One person at the desk, built-in camera, features only (`data/real/capture_*.jso
 | fists (15 cued two-handed clenches, every 12 s) | **recall 15/15, 0 false onsets**; 28 per-hand onsets before onsets became person-level (now 1 per clench) |
 | keyboard gaze (typing while looking down) | old nose-only slump rule: **slumped 93% of the time** (false). Fixed: slump now needs nose < 0.70x **and** ears < 0.93x baseline |
 | covered camera (15 s) | no person tracked, so no face/fist/slump output |
-| slump, audio | redo pending (slump segment had no upright phases; audio exposed the Vosk zeroing bug, fixed in e38f955) |
+| slump, audio | re-recorded in run 2 below (run 1 had no upright phases; audio exposed the Vosk zeroing bug, fixed in e38f955) |
 
 **Posture probe** (`scripts/spikes/posture_probe.py`, cued upright / keyboard gaze / slump x 3 cycles, ratios of
 head-point height above the shoulder line to the upright baseline, medians):
@@ -129,3 +129,19 @@ on this probe, but nose-only failed on the deeper real typing gaze above. Should
 `valence.edge.run` sets `YOLO_OFFLINE=1`, `YOLO_AUTOINSTALL=false`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` on import.
 With those, the full perception stack under load (`scripts/spikes/gpu_load.py`: YOLO + MediaPipe + lux at 10 Hz)
 held **no inet sockets** (`lsof -i -p <pid>` empty after 15 s). Wi-Fi-off demo rehearsal still to do.
+
+### Run 2 (2026-10-18, after the slump, fist and Vosk fixes; `data/real/capture_summary.json`)
+
+Participants only (the recorder drops bystanders). 10.0 Hz throughout.
+
+| Segment | Result |
+|---|---|
+| keyboard gaze (typing while looking down, 3 min) | **slump 0%** (run 1, nose-only rule: 93%), fist onsets 0, face visible 100%, motion p50 0.021 |
+| slump (6 cued 20 s slumps, 10 s upright gaps) | **6/6 detected**, 4.3-11.3 s after the cue (3 s hold + EMA), slump in 71% of cued frames, **2.7% while upright** |
+| audio ("great job" x3, then laughing) | **compliment hits 4** (>= 3 expected; phrases are not logged by design), laughter onsets 0 under the old rule (see probe) |
+
+**Laugh probe** (`scripts/spikes/laugh_probe.py`, cued quiet / laugh / talk, YAMNet AUDIO_CLIPS per second):
+quiet and talking: laughter family **0.00** every second (Speech up to 0.99); real laughs: Speech 0.1-0.98 with the
+laughter family at 0.04-0.08, and one second at Laughter 0.50 / Snicker 0.26 / Chuckle 0.26. The planned rule
+(>= 0.30 for 2 results) can never fire on this mic; the shipped rule is >= 0.05 for one result, off < 0.02, 4 s
+refractory, which counts 1 onset per real laugh phase and 0 in quiet/talk on the probe.
