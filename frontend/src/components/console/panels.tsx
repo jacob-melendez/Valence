@@ -120,13 +120,20 @@ export function SourceControls() {
   const [speed, setSpeed] = useState<number>(1);
   const [loop, setLoop] = useState(false);
   const scenarios = s.scenarios.length ? s.scenarios : [{ name: "full_demo" }];
-  const rec = recording || s.recordings[0]?.name || "";
+  // The lists change with the source or backend: fall back to the first entry when the picked one is gone,
+  // so the select always shows what Replay sends.
+  const sc = scenarios.some((x) => x.name === scenario) ? scenario : (scenarios[0]?.name ?? "full_demo");
+  const rec = s.recordings.some((x) => x.name === recording) ? recording : (s.recordings[0]?.name ?? "");
+  // Re-posting /api/live while the camera runs re-aligns the frame counters under a running capture.
+  const liveRunning = s.status?.mode === "live" && !!s.status.camera && !s.edgeError;
   return (
     <div className="panel" data-testid="source-controls">
       <div className="panel-title">Source</div>
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Btn small tone="primary" active={s.status?.mode === "live"} onClick={() => sendCommand({ kind: "live" })}>● Go live (camera + mic)</Btn>
+          <Btn small tone="primary" active={s.status?.mode === "live"} disabled={liveRunning} onClick={() => sendCommand({ kind: "live" })}>
+            {liveRunning ? "● Live (camera + mic)" : "● Go live (camera + mic)"}
+          </Btn>
           <span className="font-mono text-xs text-muted-foreground">mode: <span className="text-foreground" data-testid="backend-mode">{String(s.status?.mode ?? "—").toUpperCase()}</span></span>
         </div>
         {(s.edgeError || s.micError) && (
@@ -147,10 +154,10 @@ export function SourceControls() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-20 text-sm text-muted-foreground">Scenario</span>
-          <select aria-label="Replay scenario" value={scenario} onChange={(e) => setScenario(e.target.value)} className={`${selectCls} flex-1`}>
+          <select aria-label="Replay scenario" value={sc} onChange={(e) => setScenario(e.target.value)} className={`${selectCls} flex-1`}>
             {scenarios.map((x) => <option key={x.name} value={x.name}>{x.name.replace(/_/g, " ")}{typeof x.minutes === "number" ? ` · ${fmt(x.minutes, 0)} min` : ""}</option>)}
           </select>
-          <Btn small onClick={() => sendCommand({ kind: "replay", scenario, speed, loop })}>▶ Replay</Btn>
+          <Btn small onClick={() => sendCommand({ kind: "replay", scenario: sc, speed, loop })}>▶ Replay</Btn>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-20 text-sm text-muted-foreground">Recording</span>
@@ -469,7 +476,9 @@ export function Timeline() {
   const s = useValence();
   const ids = [...new Set(s.history.map((h) => h.person_id))].sort();
   const [sel, setPid] = useState(1);
-  const pid = ids.includes(sel) || !ids.length ? sel : (ids[0] ?? sel); // e.g. room-only mode streams person 0
+  // Follow the people currently streaming (room-only mode streams person 0 only), else whoever has history.
+  const live = Object.keys(s.predictions).map(Number).sort((a, b) => a - b);
+  const pid = live.length ? (live.includes(sel) ? sel : (live[0] ?? sel)) : ids.includes(sel) || !ids.length ? sel : (ids[0] ?? sel);
   const pts = s.history.filter((h) => h.person_id === pid);
   const tMax = pts[pts.length - 1]?.t ?? 0;
   const tMin = tMax - 900;

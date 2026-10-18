@@ -313,12 +313,16 @@ export function parseBaseline(v: unknown): RoomBaseline | null {
   };
 }
 
-/** Capture progress 0-1: the dB channel's samples of the target (lux when no audio has arrived). */
+/**
+ * Capture progress 0-1: the dB channel's samples of the target, as the backend completes on dB (about one
+ * audio block per second). Lux arrives with every video frame, so it only stands in when no audio has arrived.
+ */
 export function baselineProgress(b: RoomBaseline | null): number {
   if (!b) return 0;
   if (b.mode === "captured" || (b.complete && b.mode !== "capturing")) return 1;
   if (!b.target_samples) return 0;
-  return Math.max(0, Math.min(1, Math.max(b.db_samples, b.lux_samples) / b.target_samples));
+  const n = b.db_samples > 0 ? b.db_samples : b.lux_samples;
+  return Math.max(0, Math.min(1, n / b.target_samples));
 }
 
 /** Live sensors without a captured venue baseline: the operator should capture one before judging. */
@@ -602,11 +606,15 @@ async function getJson(path: string): Promise<unknown> {
 export function applyStateSnapshot(j: unknown) {
   if (!j || typeof j !== "object") return;
   const { people, status } = j as { people?: Record<string, { state_vector?: StateVectorMsg; prediction?: PredictionMsg }>; status?: StatusMsg };
+  // The snapshot can lose the race with the WebSocket: never roll a card back to an older tick.
+  const newer = (held: { t: number } | undefined, m: { t?: unknown }) => !(typeof m.t === "number" && held && held.t >= m.t);
   for (const [key, entry] of Object.entries(people && typeof people === "object" ? people : {})) {
+    const pid = Number(key);
     // /api/state can keep the other mode's people after a room-only toggle: take person 0 only in room-only mode.
-    if ((Number(key) === 0) !== state.roomOnly) continue;
-    if (entry?.state_vector && typeof entry.state_vector === "object") handleMessage({ ...entry.state_vector, type: "state_vector" });
-    if (entry?.prediction && typeof entry.prediction === "object") handleMessage({ ...entry.prediction, type: "prediction" });
+    if ((pid === 0) !== state.roomOnly) continue;
+    const sv = entry?.state_vector, pred = entry?.prediction;
+    if (sv && typeof sv === "object" && newer(state.vectors[pid], sv)) handleMessage({ ...sv, type: "state_vector" });
+    if (pred && typeof pred === "object" && newer(state.predictions[pid], pred)) handleMessage({ ...pred, type: "prediction" });
   }
   if (status && typeof status === "object" && !state.status) handleMessage({ ...status, type: "status" });
 }
@@ -624,14 +632,25 @@ const BASELINE_POLL_MS = 2000;
 const HEALTH_EVERY = 5;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollCount = 0;
+// Bumped by stopLive(): a REST reply from an earlier connection (or from before a switch to mock) is dropped.
+let liveGen = 0;
+const isCurrent = (gen: number) => gen === liveGen && liveActive;
 export const baselineFilling = (b: RoomBaseline | null) => !!b && (b.mode === "capturing" || !b.complete);
+async function refreshBaseline(gen = liveGen) {
+  try {
+    const b = parseBaseline(await getJson("/api/room/baseline"));
+    if (b && isCurrent(gen)) set({ baseline: b });
+  } catch { /* the next poll retries */ }
+}
 async function pollOnce() {
+  const gen = liveGen;
   pollCount += 1;
   try {
-    if (baselineFilling(state.baseline) && pollCount % HEALTH_EVERY !== 0) {
-      const b = parseBaseline(await getJson("/api/room/baseline"));
-      if (b) set({ baseline: b });
-    } else if (pollCount % HEALTH_EVERY === 0) applyHealth(await getJson("/api/health"));
+    if (baselineFilling(state.baseline) && pollCount % HEALTH_EVERY !== 0) await refreshBaseline(gen);
+    else if (pollCount % HEALTH_EVERY === 0) {
+      const h = await getJson("/api/health");
+      if (isCurrent(gen)) applyHealth(h);
+    }
   } catch { /* backend restarting: the WebSocket shows the connection state */ }
 }
 function startPoll() {
@@ -642,18 +661,24 @@ function startPoll() {
 function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
 
 async function loadRest() {
-  try { set({ states: validStates(await getJson("/api/states")) ?? state.states }); } catch { /* hello carries them too */ }
-  try { applyStateSnapshot(await getJson("/api/state")); } catch { /* ignore */ }
-  try { applyHealth(await getJson("/api/health")); } catch { /* ignore */ }
-  try { const j = await getJson("/api/scenarios"); set({ scenarios: Array.isArray(j) ? (j as ScenarioInfo[]).filter((x) => typeof x?.name === "string") : [] }); } catch { /* ignore */ }
-  try { const j = await getJson("/api/recordings"); set({ recordings: Array.isArray(j) ? (j as RecordingInfo[]).filter((x) => typeof x?.name === "string") : [] }); } catch { /* ignore */ }
-  try {
-    const j = await getJson("/api/history?minutes=15");
+  const gen = liveGen;
+  // Each reply is applied only while this connection is still the current one.
+  const load = async (path: string, apply: (j: unknown) => void) => {
+    if (!isCurrent(gen)) return;
+    try { const j = await getJson(path); if (isCurrent(gen)) apply(j); } catch { /* backend may not be up yet */ }
+  };
+  const named = <T extends { name?: unknown }>(j: unknown) => (Array.isArray(j) ? (j as T[]).filter((x) => typeof x?.name === "string") : []);
+  await load("/api/states", (j) => set({ states: validStates(j) ?? state.states })); // hello carries them too
+  await load("/api/state", applyStateSnapshot);
+  await load("/api/health", applyHealth);
+  await load("/api/scenarios", (j) => set({ scenarios: named<ScenarioInfo>(j) }));
+  await load("/api/recordings", (j) => set({ recordings: named<RecordingInfo>(j) }));
+  await load("/api/history?minutes=15", (j) => {
     const pts = (Array.isArray(j) ? j : []) as HistoryPoint[];
     set({ history: [...pts, ...state.history].sort((a, b) => a.t - b.t) });
-  } catch { /* backend may not be up yet */ }
-  try { set({ retention: (await getJson("/api/retention")) as Record<string, unknown> }); } catch { /* ignore */ }
-  try { set({ evalSummary: (await getJson("/api/eval/summary")) as EvalSummary }); } catch { /* ignore */ }
+  });
+  await load("/api/retention", (j) => set({ retention: j as Record<string, unknown> }));
+  await load("/api/eval/summary", (j) => set({ evalSummary: j as EvalSummary }));
 }
 
 function connectWs() {
@@ -673,6 +698,7 @@ function scheduleReconnect() {
 }
 function stopLive() {
   liveActive = false;
+  liveGen += 1;
   stopPoll();
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
@@ -752,10 +778,15 @@ export async function sendCommand(c: Command) {
   try {
     const init: RequestInit = { method: "POST" };
     if (body) { init.headers = { "Content-Type": "application/json" }; init.body = JSON.stringify(body); }
+    const gen = liveGen;
     const r = await fetch(api(path), init);
     let j: CommandReply = {};
     try { const parsed: unknown = await r.json(); if (parsed && typeof parsed === "object") j = parsed as CommandReply; } catch { /* no JSON body */ }
+    if (!isCurrent(gen)) return; // switched source or backend while the command was in flight
     if (r.ok) applyCommandResult(c, j);
+    // A recording replay always restarts the automatic baseline, and going live restarts it unless captured:
+    // re-read it now rather than at the next health poll.
+    if (r.ok && (c.kind === "live" || c.kind === "replay_recording")) void refreshBaseline(gen);
     const ok = r.ok && j.ok !== false;
     const detail = typeof j.detail === "string" ? ` · ${j.detail}` : !ok && typeof j.edge_error === "string" ? ` · ${j.edge_error}` : "";
     set({ lastCommand: { text: `POST ${path} → ${r.status}${detail}`, ok } });

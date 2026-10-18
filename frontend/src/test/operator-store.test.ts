@@ -74,6 +74,8 @@ describe("room baseline", () => {
     expect(baselineProgress(baseline({ mode: "capturing", db_samples: 45 }))).toBe(0.5);
     expect(baselineProgress(baseline({ mode: "capturing", db_samples: 0, lux_samples: 30 }))).toBeCloseTo(1 / 3);
     expect(baselineProgress(baseline({ mode: "captured", complete: true, db_samples: 90 }))).toBe(1);
+    // Lux arrives with every video frame (about 10 Hz): progress follows the dB channel the backend completes on.
+    expect(baselineProgress(baseline({ mode: "capturing", db_samples: 9, lux_samples: 90 }))).toBeCloseTo(0.1);
     expect(baselineFilling(baseline({ mode: "capturing" }))).toBe(true);
     expect(baselineFilling(baseline({ mode: "auto", complete: true }))).toBe(false);
     expect(baselineFilling(baseline({ mode: "auto" }))).toBe(true);
@@ -161,6 +163,17 @@ describe("GET /api/state on connect", () => {
     expect(getState().predictions[0]?.event_id).toBe("p0-000010");
     expect(getState().predictions[44]).toBeUndefined();
     handleMessage(hello(CORE_STATES, false));
+  });
+
+  it("never rolls a card back to an older tick than the WebSocket already delivered", () => {
+    const newer = prediction(45, 101, "Focused");
+    handleMessage(newer);
+    handleMessage({ type: "explanation", event_id: newer.event_id, person_id: 45, text: "llm 101", source: "llm", latency_ms: 5 });
+    handleMessage({ ...vector(45), t: newer.t });
+    applyStateSnapshot({ people: { "45": { state_vector: { ...vector(45), t: newer.t - 1, ambient_db: 99 }, prediction: prediction(45, 100, "Tense") } } });
+    expect(getState().predictions[45]?.event_id).toBe(newer.event_id);
+    expect(getState().llm[45]?.text).toBe("llm 101");
+    expect(getState().vectors[45]?.ambient_db).toBe(61);
   });
 
   it("ignores an empty or malformed snapshot", () => {
