@@ -2,7 +2,7 @@
 
 Run from Terminal.app (Claude Code's shell has no camera permission):
 
-    python scripts/spikes/live_capture.py                 # full session, ~14 min
+    python scripts/spikes/live_capture.py                 # full session, ~16 min
     python scripts/spikes/live_capture.py --only typing   # one segment
     python scripts/spikes/live_capture.py --seconds 60    # shorter segments
 
@@ -12,7 +12,9 @@ metrics summary to ``data/real/capture_summary.json``:
 
 - fist onsets per minute while typing / looking at the keyboard (false positives),
 - fist recall on cued clenches, slump duty cycle (and agreement with cued slumps),
-- motion distribution, face visibility, video Hz, audio dB / speech / laughter / compliments.
+- motion distribution, face visibility, video Hz, audio dB / speech / laughter / compliments,
+- ``slump_hold``: motion p10/p50/p90 for held-slump frames (5 s into each 30 s hold until its end) vs upright
+  frames, so held-slump motion can be checked against upright (P1-1).
 """
 
 from __future__ import annotations
@@ -51,6 +53,15 @@ def slump_cues(total: float, down: float = 20.0, up: float = 10.0) -> list[tuple
     return [(t, down, ">>> SLUMP: head down, shoulders forward <<<") for t in _arange(5.0, total - 5.0, down + up)]
 
 
+HOLD_LEAD, HOLD_DOWN, HOLD_UP, HOLD_SETTLE = 5.0, 30.0, 15.0, 5.0
+
+
+def slump_hold_cues() -> list[tuple[float, float, str]]:
+    """3 x (30 s slump held still, 15 s upright) after a 5 s upright lead-in."""
+    return [(HOLD_LEAD + k * (HOLD_DOWN + HOLD_UP), HOLD_DOWN, ">>> SLUMP and HOLD STILL (tired, head down) <<<")
+            for k in range(3)]
+
+
 def _arange(a: float, b: float, step: float) -> list[float]:
     out, t = [], a
     while t <= b:
@@ -71,6 +82,9 @@ def segments(sec: float) -> list[Segment]:
                 cues=fist_cues(sec), idle="relax hands (open)"),
         Segment("slump", sec, "Slump when cued (head down, shoulders forward); sit upright otherwise.",
                 cues=slump_cues(sec), idle="sit upright"),
+        Segment("slump_hold", HOLD_LEAD + 3 * (HOLD_DOWN + HOLD_UP),
+                "Three 30 s SLUMPS: slump when cued and then HOLD STILL like a tired person; sit upright otherwise.",
+                cues=slump_hold_cues(), idle="sit upright, still"),
         Segment("covered", 15, "COVER the camera with your hand or a sticky note for the whole segment.",
                 idle="keep the camera covered"),
         Segment("audio", 45, "Say 'great job' three times (pause between), then LAUGH for ~5 s, then stay quiet.",
@@ -118,6 +132,37 @@ def pct(xs: list[float], q: float) -> float:
     return xs[min(len(xs) - 1, int(q * (len(xs) - 1)))] if xs else math.nan
 
 
+def triple(xs: list[float], nd: int = 3) -> list[float]:
+    return [round(pct(xs, q), nd) for q in (0.1, 0.5, 0.9)]
+
+
+def slump_hold_summary(seg: Segment, ps: list) -> dict:
+    """Motion while a slump is held (from 5 s in) vs upright (5 s after a hold ends, or the lead-in)."""
+    def phase(t: float) -> str:
+        for c, d, _ in seg.cues:
+            if c + HOLD_SETTLE <= t <= c + d:
+                return "hold"
+            if c <= t < c + d + HOLD_SETTLE:
+                return "transition"
+        return "upright"
+
+    by: dict[str, list] = {"hold": [], "transition": [], "upright": []}
+    for t, p in ps:
+        by[phase(t)].append(p)
+    out: dict = {}
+    for name, xs in by.items():
+        motion = [p.motion for p in xs]
+        held = sum(a == b and not math.isnan(a) for a, b in zip(motion, motion[1:]))
+        out[f"motion_{name}_p10_p50_p90"] = triple(motion)
+        out[f"{name}_frames"] = len(xs)
+        out[f"{name}_motion_held_frac"] = round(held / max(1, len(motion) - 1), 3)  # tracker holding last value
+        out[f"{name}_slump_frac"] = round(sum(p.slump for p in xs) / max(1, len(xs)), 3)
+        out[f"{name}_face_visible_frac"] = round(sum(p.face_visible for p in xs) / max(1, len(xs)), 3)
+    hold_p50, up_p50 = out["motion_hold_p10_p50_p90"][1], out["motion_upright_p10_p50_p90"][1]
+    out["held_slump_motion_le_upright"] = bool(hold_p50 <= up_p50) if not math.isnan(hold_p50 + up_p50) else None
+    return out
+
+
 def summarize(seg: Segment, obs: list, t0: float) -> dict:
     video = [o for o in obs if isinstance(o, VideoObs)]
     audio = [o for o in obs if isinstance(o, AudioObs)]
@@ -151,6 +196,8 @@ def summarize(seg: Segment, obs: list, t0: float) -> dict:
             outside = [p.slump for t, p in ps if not any(c <= t <= c + d + 2 for c, d, _ in seg.cues)]
             s.update({"slump_hit_rate_in_cue": round(sum(inside) / max(1, len(inside)), 3),
                       "slump_false_rate_upright": round(sum(outside) / max(1, len(outside)), 3)})
+        if seg.name == "slump_hold" and seg.cues:
+            s.update(slump_hold_summary(seg, ps))
     if audio:
         s.update({
             "db_p10_p50_p90": [round(pct([a.db_spl for a in audio], q), 1) for q in (0.1, 0.5, 0.9)],

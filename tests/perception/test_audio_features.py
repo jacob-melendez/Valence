@@ -100,6 +100,32 @@ def test_default_tracker_uses_the_measured_laughter_rule() -> None:
     assert tr.take_onsets() == 1
 
 
+def test_default_tracker_counts_a_laugh_with_a_silent_second_once() -> None:
+    tr = LaughterTracker()
+    seq = [{"Speech": 0.41, "Laughter": 0.04}, {"Speech": 0.11, "Laughter": 0.08},
+           {"Speech": 0.94, "Laughter": 0.0}, {"Speech": 0.15, "Laughter": 0.08, "Snicker": 0.06}]
+    onsets = []
+    for t, s in enumerate(seq):
+        onsets.append(tr.update(s, float(t))[2])
+        if t >= 1:
+            assert tr.active, t  # the instant-exit rule dropped out at the silent second (t=2)
+    assert onsets == [False, True, False, False]
+    assert tr.take_onsets() == 1
+
+
+def test_default_tracker_counts_a_laugh_with_two_silent_seconds_once() -> None:
+    # Capture run 3's shape: the instant-exit, 4 s-refractory rule gave 2 onsets 4 s apart.
+    tr = LaughterTracker()
+    seq = [{"Laughter": 0.08}, {"Laughter": 0.0}, {"Laughter": 0.0}, {"Laughter": 0.04}, {"Laughter": 0.08}]
+    onsets = [tr.update(s, float(t))[2] for t, s in enumerate(seq)]
+    assert onsets == [True, False, False, False, False]
+    assert tr.take_onsets() == 1
+    from valence.perception.debounce import HysteresisDebouncer
+
+    legacy = LaughterTracker(debouncer=HysteresisDebouncer(on=0.05, off=0.02, on_count=1, refractory_s=4.0))
+    assert sum(legacy.update(s, float(t))[2] for t, s in enumerate(seq)) == 2
+
+
 def test_laughter_onset_semantics() -> None:
     tr = LaughterTracker(debouncer=_legacy())
     assert tr.update({"Laughter": 0.35, "Speech": 0.2}, 0.0) == (0.35, 0.2, False)

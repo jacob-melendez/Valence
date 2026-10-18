@@ -47,7 +47,10 @@ class AudioPerceiver:
             self.recognizer.SetWords(True)
 
     def close(self) -> None:
-        self.classifier.close()
+        try:
+            self.classifier.close()
+        except RuntimeError:  # MediaPipe's dispatcher already shut down at interpreter exit
+            pass
 
     def process(self, block: np.ndarray, t: float, wall: float, seq: int) -> AudioObs:
         power = mean_power(block)

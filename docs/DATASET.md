@@ -30,7 +30,7 @@ What this document is and is not:
 | Head-in-hands while laughing | Collaborative_Happy head-in-hands share rises by +0.35 on ticks with laughter (people cover their faces when they laugh). |
 | Difficulty | `noise_scale` = 1.0, **untuned**: criterion A (§12.2) already holds (served M2 macro-F1 0.797 ≤ 0.92, `reports/metrics.json`), so no tuning toward the results was done. The tuning script in §12.2 is not built. |
 | Relative features | `*_rel_15m` = current value minus its 15-minute median (window-only, so train/live parity is exact). |
-| Capture refit (`e0ad762`) | Face, motion, slump, head-in-hands, dB/lux noise, face-hidden and false-positive values were refit to live capture run 1. The as-built values are in `valence/sim/params.py` and `docs/MODEL_CARD.md` §3; sections 7, 9, 10 and Appendix A below still show the pre-refit spec where they differ (except where noted). |
+| Capture refit (`e0ad762`) | Face, motion, slump, head-in-hands, dB/lux noise, face-hidden and false-positive values were refit to live capture run 1. The as-built values are in `valence/sim/params.py` and `docs/MODEL_CARD.md` §3; sections 7, 9, 10 and Appendix A below show these as-built values (§10 keeps the replaced placeholders in parentheses). |
 | Venue and room baseline (`bbd46a4`, `docs/CONTRACT_REQUESTS.md` round 4) | Each session draws a hall level U(40, 75) dB, independent of state, power-summed with the team's own level, and the arrival baseline an operator would capture (`room_db_base`, `room_lux_base`; sections 4.1, 9.2, 9.3); the lux range widened to 100–800. The served models read the room relative to that baseline: 9 room-relative features (`db_room_*`, `lux_room_*`), 123 features computed, 101 used by M2, no absolute dB or lux level. |
 
 ## Contents
@@ -65,7 +65,7 @@ What this document is and is not:
 | Columns | All `TickRecord` fields (`contracts.TICK_FIELDS`) + hidden `true_state`, `episode_age_s` |
 | Hidden state | Per person, semi-Markov over the active state set (4 core states, or 6 with P1) |
 | Context | Room sound and light lag the occupants' states; events are sparse Poisson counts; sensors are noisy, offset and sometimes missing |
-| Face | Valence relative to the person's neutral, per-state mean, masking for `Frustrated_Masked`; missing on a per-session base of 5–40% of ticks (more during head-in-hands; 40–70% in `Overwhelmed`) |
+| Face | Valence relative to the person's neutral, per-state mean, masking for `Frustrated_Masked`; missing on a per-session base of 0–30% of ticks (more during head-in-hands; 40–70% in `Overwhelmed`) |
 | Difficulty | One `noise_scale`, tuned by a rule that never looks at the headline comparison (section 12) |
 | Splits | By session, 70 / 15 / 15; validation split again into an early-stop half and a calibration half |
 | Storage | `data/sim/*.parquet` (gitignored), regenerated deterministically from seeds logged in `artifacts/sim_manifest.json` (planned; today the trainer regenerates sessions in memory from the seed and session count in `artifacts/model_meta.json`) |
@@ -95,7 +95,7 @@ Problems, and what v2 does instead:
 | 1 | **Rows are i.i.d.** The state is redrawn every 5 s, and `hours_since_break` jumps between unrelated values 5 s apart. | A 15-minute window carries no information about the current row, so the thesis ("context over time beats a face snapshot") cannot be tested. | Sessions with a hidden semi-Markov state per person (episodes of minutes), a running break clock, and context that lags the state (sections 6, 9.1). |
 | 2 | **Classes are trivially separable.** The count columns encode the label: fists ≥ 1 only in Frustrated_Masked, compliments ≥ 1 only in Collaborative_Happy, withdrawal = 1 with no fists only in Exhausted. | Three if-statements label every row correctly by construction. A ~100% score proves nothing, and judges see through it. | Overlapping state distributions, sparse Poisson events, room channels shared by everyone present, per-session offsets, detector false positives. |
 | 3 | **No laughter.** The PRD lists laughter as a Somatic & Social signal (and treated it as a keyword); the mock has no column for it. | One of the PRD's own signals is untestable. | `laughter_count` as an audio event (YAMNet live), room scope, near-field gated live. |
-| 4 | **No noise, no missing modalities, no multi-person data.** The face is present on every row; one row per tick with no person or session id. | The anti-bias proof (face hidden or poorly lit) cannot be tested; without session ids any split leaks. | Face missing on 5–40% of ticks (per-session base), extra face noise below 200 lux, 2% per-modality dropout, 1–3 people, session and person ids. |
+| 4 | **No noise, no missing modalities, no multi-person data.** The face is present on every row; one row per tick with no person or session id. | The anti-bias proof (face hidden or poorly lit) cannot be tested; without session ids any split leaks. | Face missing on 0–30% of ticks (per-session base), extra face noise below 200 lux, 2% per-modality dropout, 1–3 people, session and person ids. |
 | 5 | **Unrealistic per-tick fist counts.** randint(1, 4) per 5 s row is 12–48 fists per minute, sustained. | A single row is diagnostic. | ~0.8 fist onsets per minute, bursty. Even in a Frustrated_Masked episode a single 5 s tick holds an onset only ~6% of the time (Poisson arithmetic, before burstiness). |
 | 6 | **No sim-to-real link.** No units, absolute dB with no microphone calibration, no posture/head-in-hands/motion columns, no detector errors (typing never looks like a fist). | A model trained on the mock cannot be run on live features. | Every channel in the edge's units (section 11), a ±12 dB per-session mic offset, false-positive rates measured from a live capture (section 10), and the same `TickRecord` for simulation, replay and live. |
 
@@ -263,32 +263,32 @@ shoulder-widths per second.
 
 | Parameter (`params.py` field) | Focused | Frustrated_Masked | Exhausted | Collaborative_Happy | Overwhelmed (P1) | Tense (P1) |
 |---|---|---|---|---|---|---|
-| Face valence, episode mean (`face_mu`) | −0.15 ("looks angry") | −0.20 unmasked; **+0.45 forced smile** with probability `mask_p` | −0.10 (flat) | +0.55 | −0.30 | −0.45 (face agrees) |
+| Face valence, episode mean (`face_mu`) | 0.00 (neutral) | −0.12 unmasked; **+0.45 forced smile** with probability `mask_p` | −0.04 (flat) | +0.50 | −0.20 | −0.35 (face agrees) |
 | Masking probability per episode (`mask_p`) | 0 | 0.70 core set / 0.92 with P1 | 0 | 0 | 0 | 0 |
-| Face hidden share | session base U(0.05, 0.40) + head-in-hands term | same | same | same | **U(0.40, 0.70) per episode** (hands over the face) | same as Focused |
+| Face hidden share | session base U(0, 0.30) + head-in-hands term | same | same | same | **U(0.40, 0.70) per episode** (hands over the face) | same as Focused |
 | Room dB target, calibrated mic (`db_target`) | 48 | 66 | 45 | 63 | 66 | 70 |
 | Lux link, × session baseline (`lux_mult`) | ×1.00 | ×0.85 | ×0.65 | ×1.15 | ×0.85 | ×0.95 |
 | Fist onsets / min, bursty (`fist_rate`) | 0 | 0.8 | 0 | 0 | 0.2 | 0.8 |
 | Laughter onsets / min into the room (`laugh_rate`) | 0.03 | 0.10 | 0.02 | **0.50** | 0.02 | 0.05 |
 | Compliments / min into the room (`compl_rate`) | 0.02 | 0.02 | 0.01 | **0.20** | 0.01 | 0.01 |
-| Slump, long-run share of time (`slump_p`) * | 0.15 | 0.35 | 0.70 | 0.05 | 0.60 | 0.20 |
-| Head in hands, long-run share (`hih_p`) | 0.20 ("thinking") | 0.25 | 0.40 | 0.10 (laughing; bouts start preferentially in ticks with a laughter onset) | 0.70 | 0.10 |
+| Slump, long-run share of time (`slump_p`) * | 0.05 | 0.30 | 0.70 | 0.03 | 0.60 | 0.20 |
+| Head in hands, long-run share (`hih_p`) | 0.08 ("thinking") | 0.15 | 0.35 | 0.05 (laughing; bouts start preferentially in ticks with a laughter onset) | 0.70 | 0.08 |
 | Social withdrawal | derived per tick from slump and motion (section 9.6); not a free parameter | ← | ← | ← | ← | ← |
-| Motion level, sw/s (`motion`) * | 0.08 | 0.20 | 0.04 | 0.18 | 0.10 | 0.30 |
+| Motion level, sw/s (`motion`) * | 0.03 | 0.05 | 0.015 | 0.06 | 0.03 | 0.09 |
 | Mean dwell, min (`dwell_min`) | 9 | 6 | 8 | 6 | 5 | 5 |
 | Fatigue affinity (`fatigue_affinity`) | −0.6 | +1.0 | +2.0 | −0.5 | +1.5 | +1.0 |
 | Group / solo multiplier | 1.0 / 1.0 | 1.0 / 1.0 | 1.0 / 1.0 | 1.8 / 0.4 | 1.0 / 1.0 | 1.5 / 0.6 |
 | Break-rate multiplier | ×1 | ×1 | ×2 | ×1 | ×2 | ×1 |
 | Plan signature (tendency, not an enforced range) | quiet 40–55 dB, normal light, 1–3 h since break | loud, dim, 3.5–6 h, fists | silent, very dim, 5–8 h, slump / withdrawal | lively 60–75 dB, bright, fresh break, laughter / compliments, ≥ 2 people | head in hands, slump, 3–7 h, 60–75 dB | fists, 65–80 dB, often ≥ 2 people, high motion |
 
-\* Provisional scale. The live feature capture re-anchors motion and slump (section 10); the ordering between
-states is kept.
+\* Refit to live capture run 1 (`e0ad762`, section 10); Focused motion 0.03 sw/s is the quiet-typing median
+measured live.
 
 Design intent of the table (properties built in, not results):
 
-- **The face is informative but not sufficient.** Focused (−0.15), unmasked Frustrated_Masked (−0.20),
-  Exhausted (−0.10) and Overwhelmed (−0.30) overlap once the episode spread (σ 0.20) and tick noise (σ 0.15) are
-  added; a masked Frustrated_Masked episode (+0.45) overlaps Collaborative_Happy (+0.55). This creates the
+- **The face is informative but not sufficient.** Focused (0.00), unmasked Frustrated_Masked (−0.12),
+  Exhausted (−0.04) and Overwhelmed (−0.20) overlap once the episode spread (σ 0.12) and tick noise (σ 0.03) are
+  added; a masked Frustrated_Masked episode (+0.45) overlaps Collaborative_Happy (+0.50). This creates the
   "Focused paradox" and the masking dilemma for a face-only model.
 - **Context is informative but slow, shared and sparse.** dB and light lag the state by minutes, are shared by
   everyone in the room and carry a per-session offset; events are rare per tick. A snapshot of context is weak;
@@ -296,8 +296,8 @@ Design intent of the table (properties built in, not results):
 - **The face reacts first.** A new episode's face appears at once, while context follows with a 1–4 min lag, so
   a face model has a deliberate advantage in the first minutes of an episode. `acc_vs_episode_age.png` reports
   this rather than hiding it.
-- **Frustrated_Masked and Tense differ mainly in the face** (fists 0.8 / min in both; dB 66 vs 70; motion 0.20
-  vs 0.30). The no-face model is expected to confuse this pair; the plan reports it as "the face is informative
+- **Frustrated_Masked and Tense differ mainly in the face** (fists 0.8 / min in both; dB 66 vs 70; motion 0.05
+  vs 0.09). The no-face model is expected to confuse this pair; the plan reports it as "the face is informative
   but not sufficient".
 
 ---
@@ -394,18 +394,18 @@ features exploit.
 | `posture_slump` | U(0.7, 1.0) while slumped, U(0.0, 0.15) otherwise |
 | Head-in-hands state | Same chain with target share = lagged `hih_p` |
 | `head_in_hands_frac` | U(0.5, 1.0) while on, 0 otherwise |
-| `motion_energy` | `lagged motion × exp(N(0, 0.4·ns))`, ×0.7 while slumped |
+| `motion_energy` | `exp(log_motion)`: log-motion follows an AR(1) toward log(lagged `motion` × 0.7 while slumped × 0.5 in a still phase), pull 0.25 per tick (`motion_ar`), innovation N(0, 0.18·ns) (`motion_noise`). Still phases occur in every state: a two-state chain with share 0.4 (`still_share`), switching 0.06 per tick (`still_switch`) |
 | `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if `posture_slump ≥ 0.6` and `motion_energy ≤ 0.02` sw/s (as built), else 0 (0 when either is NaN). The live aggregator calls the same function. |
 
 ### 9.7 Face (`face_valence`, `face_visible`)
 
 | Step | Rule |
 |---|---|
-| Episode face | At episode start: with probability `mask_p` use the forced smile (+0.45), otherwise `face_mu`; then `episode_face ~ N(mean, 0.20)` |
-| Hidden share | Session base U(0.05, 0.40). Per tick: `p_hidden = min(0.98, base + 0.6 × head_in_hands_frac)`. Overwhelmed episodes instead draw `p_hidden ~ U(0.40, 0.70)` once per episode. |
+| Episode face | At episode start: with probability `mask_p` use the forced smile (+0.45), otherwise `face_mu`; then `episode_face ~ N(mean, 0.12)` |
+| Hidden share | Session base U(0, 0.30). Per tick: `p_hidden = min(0.98, base + 0.6 × head_in_hands_frac)`. Overwhelmed episodes instead draw `p_hidden ~ U(0.40, 0.70)` once per episode. |
 | Readable tick | Face readable if video is not dropped and `U(0,1) ≥ p_hidden` |
-| Value | `face_valence = clip(N(episode_face, 0.15·ns + 0.35 × max(0, (200 − light_lux) / 200)), −1, 1)`: tick noise grows below 200 lux (+0.175 at 100 lux, +0.35 at 0 lux) |
-| `face_visible` | U(0.6, 1.0) on a readable tick, 0 otherwise |
+| Value | `face_valence = clip(N(episode_face, 0.03·ns + 0.35 × max(0, (200 − light_lux) / 200)), −1, 1)`: tick noise grows below 200 lux (+0.175 at 100 lux, +0.35 at 0 lux) |
+| `face_visible` | U(0.85, 1.0) on a readable tick, 0 otherwise |
 | Hidden tick | `face_valence = NaN`, `face_visible = 0` |
 
 Valence is relative to the person's neutral (0 = their neutral). Live, the edge subtracts the median of the
@@ -417,7 +417,7 @@ person's first 20 s of visible face; the simulator assumes that baseline is exac
 |---|---|---|
 | Audio dropout | 2% of ticks, per session | `ambient_db`, `db_p90` = NaN; `laughter_count`, `compliments_count` = 0 |
 | Video dropout | 2% of ticks, per person | `posture_slump`, `head_in_hands_frac`, `motion_energy`, `face_valence` = NaN; `face_visible` = 0; `clenched_fists_count` = 0; withdrawal flag 0 |
-| Face hidden | section 9.7 | `face_valence` = NaN on 5–40% of ticks (40–70% in Overwhelmed) |
+| Face hidden | section 9.7 | `face_valence` = NaN on 0–30% of ticks (40–70% in Overwhelmed) |
 | Light | no per-tick dropout (live lux is a 10 s median refreshed at 1 Hz) | — |
 | Clocks | never missing | — |
 
@@ -429,18 +429,18 @@ Count fields are integers in the contract, so a dropped tick reads as 0 events (
 
 Real detectors fire when nothing is happening: typing can look like a fist, looking down at the keyboard can
 look like a slump, keyboard clicks can be heard as laughter. The simulator adds these as state-independent
-rates. **The values below were the placeholders.** Capture run 1 replaced them with measurements (as built in
-`params.FP`: fist 0.02 / min, slump share 0.02, laughter 0.02 / min, compliments 0.01 / min; small non-zero rates
-kept so one event is never certain).
+rates. They started as placeholders; capture run 1 replaced them with measurements (as built in `params.FP`:
+fist 0.02 / min, slump share 0.02, laughter 0.02 / min, compliments 0.01 / min; small non-zero rates kept so one
+event is never certain). The table gives the as-built value, with the placeholder it replaced in parentheses.
 
-| Parameter (`params.FP`) | Placeholder | Meaning | Replaced by (capture → statistic) |
+| Parameter (`params.FP`) | As built (placeholder) | Meaning | Set from (capture → statistic) |
 |---|---|---|---|
-| `fist_per_min` | 0.05 / min | fist onsets with no deliberate fist | quiet typing, 3 min → fist onsets per minute |
-| `slump_share` | 0.05 | share of time the slump flag is on while sitting upright | looking at the keyboard and quiet typing, 3 min each → slump duty cycle |
-| `laugh_per_min` | 0.02 / min (room) | laughter onsets with nobody laughing | quiet typing audio → laughter onsets per minute |
-| `compl_per_min` | 0.01 / min (room) | compliment hits with nobody speaking | quiet typing audio → compliment hits per minute |
-| Motion scale (section 7, `motion`) | Focused 0.08 sw/s, others as listed | typical motion per state | quiet typing → median `motion_energy` anchors Focused; the other states keep their ratios to Focused |
-| Slump scale (section 7, `slump_p`) | as listed | share of time slumped per state | slumping, 3 min → duty cycle of the slump flag while actually slumped; per-state shares are rescaled if the detector sees only part of a real slump |
+| `fist_per_min` | 0.02 / min (0.05) | fist onsets with no deliberate fist | quiet typing, 3 min → fist onsets per minute |
+| `slump_share` | 0.02 (0.05) | share of time the slump flag is on while sitting upright | looking at the keyboard and quiet typing, 3 min each → slump duty cycle |
+| `laugh_per_min` | 0.02 / min (room; unchanged) | laughter onsets with nobody laughing | quiet typing audio → laughter onsets per minute |
+| `compl_per_min` | 0.01 / min (room; unchanged) | compliment hits with nobody speaking | quiet typing audio → compliment hits per minute |
+| Motion scale (section 7, `motion`) | Focused 0.03 sw/s, others as in section 7 (Focused 0.08) | typical motion per state | quiet typing → median `motion_energy` anchors Focused; the other states were refit with it |
+| Slump scale (section 7, `slump_p`) | as in section 7 (Focused 0.15) | share of time slumped per state | slumping, 3 min → duty cycle of the slump flag while actually slumped; per-state shares are rescaled if the detector sees only part of a real slump |
 | Fist hit rate (check only) | — | does the detector see deliberate fists | clenching fists, 3 min → fist onsets per deliberate fist; reported in `docs/BENCHMARKS.md`, not fed into the simulator (per-state fist rates are already observed, post-detector rates) |
 
 Procedure (plan H7:00–10:30):
@@ -654,7 +654,7 @@ None of these checks has been run yet; they are the acceptance criteria for the 
 | Determinism | same seed → same content hash | plan |
 | Sensitivity sweep | printed for ×0.5 / ×1 / ×1.5 | plan |
 | Units and ranges | every channel inside its `SENSOR_SPEC` range; NaN only where section 9.8 allows | this spec |
-| Missingness | per-session base face-hidden share drawn in 5–40%, realized share rising with head in hands; 40–70% in Overwhelmed episodes; dropout ≈ 2% per modality | this spec |
+| Missingness | per-session base face-hidden share drawn in 0–30%, realized share rising with head in hands; 40–70% in Overwhelmed episodes; dropout ≈ 2% per modality | this spec |
 | Splits | no session in two splits | plan |
 | Difficulty target | M2 macro-F1 between 0.85 and 0.92 on the test split; a value outside the band is reported, not tuned away | plan |
 | Sim-to-real | negative control ≤ 20% Frustrated_Masked / Tense on typing; ≥ 90% of live features inside clip bounds | plan |
@@ -710,20 +710,22 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Breaks | `break_per_min` | 1/120, ×2 in Exhausted and Overwhelmed | per min | | Design (below the plan's ~1/90 so long stretches occur); ×2 Design |
 | Breaks | `break_len_min` | U(10, 20), ≥ `break_absent_min` | min | | Design (matches live break rule) |
 | Breaks | state after a break | Focused (alone); Focused or Collaborative_Happy 50/50 (≥ 2 people) | — | | Design |
-| Face | `face_mu` | −0.15 / −0.20 / −0.10 / +0.55 / −0.30 / −0.45 | valence | | Plan (FM unmasked −0.20: Design) |
+| Face | `face_mu` | 0.00 / −0.12 / −0.04 / +0.50 / −0.20 / −0.35 | valence | | Plan (FM unmasked: Design); refit to capture run 1 |
 | Face | `mask_mu` (forced smile) | +0.45 | valence | | Plan |
 | Face | `mask_p` (Frustrated_Masked) | 0.70 core / 0.92 with P1 | — | | Plan (30% unmasked; ≥ 90% masked) |
-| Face | `face_episode_sd` | 0.20 | valence | | Design |
-| Face | `face_tick_sd` | 0.15 | valence | ✓ | Design |
+| Face | `face_episode_sd` | 0.12 | valence | | Design; refit to capture run 1 |
+| Face | `face_tick_sd` | 0.03 | valence | ✓ | Design; refit to capture run 1 |
 | Face | low-light term | +0.35 × max(0, (200 − lux) / 200) added to tick σ | valence | | Plan (< 200 lux); Design (slope) |
-| Face | `face_hidden_range` (session base) | U(0.05, 0.40) | share of ticks | | Plan |
+| Face | `face_hidden_range` (session base) | U(0, 0.30) | share of ticks | | Plan; refit to capture run 1 |
 | Face | head-in-hands hiding | +0.3 × `head_in_hands_frac` on the session share, cap 0.98 (not for Overwhelmed, whose episode share already covers it) | share | | Design |
 | Face | Overwhelmed hidden share | U(0.40, 0.70) per episode | share of ticks | | Plan |
-| Face | `face_visible` when readable | U(0.6, 1.0) | fraction | | Design |
+| Face | `face_visible_range` (`face_visible` when readable) | U(0.85, 1.0) | fraction | | Design; refit to capture run 1 |
 | Sound | `db_target` | 48 / 66 / 45 / 63 / 66 / 70 | dB SPL | | Plan signatures (midpoints) |
 | Sound | empty-room level | 40 | dB SPL | | Design |
 | Sound | `room_tau_min` | U(2, 4) per session | min | ✓ | Plan |
-| Sound | `db_noise` | 4 | dB (σ per tick) | ✓ | Plan |
+| Sound | `db_noise` | 1.2 | dB (σ per tick) | ✓ | Plan; refit to capture run 1 |
+| Sound | `db_drift` | AR(1) ×0.95 per tick, σ 0.5 | dB per tick | ✓ | Design (capture run 1) |
+| Sound | transients (`sound_events_per_min`, `sound_event_db`, `sound_event_ticks`) | 0.3 per min, +4 to +12 dB (30%: −0.5× that), 2–8 ticks, state-independent | dB | | Design (capture run 1) |
 | Sound | `mic_offset_db` | U(−12, +12) per session | dB | | Plan (±12–15) |
 | Sound | laughter bump | +2 dB per laughter onset, at most 2 | dB | | Design |
 | Sound | p90 | ambient + 2 + abs(N(0, 2)) + 1.5 if laughter | dB | ✓ (σ) | Design |
@@ -734,22 +736,25 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Light | `baseline_lux_noise` (arrival capture error) | lognormal σ 0.08 | log units | ✓ | Design |
 | Light | time-of-day factor | ×0.85 from 22:00 to 06:00 | — | | Plan (drift); Design (value) |
 | Light | `lux_mult` | ×1.00 / ×0.85 / ×0.65 / ×1.15 / ×0.85 / ×0.95 | — | | Plan (dim / bright signatures); Design (values) |
-| Light | lux tick noise | lognormal σ 0.08 | log units | ✓ | Design |
+| Light | `lux_noise` (tick jitter) | lognormal σ 0.015 | log units | ✓ | Design; refit to capture run 1 |
+| Light | `lux_drift` | AR(1) on log-lux, ×0.98 per tick, σ 0.01 | log units | ✓ | Design (capture run 1) |
+| Light | transients (`light_events_per_min`, `light_event_mult`, `light_event_ticks`) | 0.5 per min, ×U(0.75, 1.3), 2–12 ticks, state-independent | — | | Design (capture run 1) |
 | Events | `fist_rate` | 0 / 0.8 / 0 / 0 / 0.2 / 0.8 | per min | | Plan (0.8 bursty); Design (Overwhelmed 0.2) |
 | Events | fist burst modulator | ×1.7 / ×0.3, equal time, switch p = 0.1 per tick | — | | Design (mean-preserving) |
 | Events | `laugh_rate` | 0.03 / 0.10 / 0.02 / 0.50 / 0.02 / 0.05 | per min per person | | Plan (Happy 0.5); Design (others) |
 | Events | `compl_rate` | 0.02 / 0.02 / 0.01 / 0.20 / 0.01 / 0.01 | per min per person | | Plan (Happy 0.2); Design (others) |
-| Body | `slump_p` | 0.15 / 0.35 / 0.70 / 0.05 / 0.60 / 0.20 | share of time | | Design; scale Placeholder |
-| Body | `hih_p` | 0.20 / 0.25 / 0.40 / 0.10 / 0.70 / 0.10 | share of time | | Plan |
+| Body | `slump_p` | 0.05 / 0.30 / 0.70 / 0.03 / 0.60 / 0.20 | share of time | | Design; scale Placeholder |
+| Body | `hih_p` | 0.08 / 0.15 / 0.35 / 0.05 / 0.70 / 0.08 | share of time | | Plan; refit to capture run 1 |
 | Body | slump / head-in-hands chain switching | 0.15 per tick | — | | Design |
 | Body | slump tick value | on U(0.7, 1.0), off U(0, 0.15) | fraction | | Design |
 | Body | head-in-hands tick value | on U(0.5, 1.0), off 0 | fraction | | Design |
-| Body | `motion` | 0.08 / 0.20 / 0.04 / 0.18 / 0.10 / 0.30 | shoulder-widths/s | | Design; scale Placeholder |
-| Body | motion noise | lognormal σ 0.4; ×0.7 while slumped | log units | ✓ | Design |
+| Body | `motion` | 0.03 / 0.05 / 0.015 / 0.06 / 0.03 / 0.09 | shoulder-widths/s | | Design; scale Placeholder |
+| Body | `motion_ar` / `motion_noise` | log-AR(1) toward the state mean, pull 0.25 per tick, innovation σ 0.18; ×0.7 while slumped | log units | ✓ (innovation) | Design; refit to capture run 1 |
+| Body | still phases (`still_share`, `still_switch`, `still_motion_mult`) | share 0.4, switch 0.06 per tick, ×0.5 motion, in every state | — | | Design (capture run 1) |
 | Body | `person_tau_min` | U(1, 2) per person | min | ✓ | Design |
 | Body | withdrawal rule | slump ≥ 0.6 and motion ≤ 0.02 sw/s, as built (`features/spec.py`) | — | | Design (shared with live) |
-| Detectors | `FP["fist_per_min"]` | 0.05 | per min | | Placeholder |
-| Detectors | `FP["slump_share"]` | 0.05 | share of time | | Placeholder |
+| Detectors | `FP["fist_per_min"]` | 0.02 | per min | | Placeholder |
+| Detectors | `FP["slump_share"]` | 0.02 | share of time | | Placeholder |
 | Detectors | `FP["laugh_per_min"]` | 0.02 (room) | per min | | Placeholder |
 | Detectors | `FP["compl_per_min"]` | 0.01 (room) | per min | | Placeholder |
 | Missing | `dropout` | 0.02 per tick, per modality (audio per session; video per person) | probability | | Plan |

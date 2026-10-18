@@ -181,7 +181,7 @@ class EdgeRunner:
     def __call__(self) -> None:
         self._stop.set()
         for th in self._threads:
-            th.join(timeout=5.0)
+            th.join(timeout=15.0)  # long enough for a final process() + MediaPipe close; daemon threads otherwise
         if self.camera is not None:
             self.camera.close()
         if self.mic is not None:

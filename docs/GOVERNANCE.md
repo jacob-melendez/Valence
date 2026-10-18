@@ -111,17 +111,23 @@ held results object is caught as a violation.
   frames not yet purged) and publishes it in the `governance` message, `/api/governance/stats` and the contract
   (`Governance.purge_gap`, `valence/contracts.py`). A gap above 2 for 3 consecutive ticks adds `purge_gap` to
   `status.degraded` (`valence/api/app.py`). It is an alarm, not a stop: capture keeps running.
-- **Replay.** When the tick source is not live (scenario or recording replay), the `governance` message reports
-  this process's own `frames_purged` as `frames_decoded` (`engine.py`), so the pair is equal by construction,
-  `purge_gap` is 0 and proves nothing. `/api/governance/stats` still reads the aggregator, which keeps
-  `max(frames_decoded)` over incoming `VideoObs`: during `POST /api/replay_recording/{name}` its `frames_decoded`
-  shows the counts stamped in the recording (§8 gap 3). Read the pair only in live mode.
-- **Capture restarts.** The aggregator keeps the largest `frames_decoded` it has seen and never resets it, each edge
-  start opens a new capture whose counter starts at 0, and `frames_purged` counts for the whole process. After
-  pause/stop → start or `POST /api/live`, `frames_purged` leads by the pre-restart count and `purge_gap` stays 0, so
-  the check goes blind. After a recording replay, `POST /api/live` keeps the recording's stamped count, so
-  `purge_gap` reads high (a false alarm) until the new capture passes it. The pair is meaningful only while the
-  first capture of the API process runs (§8 gap 3).
+- **Replay.** When the tick source is not live (scenario or recording replay), the `governance` message and
+  `/api/governance/stats` both report the current source's own `frames_purged` as `frames_decoded` (`engine.py`,
+  `valence/api/app.py`), so the pair is equal by construction, `purge_gap` is 0 and proves nothing. The counts
+  stamped in a recording are never shown. `/api/governance/stats` also reports `frames_purged_process`, the
+  video frames purged by the whole API process. Read the pair only in live mode.
+- **Capture restarts and source changes.** Both counters cover the current source only. Each edge start
+  (pause/stop → start) opens a new capture whose counter restarts at 0; the aggregator sees the count drop and
+  adds the previous capture's last count as an offset (`Aggregator._push_video`), so `frames_decoded` keeps
+  counting across the restart, as `frames_purged` does. Every source change (`POST /api/live`, scenario or
+  recording replay) re-aligns the pair (`Runtime._new_source_counters`): the aggregator's decoded count and
+  offset go back to 0, `frames_purged` counts from the gate's purged-video total at that moment, and the run of
+  ticks above the threshold restarts. `purge_gap` therefore stays within the in-flight tolerance across a
+  capture restart or source change unless frames really go unpurged: a restart does not blind the check, and a
+  recording replay leaves no false alarm behind (§8 gap 3,
+  `tests/test_runtime.py::test_frame_counter_survives_capture_restart_and_source_change`). Frames the old capture
+  decoded after its last observation are purged but not in the offset, so each restart can add up to the
+  in-flight slot to `frames_purged`'s lead.
 
 ### 3.5 Honest limits
 
@@ -183,7 +189,7 @@ Start the API first (`make live` on the Mac, or `make replay`); it listens on 12
 | Gate zeroes, tracks views, catches leaks and held detector results; scan, filter and chain work | `.venv/bin/python -m pytest -v tests/test_purge.py tests/test_no_persistence_ast.py tests/test_logfilter.py tests/test_audit.py` | 22 passed (cloud container, 2026-10-18) |
 | Real perceivers zero every buffer, keep no reference, and `--obscure-face` hides every face (Mac, models downloaded) | `.venv/bin/python -m pytest -v tests/perception/test_perceiver_privacy.py` | All 5 pass. Not run here: in the cloud all 5 skip (no models) |
 | No persistence in raw-media code | `.venv/bin/python -m valence.governance.persistence_scan --exceptions` | `0 violation(s), 0 documented exception(s)`, exit 0 |
-| Counters | `curl -s 127.0.0.1:8000/api/governance/stats` | `violations` 0; `live_raw_buffers` 0 (a momentary in-flight buffer is possible); `unzeroable` `{}`; live, while the API process's first capture runs (§3.4): `frames_purged − frames_decoded` in 0..2 and `purge_gap` ≤ 2, no `purge_gap` in `status.degraded`; `make replay`: both 0 |
+| Counters | `curl -s 127.0.0.1:8000/api/governance/stats` | `violations` 0; `live_raw_buffers` 0 (a momentary in-flight buffer is possible); `unzeroable` `{}`; live, for the current source (§3.4; each capture restart can add up to 2 to the lead): `frames_purged − frames_decoded` in 0..2 and `purge_gap` ≤ 2, no `purge_gap` in `status.degraded`; `make replay`: both 0 |
 | Chain integrity | `curl -s 127.0.0.1:8000/api/governance/verify`; then change one digit of a payload value in `var/audit/<session>.jsonl` (keep the line valid JSON: a broken line makes the endpoint fail with HTTP 500) and call it again | `{"ok": true, ...}`, then `"ok": false` with the bad position |
 | Retention policy | `curl -s 127.0.0.1:8000/api/retention` | `raw_media_stored: 0`, held items, never-kept list |
 | Audit deleted at shutdown | Ctrl-C the server, then `ls var/audit/` | That session's file is gone |
@@ -247,7 +253,7 @@ Numbers are kept stable so other documents can cite them; fixed items moved to �
 | # | Was | Fixed in the code | Check |
 |---|---|---|---|
 | 1 | Log filter missed `valence.*` records under uvicorn (no root handler at `install()`, so the last-resort handler printed them unfiltered) | `logfilter.install()` covers every existing logger and handler, `logging.lastResort` and a filtered `valence` handler with propagation off (§4) | `tests/test_logfilter.py::test_install_filters_valence_child_loggers_without_root_handlers` |
-| 3 | `frames_decoded == frames_purged` was displayed, not checked | `purge_gap` in the `governance` message, `/api/governance/stats` and `Governance.purge_gap`; `purge_gap` in `status.degraded` after 3 ticks above 2 (`valence/runtime/engine.py`, `valence/api/app.py`, `valence/contracts.py`). In replay the `governance` message reports this process's own count (§3.4). Holds only for the process's first capture (gap 3) | §6 "Counters" |
+| 3 | `frames_decoded == frames_purged` was displayed, not checked | `purge_gap` in the `governance` message, `/api/governance/stats` and `Governance.purge_gap`; `purge_gap` in `status.degraded` after 3 ticks above 2 (`valence/runtime/engine.py`, `valence/api/app.py`, `valence/contracts.py`). In replay both report the current source's own count (§3.4). Holds across capture restarts and source changes (gap 3, fixed) | §6 "Counters" |
 | 6 | Absent people's window slots were never evicted; history and the narration cache survived stop and reset | `Runtime._evict` drops the slot, smoother and latest state after `person_drop_min`; `reset_people` (reset, stop, `POST /api/live`, replay) clears history and calls `narrator_client.clear_cache` (`engine.py`) | `tests/test_runtime.py::test_absent_people_are_evicted_and_reset_clears_history` |
 | 7 | Self-report labels had no TTL | `expire_labels` deletes label files older than `audit_ttl_s` at API startup (`valence/api/app.py`) | Startup only, like the audit TTL |
 | 12 | Scan missed aliased media imports, `os.write`, `os.fdopen`, `shutil` copies | `persistence_scan.py`: banned names imported from a media module under any alias, `os.write/writev/fdopen/open` in `perception/`, `shutil.copy*`/`move` (§4); the rest stays in gap 12 | `tests/test_no_persistence_ast.py::test_scanner_catches_aliases_low_level_writes_and_copies` |
