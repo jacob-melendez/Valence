@@ -391,8 +391,8 @@ features exploit.
 | Channel | Rule |
 |---|---|
 | Slump state | Two-state Markov chain per person. With target share `p = lagged slump_p + FP_slump_share`: when off, switch on with probability 0.15·p per tick; when on, switch off with probability 0.15·(1 − p). Stationary share = p; bouts last minutes, not ticks. |
-| `posture_slump` | U(0.7, 1.0) while slumped, U(0.0, 0.15) otherwise |
-| Head-in-hands state | Same chain with target share = lagged `hih_p` |
+| `posture_slump` | U(0.7, 1.0) while slumped; otherwise 0, or U(0.0, 0.1) on 15% of ticks |
+| Head-in-hands state | Same chain with target share = lagged `hih_p` (+0.35 for Collaborative_Happy on ticks with a laughter onset, when the chain also switches with probability 0.35 instead of 0.15) |
 | `head_in_hands_frac` | U(0.5, 1.0) while on, 0 otherwise |
 | `motion_energy` | `exp(log_motion)`: log-motion follows an AR(1) toward log(lagged `motion` × 0.7 while slumped × 0.5 in a still phase), pull 0.25 per tick (`motion_ar`), innovation N(0, 0.18·ns) (`motion_noise`). Still phases occur in every state: a two-state chain with share 0.4 (`still_share`), switching 0.06 per tick (`still_switch`) |
 | `social_withdrawal_flag` | `withdrawal_flag(posture_slump, motion_energy)` from `valence/features/spec.py`: 1 if `posture_slump ≥ 0.6` and `motion_energy ≤ 0.02` sw/s (as built), else 0 (0 when either is NaN). The live aggregator calls the same function. |
@@ -402,7 +402,7 @@ features exploit.
 | Step | Rule |
 |---|---|
 | Episode face | At episode start: with probability `mask_p` use the forced smile (+0.45), otherwise `face_mu`; then `episode_face ~ N(mean, 0.12)` |
-| Hidden share | Session base U(0, 0.30). Per tick: `p_hidden = min(0.98, base + 0.6 × head_in_hands_frac)`. Overwhelmed episodes instead draw `p_hidden ~ U(0.40, 0.70)` once per episode. |
+| Hidden share | Session base U(0, 0.30). Per tick: `p_hidden = min(0.98, base + 0.3 × head_in_hands_frac)`. Overwhelmed episodes instead draw `p_hidden ~ U(0.40, 0.70)` once per episode. |
 | Readable tick | Face readable if video is not dropped and `U(0,1) ≥ p_hidden` |
 | Value | `face_valence = clip(N(episode_face, 0.03·ns + 0.35 × max(0, (200 − light_lux) / 200)), −1, 1)`: tick noise grows below 200 lux (+0.175 at 100 lux, +0.35 at 0 lux) |
 | `face_visible` | U(0.85, 1.0) on a readable tick, 0 otherwise |
@@ -728,7 +728,7 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Sound | transients (`sound_events_per_min`, `sound_event_db`, `sound_event_ticks`) | 0.3 per min, +4 to +12 dB (30%: −0.5× that), 2–8 ticks, state-independent | dB | | Design (capture run 1) |
 | Sound | `mic_offset_db` | U(−12, +12) per session | dB | | Plan (±12–15) |
 | Sound | laughter bump | +2 dB per laughter onset, at most 2 | dB | | Design |
-| Sound | p90 | ambient + 2 + abs(N(0, 2)) + 1.5 if laughter | dB | ✓ (σ) | Design |
+| Sound | p90 | ambient + 1.5 + abs(N(0, 1)) + 1.5 if laughter | dB | ✓ (σ) | Design |
 | Sound | `venue_db_range` (hall level, power-summed with the room) | U(40, 75) per session; scenarios none unless `venue_db` | dB SPL | | Design (`docs/CONTRACT_REQUESTS.md` round 4) |
 | Sound | `neutral_db` (one neutral occupant, for the arrival baseline) | 48 | dB SPL | | Design (= Focused `db_target`) |
 | Sound | `baseline_db_noise` (arrival capture error) | 1.5 | dB (σ) | ✓ | Design |
@@ -745,8 +745,8 @@ create overlap or realism; **Placeholder** = replaced from the live feature capt
 | Events | `compl_rate` | 0.02 / 0.02 / 0.01 / 0.20 / 0.01 / 0.01 | per min per person | | Plan (Happy 0.2); Design (others) |
 | Body | `slump_p` | 0.05 / 0.30 / 0.70 / 0.03 / 0.60 / 0.20 | share of time | | Design; scale Placeholder |
 | Body | `hih_p` | 0.08 / 0.15 / 0.35 / 0.05 / 0.70 / 0.08 | share of time | | Plan; refit to capture run 1 |
-| Body | slump / head-in-hands chain switching | 0.15 per tick | — | | Design |
-| Body | slump tick value | on U(0.7, 1.0), off U(0, 0.15) | fraction | | Design |
+| Body | slump / head-in-hands chain switching | 0.15 per tick (head-in-hands 0.35 on ticks with laughter) | — | | Design |
+| Body | slump tick value | on U(0.7, 1.0); off 0, or U(0, 0.1) on 15% of ticks | fraction | | Design |
 | Body | head-in-hands tick value | on U(0.5, 1.0), off 0 | fraction | | Design |
 | Body | `motion` | 0.03 / 0.05 / 0.015 / 0.06 / 0.03 / 0.09 | shoulder-widths/s | | Design; scale Placeholder |
 | Body | `motion_ar` / `motion_noise` | log-AR(1) toward the state mean, pull 0.25 per tick, innovation σ 0.18; ×0.7 while slumped | log units | ✓ (innovation) | Design; refit to capture run 1 |
