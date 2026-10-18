@@ -58,8 +58,15 @@ Keypoints with conf < 0.5 are NaN. `head_drop = (shoulder_mid_y − nose_y) / sh
 Baseline = median over the person's first 20 s (≥ 10 samples). **Slump** when `head_drop < 0.7 × baseline` for ≥ 3 s;
 clears on recovery. **Head-in-hands** when both wrists are within 0.5 shoulder-widths of the nearest visible head
 point (nose, eyes or ears, since hands hide the nose) and above the shoulder line for ≥ 2 s.
-**Motion** = mean displacement of keypoints valid in consecutive samples / shoulder width / dt, i.e. shoulder-widths
-per second (EMA α 0.3); NaN when undefined (0.0 means still).
+**Motion** = mean displacement of the torso and arm keypoints (COCO 5-12: shoulders, elbows, wrists, hips) with
+conf ≥ 0.6 in both consecutive samples / shoulder width / dt, i.e. shoulder-widths per second (EMA α 0.3). The head is
+excluded because a dropped head's nose/eyes/ears lose confidence and jump: a held slump read 0.101 sw/s live under the
+old all-keypoint mean, against 0.033 upright. A point that moved > 1 shoulder width in one sample is dropped as a
+keypoint identity switch, and each left/right pair is matched whichever way is shorter, so a one-sample L/R label swap
+is not motion (a mean of the rest, not a median, so one moving arm still counts). With fewer than 3 surviving points,
+unless both shoulders survive (arms out of a laptop frame), the last value is held; NaN only before the first
+measurable pair (0.0 means still).
+`scripts/spikes/live_capture.py --only slump_hold` measures held-slump vs upright motion.
 
 ### Face valence (`face_valence.py`)
 FaceLandmarker (IMAGE mode, blendshapes) at 5 Hz: one full-frame pass matched to people by the YOLO nose keypoint
@@ -84,10 +91,13 @@ dB values are never averaged.
 
 ### Laughter and speech
 YAMNet (AUDIO_CLIPS, synchronous on the block's last 0.975 s, allowlist Speech / Laughter / Giggle / Snicker /
-Belly laugh / Chuckle, chortle). `laugh` = max of the laughter family: ON at ≥ 0.05 for one result, OFF below 0.02, onsets
-with a 4 s refractory. (Measured: the laptop mic hears a real laugh mostly as Speech, laughter family
+Belly laugh / Chuckle, chortle). `laugh` = max of the laughter family: ON at ≥ 0.05 for one result, OFF once it has stayed below 0.02
+for 1.5 s (the third low result), onsets with a 5.5 s refractory. (Measured: the laptop mic hears a real laugh mostly as Speech, laughter family
 0.04-0.08 with one 0.50, while quiet and normal talking score exactly 0.00; the planned 0.30 x 2 rule
-never fired. Other people's laughter is removed downstream by the near-field gate.) `speech_prob` = the Speech score. Near-field gating happens downstream.
+never fired. Inside one laugh the family drops to 0.00 for single seconds. With an instant exit and a 4 s refractory,
+a 5 s laugh counted twice in capture run 3. The exit hold and the longer refractory make it count once, and laughs 6 s or more
+apart still count separately. Both values sit half a block off the 1 s grid so millisecond jitter in the
+block timestamps cannot flip the outcome; see the replay in BENCHMARKS.md. Other people's laughter is removed downstream by the near-field gate.) `speech_prob` = the Speech score. Near-field gating happens downstream.
 
 ### Compliments
 Vosk small-en-us with a **restricted grammar**: "great job", "nice work", "well done", "thank you", "love it",

@@ -231,16 +231,97 @@ class TestFistRule:
         assert not any(feed(deb, [(0.0, 0.9), (0.2, 0.9), (0.3, float("nan")), (0.4, 0.9), (0.6, 0.9)]))
 
 
-class TestLaughterRule:
-    """Measured rule: ON >= 0.05 for 1 result, OFF < 0.02, 4 s refractory (laugh probe, 1 s results)."""
+# Laughter-family max per YAMNet result (1 s), the whole laugh probe in order (scalars only).
+PROBE_FAMILY = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.004,                    # quiet  0-5
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,                      # laugh  6-11 (YAMNet heard none of it)
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.004, 0.0, 0.0,          # talk  12-19
+    0.0, 0.043, 0.082, 0.0, 0.082, 0.004,              # laugh 20-25
+    0.004, 0.0, 0.0, 0.0, 0.0, 0.0,                    # quiet 26-31
+    0.0, 0.0, 0.5, 0.004, 0.0, 0.043,                  # laugh 32-37
+    0.008, 0.0, 0.0, 0.0,                              # quiet 38-41
+]
+PROBE_PHASES = [("quiet", 0, 6), ("laugh", 6, 12), ("talk", 12, 20), ("laugh", 20, 26),
+                ("quiet", 26, 32), ("laugh", 32, 38), ("quiet", 38, 42)]
 
-    def test_probe_laugh_phases_count_once_each(self) -> None:
+
+def replay(deb: HysteresisDebouncer, scores: list[float], t0: float = 0.0) -> list[bool]:
+    return [deb.update(x, t0 + i) for i, x in enumerate(scores)]
+
+
+class TestLaughterRule:
+    """Measured rule: ON >= 0.05 for 1 result, OFF < 0.02 held 1.5 s, 5.5 s refractory (1 s results)."""
+
+    def test_parameters(self) -> None:
         deb = laughter_debouncer()
-        phase2 = [0.00, 0.04, 0.08, 0.00, 0.08, 0.00]  # laughter-family max per second, real laugh
-        phase3 = [0.00, 0.00, 0.50, 0.00, 0.00, 0.04]
-        onsets = [deb.update(x, 20.0 + i) for i, x in enumerate(phase2)]
-        onsets += [deb.update(x, 40.0 + i) for i, x in enumerate(phase3)]
-        assert sum(onsets) == 2
+        assert (deb.on, deb.off, deb.on_count) == (0.05, 0.02, 1)
+        assert (deb.off_hold_s, deb.refractory_s) == (1.5, 5.5)
+
+    def test_probe_replay_one_onset_per_detected_laugh_and_none_in_quiet_or_talk(self) -> None:
+        onsets = replay(laughter_debouncer(), PROBE_FAMILY)
+        per_phase = [(ph, sum(onsets[a:b])) for ph, a, b in PROBE_PHASES]
+        assert per_phase == [("quiet", 0), ("laugh", 0), ("talk", 0), ("laugh", 1),
+                             ("quiet", 0), ("laugh", 1), ("quiet", 0)]
+
+    def test_probe_laugh_stays_active_through_its_zero_second(self) -> None:
+        deb = laughter_debouncer()
+        replay(deb, PROBE_FAMILY[20:23], t0=20.0)  # 0.00, 0.04, 0.08 -> onset at 22
+        assert deb.active
+        deb.update(0.0, 23.0)  # the in-laugh dip
+        assert deb.active
+        assert deb.update(0.082, 24.0) is False and deb.onsets == 1
+
+    def test_five_second_laugh_counts_once(self) -> None:
+        # Capture run 3: a ~5 s laugh gave 2 onsets 4 s apart under the instant-exit rule.
+        for seq in ([0.08, 0.00, 0.00, 0.04, 0.08], [0.08, 0.00, 0.00, 0.00, 0.08]):
+            assert sum(replay(laughter_debouncer(), seq)) == 1, seq
+
+    def test_old_rule_double_counted_the_same_laugh(self) -> None:
+        old = HysteresisDebouncer(on=0.05, off=0.02, on_count=1, off_hold_s=0.0, refractory_s=4.0)
+        assert sum(replay(old, [0.08, 0.00, 0.00, 0.04, 0.08])) == 2
+
+    def test_two_laughs_ten_seconds_apart_count_twice(self) -> None:
+        laugh = [0.08, 0.04, 0.08, 0.00, 0.08]
+        onsets = replay(laughter_debouncer(), laugh + [0.0] * 5 + laugh + [0.0] * 5)
+        assert [i for i, o in enumerate(onsets) if o] == [0, 10]
+
+    def test_two_laughs_six_seconds_apart_count_twice(self) -> None:
+        laugh = [0.08, 0.00, 0.08]
+        onsets = replay(laughter_debouncer(), laugh + [0.0] * 3 + laugh + [0.0] * 4)
+        assert [i for i, o in enumerate(onsets) if o] == [0, 6]
+
+    def test_exits_on_third_low_result(self) -> None:
+        deb = laughter_debouncer()
+        replay(deb, [0.08, 0.0, 0.0])
+        assert deb.active
+        deb.update(0.0, 3.0)
+        assert not deb.active
+
+    # Live t is time.monotonic() when a ~1 s block finishes, so the cadence jitters by a few ms.
+    # The rule must not depend on which side of exactly 1.000 s the blocks land.
+    @pytest.mark.parametrize("dt", [0.98, 0.995, 0.999, 1.0, 1.001, 1.02])
+    def test_exit_on_third_low_result_is_jitter_proof(self, dt: float) -> None:
+        deb = laughter_debouncer()
+        for i, x in enumerate([0.08, 0.0, 0.0]):
+            deb.update(x, 100.0 + i * dt)
+        assert deb.active
+        deb.update(0.0, 100.0 + 3 * dt)
+        assert not deb.active
+
+    @pytest.mark.parametrize("dt", [0.98, 0.995, 0.999, 1.0, 1.001, 1.02])
+    def test_two_laughs_six_blocks_apart_count_twice_under_jitter(self, dt: float) -> None:
+        laugh = [0.08, 0.00, 0.08]
+        seq = laugh + [0.0] * 3 + laugh + [0.0] * 4
+        deb = laughter_debouncer()
+        onsets = [deb.update(x, 50.0 + i * dt) for i, x in enumerate(seq)]
+        assert [i for i, o in enumerate(onsets) if o] == [0, 6]
+
+    @pytest.mark.parametrize("dt", [0.98, 0.999, 1.0, 1.02])
+    def test_dipping_five_second_laugh_counts_once_under_jitter(self, dt: float) -> None:
+        for seq in ([0.08, 0.00, 0.00, 0.04, 0.08], [0.08, 0.00, 0.00, 0.00, 0.08],
+                    [0.08, 0.00, 0.00, 0.00, 0.00, 0.08]):
+            deb = laughter_debouncer()
+            assert sum(deb.update(x, 7.0 + i * dt) for i, x in enumerate(seq)) == 1, (seq, dt)
 
     def test_speech_and_quiet_never_fire(self) -> None:
         deb = laughter_debouncer()

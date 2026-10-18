@@ -252,6 +252,151 @@ class TestMotion:
         assert math.isnan(tracker.update(xy + 50, conf, 0.0).motion)
 
 
+BODY = list(range(5, 13))  # shoulders, elbows, wrists, hips: the points motion uses (8 in the fixture)
+HEAD = [0, 1, 2, 3, 4]
+
+
+def all_keypoint_motion(frames: list[tuple[np.ndarray, np.ndarray, float]], alpha: float = 0.3) -> list[float]:
+    """The pre-P1-1 definition (mean over every keypoint valid in both samples), to show the artifact."""
+    out, prev, m = [], None, math.nan
+    for xy, conf, t in frames:
+        xy = np.where((conf >= 0.5)[:, None], xy, np.nan)
+        if prev is not None:
+            both = np.isfinite(xy).all(axis=1) & np.isfinite(prev[0]).all(axis=1)
+            raw = np.linalg.norm(xy[both] - prev[0][both], axis=1).mean() / SHOULDER_W / (t - prev[1])
+            m = raw if math.isnan(m) else alpha * raw + (1 - alpha) * m
+        prev = (xy, t)
+        out.append(m)
+    return out
+
+
+def jittery(head_drop: float, n: int, hz: float, seed: int, head_jitter: bool) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """Seated person holding still: 0.3 px body jitter (same per seed; reads ~0.027 sw/s at 10 Hz, the
+    live typing p50); optionally the head-drop artifact,
+    where nose/eyes/ears wander up to ~0.3 shoulder widths and flicker between conf 0.3 and 0.95."""
+    body_rng, head_rng = np.random.default_rng(seed), np.random.default_rng(seed + 1)
+    frames = []
+    for i in range(n):
+        xy, conf = pose(head_drop=head_drop)
+        xy[BODY] += body_rng.normal(0.0, 0.3, (len(BODY), 2))
+        if head_jitter:
+            xy[HEAD] += head_rng.normal(0.0, 0.3 * SHOULDER_W, (len(HEAD), 2))
+            conf[HEAD] = head_rng.uniform(0.3, 0.95, len(HEAD))
+        frames.append((xy, conf, round(i / hz, 6)))
+    return frames
+
+
+class TestMotionTorsoOnly:
+    """Motion = torso/arm keypoints only, identity jumps rejected, last value held when unmeasurable."""
+
+    def test_held_slump_with_head_jitter_reads_as_still(self) -> None:
+        upright = jittery(0.7, 300, 10.0, seed=7, head_jitter=False)
+        slumped = jittery(0.3, 300, 10.0, seed=7, head_jitter=True)
+        up_t, sl_t = PostureTracker(), PostureTracker()
+        up = [up_t.update(xy, c, t).motion for xy, c, t in upright][10:]
+        sl = [sl_t.update(xy, c, t).motion for xy, c, t in slumped][10:]
+        assert sl == pytest.approx(up)  # the head no longer contributes at all
+        assert float(np.median(sl)) < 0.033  # at or below the live upright p50
+        old_up = float(np.median(all_keypoint_motion(upright)[10:]))
+        old_sl = float(np.median(all_keypoint_motion(slumped)[10:]))
+        assert old_sl > 10 * old_up  # the old definition reproduces the artifact: a still slump reads agitated
+
+    def test_head_motion_is_ignored(self) -> None:
+        tracker = PostureTracker()
+        states = [tracker.update(*pose(head_drop=0.7 - 0.02 * i), i / 10) for i in range(30)]
+        assert all(s.motion == pytest.approx(0.0) for s in states[1:])
+
+    @pytest.mark.parametrize("hz", [5.0, 10.0, 30.0])
+    def test_one_arm_moving_counts_in_shoulder_widths_per_second(self, hz: float) -> None:
+        """2 of 8 points move at 0.5 sw/s -> 0.125 sw/s. A median of displacements would read 0.0 here,
+        which is why the mean is kept and outliers are gated instead."""
+        tracker = PostureTracker()
+        speed_px = 100.0
+        state = None
+        for i in range(int(3 * hz)):
+            t = i / hz
+            xy, conf = pose()
+            xy[[7, 9], 0] += speed_px * t  # left elbow + wrist
+            state = tracker.update(xy, conf, t)
+        assert state is not None
+        assert state.motion == pytest.approx(2 / 8 * speed_px / SHOULDER_W)
+
+    @pytest.mark.parametrize("hz", [5.0, 10.0, 30.0])
+    def test_keypoint_identity_switch_is_rejected(self, hz: float) -> None:
+        """A wrist snapping to the face for one sample (conf 0.9, 1.8 sw away) and back. Capping it at
+        1 sw per sample would still add 1/8 sw per sample (1.25 sw/s raw at 10 Hz) twice; gating drops it."""
+        tracker = PostureTracker()
+        states = []
+        for i in range(int(3 * hz)):
+            xy, conf = pose()
+            if i == int(hz):
+                xy[9] = xy[0]
+            states.append(tracker.update(xy, conf, i / hz))
+        assert all(s.motion == pytest.approx(0.0) for s in states[1:])
+
+    @pytest.mark.parametrize("wrist_gap_sw", [0.4, 1.0])
+    def test_left_right_swap_is_not_motion(self, wrist_gap_sw: float) -> None:
+        """YOLO's most common identity switch: the two wrists trade labels for one sample and back. Each
+        wrist 'moves' by the wrist gap (<= 1 sw, so the jump gate alone keeps it: 0.51 / 1.27 sw/s before)."""
+        tracker = PostureTracker()
+        half = wrist_gap_sw * SHOULDER_W / 2
+        states = []
+        for i in range(30):
+            xy, conf = pose(wrists=((600.0 + half, 600.0), (600.0 - half, 600.0)))
+            if i == 10:
+                xy[[9, 10]] = xy[[10, 9]]
+            states.append(tracker.update(xy, conf, i / 10))
+        assert all(s.motion == pytest.approx(0.0) for s in states[1:])
+
+    def test_arms_leaving_the_frame_do_not_latch_the_transition(self) -> None:
+        """Slumping at a laptop: the arms drop out of frame during the transition, leaving the shoulders.
+        Both shoulders are a measurable torso, so the held slump decays to still instead of holding the
+        transition's speed for the whole hold."""
+        tracker = PostureTracker()
+        for i in range(10):  # slumping down: everything moves 0.5 sw/s
+            tracker.update(*pose(shift=(0.0, 10.0 * i)), i / 10)
+        states = [tracker.update(*pose(shift=(0.0, 100.0), hidden=(7, 8, 9, 10, 11, 12)), i / 10)
+                  for i in range(10, 60)]
+        assert states[-1].motion == pytest.approx(0.0, abs=1e-6)
+
+    def test_low_confidence_frames_hold_the_last_value(self) -> None:
+        tracker = PostureTracker()
+        for i in range(20):
+            moving = tracker.update(*pose(shift=(10.0 * i, 0.0)), i / 10).motion
+        assert moving == pytest.approx(0.5)
+        for i in range(20, 30):  # body conf 0.55: fine for slump geometry, below the motion floor
+            xy, conf = pose(shift=(10.0 * i + 300.0 * (i % 2), 0.0))
+            conf[BODY] = 0.55
+            state = tracker.update(xy, conf, i / 10)
+            assert state.motion == moving
+            assert not math.isnan(state.head_drop)
+        for i in range(30, 40):  # only the left shoulder and elbow: too few points, and no torso
+            state = tracker.update(*pose(shift=(50.0 * i, 0.0), hidden=(6, 8, 9, 10, 11, 12)), i / 10)
+            assert state.motion == moving
+        state = tracker.update(*pose(shift=(2000.0, 0.0)), 4.0)
+        state = tracker.update(*pose(shift=(2000.0, 0.0)), 4.1)
+        assert state.motion == pytest.approx(0.7 * moving)  # measurable again: still, so it decays
+
+    def test_nan_only_before_the_first_valid_pair(self) -> None:
+        tracker = PostureTracker()
+
+        def sample(hidden: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray]:
+            xy, conf = pose(hidden=hidden)
+            conf[[5, 6]] = 0.55  # shoulders give the width but sit below the motion floor
+            return xy, conf
+
+        states = [tracker.update(*sample((8, 10, 11, 12)), i / 10) for i in range(5)]
+        assert tracker.shoulder_width == pytest.approx(SHOULDER_W)
+        assert all(math.isnan(s.motion) for s in states)  # left elbow + wrist only: nothing measured yet
+        assert math.isnan(tracker.update(*sample((8, 10, 12)), 0.5).motion)  # 3 now, but only 2 in both
+        assert tracker.update(*sample((8, 10, 12)), 0.6).motion == pytest.approx(0.0)
+        for i in range(7, 20):
+            assert tracker.update(np.zeros((17, 2)), np.zeros(17), i / 10).motion == pytest.approx(0.0)
+
+    def test_motion_floor_is_never_looser_than_the_tracker_floor(self) -> None:
+        assert PostureTracker(min_conf=0.7, motion_min_conf=0.6).motion_min_conf == 0.7
+
+
 class TestStateAndValidation:
     def test_low_confidence_keypoints_are_ignored(self) -> None:
         tracker = PostureTracker()

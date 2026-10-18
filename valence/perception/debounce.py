@@ -79,11 +79,18 @@ def fist_debouncer() -> HysteresisDebouncer:
 
 
 def laughter_debouncer() -> HysteresisDebouncer:
-    """YAMNet laughter family: ON >= 0.05 for 1 result, OFF below 0.02, 4 s refractory.
+    """YAMNet laughter family: ON >= 0.05 for 1 result, OFF below 0.02 held 1.5 s, 5.5 s refractory.
 
     Measured on the laptop mic (docs/BENCHMARKS.md, laugh probe): real laughter scored mostly as
     Speech, with the laughter family at 0.04-0.08 and a single 0.50; quiet and normal talking scored
     exactly 0.00 even at Speech 0.99. The original 0.30 x 2-results rule never fired. The family
     is specific enough for a low threshold; other people's laughter is removed downstream by the
-    near-field gate (only events well above the room's level count)."""
-    return HysteresisDebouncer(on=0.05, off=0.02, on_count=1, off_hold_s=0.0, refractory_s=4.0)
+    near-field gate (only events well above the room's level count).
+
+    Inside one laugh the family drops to 0.00 for single seconds, so an instant exit re-armed the
+    state and a ~5 s laugh counted twice (capture run 3). The exit hold rides through up to two
+    low results (exit on the third); the refractory catches longer dips while laughs 6 blocks
+    apart still count separately (replay table in docs/BENCHMARKS.md). Both sit half a block off
+    the 1 s grid: live t is time.monotonic() at block end and jitters by milliseconds, and a
+    value of exactly 2.0 / 6.0 made the outcome depend on which side of 1.000 s the blocks fell."""
+    return HysteresisDebouncer(on=0.05, off=0.02, on_count=1, off_hold_s=1.5, refractory_s=5.5)

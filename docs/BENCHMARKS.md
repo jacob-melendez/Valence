@@ -148,3 +148,29 @@ refractory, which counts 1 onset per real laugh phase and 0 in quiet/talk on the
 
 **Run 3 (audio only, new laughter rule):** 3x "great job" -> **3 compliment hits**; one ~5 s laugh -> **2 laughter
 onsets** (4 s apart: a long laugh can count twice under the 4 s refractory); 0 events during the quiet baseline.
+
+**Laughter double count (P1-4), offline replay.** The probe's per-second laughter-family max went through
+`HysteresisDebouncer(on=0.05, off=0.02)` with different exit holds and refractories, plus synthetic 1 s sequences.
+"hold" = how long the score must stay below 0.02 before the state exits. Onsets per segment at an exact 1.000 s cadence:
+
+| rule | quiet 0-5 | laugh 6-11 | talk 12-19 | laugh 20-25 | quiet 26-31 | laugh 32-37 | quiet 38-41 | 5 s laugh, 2 low s | 5 s laugh, 3 low s | 2 laughs 10 s apart | 2 laughs 6 s apart |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| old: hold 0, refr 4 s | 0 | 0 | 0 | 1 | 0 | 1 | 0 | **2** | **2** | **4** | 2 |
+| A: hold 2 s, refr 4 s | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | **2** | 2 | 2 |
+| B: hold 2 s, refr 6 s | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 2 | 2 |
+| C: hold 3 s, refr 6 s | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 2 | **1** |
+| **B': hold 1.5 s, refr 5.5 s (shipped)** | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 2 | 2 |
+
+Synthetic laughs: `0.08 0 0 0.04 0.08` (2 low s) and `0.08 0 0 0 0.08` (3 low s), shaped like the run-3 laugh with onsets
+4 s apart; the 10 s case is `0.08 0.04 0.08 0 0.08` twice, onsets 10 s apart; the 6 s case is `0.08 0 0.08` twice,
+onsets 6 s apart. Every rule scores the same on the probe: the in-laugh dips there are a single 0.00 second or are
+followed by 0.04, which holds the state. So the choice comes from the synthetic cases. The old rule counts each
+dipping 5 s laugh twice. A fixes only the 2-low-second dip. C merges laughs 6 s apart.
+
+**Timestamp jitter.** Live `t` is `time.monotonic()` when a block finishes, so the cadence is 1 s plus or minus a few ms.
+B's 2.0 s hold and 6.0 s refractory sit exactly on the sample grid. At a 0.999 s or 0.98 s cadence, B exits on the 4th
+low result instead of the 3rd and merges the two laughs 6 s apart (1 onset); A does the same. At a 1.02 s cadence B
+matches its 1.000 s row. B' gives the 1.000 s row above at 0.98, 0.999, 1.000 and 1.02 s cadences, so it ships. B' keeps
+`active` for about 2 s after a laugh ends, and onset latency does not change. (The old rule's double count is also
+cadence-dependent: its re-onset 4 blocks later only cleared the 4 s refractory when the blocks were at least 1.000 s apart.)
+The first probe laugh phase (6-11) scored 0.00 every second, so no debouncer can count it. That miss is in the detector.

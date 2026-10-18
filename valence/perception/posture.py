@@ -2,7 +2,7 @@
 
 Turns one person's keypoint stream into three somatic signals: a slump (head sinking
 toward the shoulders relative to that person's own calibrated baseline), head in
-hands, and overall body motion. Everything is normalized by shoulder width so it is
+hands, and torso/arm motion. Everything is normalized by shoulder width so it is
 independent of distance to the camera. The tracker keeps only a handful of scalars
 plus the previous sample's 17x2 keypoint coordinates; it never sees pixels.
 """
@@ -20,6 +20,8 @@ NOSE, L_EYE, R_EYE, L_EAR, R_EAR = 0, 1, 2, 3, 4
 L_SHOULDER, R_SHOULDER = 5, 6
 L_WRIST, R_WRIST = 9, 10
 HEAD_POINTS = (NOSE, L_EYE, R_EYE, L_EAR, R_EAR)
+BODY_POINTS = tuple(range(L_SHOULDER, 13))  # shoulders, elbows, wrists, hips: motion ignores the head
+BODY_PAIRS = ((5, 6), (7, 8), (9, 10), (11, 12))  # left/right twins, which pose models swap
 N_KPTS = 17
 MIN_BASELINE_SAMPLES = 10
 
@@ -76,25 +78,40 @@ class PostureTracker:
     baseline AND ears < ``ear_ratio`` x baseline, held ``slump_hold_s``; when the ears were
     never calibrated or aren't visible, the nose alone must fall below
     ``nose_only_ratio`` x baseline.
-    ``motion`` is the mean keypoint displacement in shoulder widths per second (EMA),
-    so it does not depend on the sampling rate.
+    ``motion`` is the mean displacement of the torso and arm keypoints (COCO 5-12) in
+    shoulder widths per second (EMA), so it does not depend on the sampling rate. The head
+    is left out: when it drops, the nose/eyes/ears lose confidence and jump, and a held
+    slump read 0.101 sw/s live against 0.033 upright. A point counts only if it has
+    conf >= ``motion_min_conf`` in both samples and moved at most ``motion_jump`` shoulder
+    widths since the last one (a bigger per-sample jump is a keypoint switching identity,
+    not a limb: at 5 Hz that is a 5 sw/s, roughly 2 m/s, limb). A left/right twin pair seen in
+    both samples is matched whichever way is shorter, so a one-sample L/R label swap (the most
+    common switch, and under 1 sw for wrists near each other) is not motion. The survivors are
+    averaged (a mean, not a median, so one arm moving still counts). With fewer than
+    ``motion_min_points`` survivors, unless both shoulders survive (a measurable torso, e.g. the
+    arms dropped out of a laptop frame), the last value is held; motion is NaN only until the
+    first measurable pair.
     """
 
     __slots__ = ("baseline_s", "slump_ratio", "ear_ratio", "nose_only_ratio", "slump_hold_s", "hih_hold_s",
-                 "hih_radius", "ema_alpha", "min_conf", "_t0", "_samples", "_ear_samples", "_baseline",
+                 "hih_radius", "ema_alpha", "min_conf", "motion_min_conf", "motion_jump", "motion_min_points",
+                 "_t0", "_samples", "_ear_samples", "_baseline",
                  "_ear_baseline", "_shoulder_w", "_head_drop", "_ear_drop", "_motion", "_slump_since",
                  "_hih_since", "_prev_xy", "_prev_t")
 
     def __init__(self, baseline_s: float = 20.0, slump_ratio: float = 0.7,
                  slump_hold_s: float = 3.0, hih_hold_s: float = 2.0, hih_radius: float = 0.5,
                  ema_alpha: float = 0.3, min_conf: float = 0.5, ear_ratio: float = 0.93,
-                 nose_only_ratio: float = 0.6) -> None:
+                 nose_only_ratio: float = 0.6, motion_min_conf: float = 0.6, motion_jump: float = 1.0,
+                 motion_min_points: int = 3) -> None:
         if not 0.0 < ema_alpha <= 1.0:
             raise ValueError("ema_alpha must be in (0, 1]")
         self.baseline_s, self.slump_ratio = baseline_s, slump_ratio
         self.ear_ratio, self.nose_only_ratio = ear_ratio, nose_only_ratio
         self.slump_hold_s, self.hih_hold_s, self.hih_radius = slump_hold_s, hih_hold_s, hih_radius
         self.ema_alpha, self.min_conf = ema_alpha, min_conf
+        self.motion_min_conf = max(min_conf, motion_min_conf)
+        self.motion_jump, self.motion_min_points = motion_jump, motion_min_points
         self._t0: float | None = None
         self._samples: list[float] = []
         self._ear_samples: list[float] = []
@@ -123,7 +140,7 @@ class PostureTracker:
 
     def update(self, kpts_xy: np.ndarray, kpts_conf: np.ndarray, t: float) -> PostureState:
         """Feed one pose sample (pixel coordinates, per-keypoint confidence) at ``t``."""
-        xy = self._mask(kpts_xy, kpts_conf)
+        xy, body = self._mask(kpts_xy, kpts_conf)
         t0 = self._t0 = t if self._t0 is None else self._t0
 
         self._update_shoulder_width(xy)
@@ -137,8 +154,8 @@ class PostureTracker:
                                          self.slump_hold_s)
         self._hih_since, hih = _held(self._hih_since, self._hands_on_head(xy), t,
                                      self.hih_hold_s)
-        self._motion = _ema(self._motion, self._raw_motion(xy, t), self.ema_alpha)
-        self._prev_xy, self._prev_t = xy, t
+        self._motion = _ema(self._motion, self._raw_motion(body, t), self.ema_alpha)
+        self._prev_xy, self._prev_t = body, t
 
         return PostureState(
             slump=slump,
@@ -148,13 +165,19 @@ class PostureTracker:
             calibrated=self._baseline is not None,
         )
 
-    def _mask(self, kpts_xy: np.ndarray, kpts_conf: np.ndarray) -> np.ndarray:
+    def _mask(self, kpts_xy: np.ndarray, kpts_conf: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(all keypoints at ``min_conf``, torso/arm keypoints at ``motion_min_conf``); NaN = not valid."""
         xy = np.array(kpts_xy, dtype=float)
         conf = np.asarray(kpts_conf, dtype=float)
         if xy.shape != (N_KPTS, 2) or conf.shape != (N_KPTS,):
             raise ValueError(f"expected (17, 2) keypoints and (17,) conf, got {xy.shape}, {conf.shape}")
         xy[~(conf >= self.min_conf)] = np.nan
-        return xy
+        body = np.full_like(xy, np.nan)
+        keep = np.zeros(N_KPTS, dtype=bool)
+        keep[list(BODY_POINTS)] = True
+        keep &= conf >= self.motion_min_conf
+        body[keep] = xy[keep]
+        return xy, body
 
     def _update_shoulder_width(self, xy: np.ndarray) -> None:
         width = float(np.linalg.norm(xy[L_SHOULDER] - xy[R_SHOULDER]))
@@ -217,12 +240,21 @@ class PostureTracker:
         raised = bool((wrists[:, 1] < shoulder_y).all())
         return near and raised
 
-    def _raw_motion(self, xy: np.ndarray, t: float) -> float:
+    def _raw_motion(self, body: np.ndarray, t: float) -> float:
+        """Torso/arm speed in shoulder widths/s for this pair; NaN (so the EMA holds) when unmeasurable."""
         if self._prev_xy is None or self._prev_t is None or math.isnan(self._shoulder_w):
             return math.nan
         dt = t - self._prev_t
-        both = np.isfinite(xy).all(axis=1) & np.isfinite(self._prev_xy).all(axis=1)
-        if dt <= 0.0 or not both.any():
+        if dt <= 0.0:
             return math.nan
-        disp = np.linalg.norm(xy[both] - self._prev_xy[both], axis=1).mean()
-        return float(disp / self._shoulder_w / dt)
+        prev = self._prev_xy
+        disp = np.linalg.norm(body - prev, axis=1) / self._shoulder_w  # NaN unless valid in both
+        for left, right in BODY_PAIRS:
+            swapped = np.linalg.norm(body[[left, right]] - prev[[right, left]], axis=1) / self._shoulder_w
+            if swapped.sum() < disp[left] + disp[right]:  # False when any is NaN: keep the labels
+                disp[[left, right]] = swapped
+        ok = np.isfinite(disp) & (disp <= self.motion_jump)
+        torso = bool(ok[L_SHOULDER] and ok[R_SHOULDER])
+        if ok.sum() < self.motion_min_points and not torso:
+            return math.nan
+        return float(disp[ok].mean() / dt)
