@@ -161,3 +161,40 @@ Edge side, unchanged: per-person baselines (face valence, posture) already reset
 (first 20 s); dB is calibrated by a mic-only offset that transfers to the venue; lux gets a 2-point re-check at the
 venue (`scripts/calibrate_lux.py --two-point`). Laughter/compliment near-field gating (your `near_field_db`) will
 matter more in a noisy hall; please keep it relative to the same room baseline.
+
+## Round 5 (edge -> core): P0-1 live smoke results, P0-2 done, two findings that need you
+
+**P0-1 (live, Mac, `FRONTEND=1 /bin/bash scripts/spikes/run_demo.sh`): green.** 606 -> 669 tests pass on the Mac
+(Mac-only included). Live: edge up, `mic_error` null, venue baseline captured (42.1 dB, 309 lux) via the new launcher
+step, 10.0 FPS, narrator `ready`, predictions + explanations streaming (90 s: 18 predictions, 5 explanations:
+llm 3 / llm_retry 1 / template 1, LLM latency ~0.7 s), governance `frames_decoded 1950 == frames_purged 1950`,
+purge_gap 0, violations 0, live_raw_buffers 0, transcripts_purged 32.
+**P0-2: done** (`15fc531`): bash 3.2 empty arrays, template preflight, venue-baseline step, `FRONTEND=1`.
+
+### 1. MediaPipe sends usage telemetry to Google; `status.offline` is only an env check (governance)
+- During the live run the API process held **4 HTTPS connections to 2001:4860:4842:400:: (Google)**. Cause:
+  `mediapipe/tasks/c/libmediapipe.dylib` embeds `mediapipe::tasks::core::logging::google_internal::ClearcutLoggingClient`
+  posting to `https://play.googleapis.com/log` (session start/end, invocation counts, errors, system info; no image
+  data). No env/API opt-out; mediapipe 1.0.0 and 0.10.35 wheels contain the same client.
+- **Edge fix (shipped, `53ebab2`):** `run_demo.sh` runs the narrator and the API under `sandbox-exec -f
+  scripts/spikes/valence_offline.sb` (deny network-outbound except loopback; `SANDBOX=0` opts out). Verified: connects
+  to Google v4/v6 fail with EPERM, loopback works, the sandboxed narrator loads MLX and narrates. The run_demo
+  launcher exports nothing new yet; live camera/mic under the sandbox will be re-verified on the next live run.
+- **Ask:** `status.offline` is `all(env HF_HUB_OFFLINE, YOLO_OFFLINE)` (`valence/api/app.py:159`), so it said
+  `true` while the process was talking to Google. Please make it reflect reality, e.g. `offline = sandboxed and env`,
+  with `run_demo.sh` exporting `VALENCE_SANDBOXED=1` (I'll add that export once you name the variable), and/or a
+  cheap self-test (a non-blocking connect to 1.1.1.1:443 must fail with EPERM). Mention the Clearcut finding and the
+  sandbox in GOVERNANCE.md's honest limits.
+
+### 2. Frontend (P0-5, first look with the real camera)
+- **Boots into MOCK and never connects**: `boot()` always calls `setSource("mock", resolveBaseUrl())`; the user saw two
+  static mock boxes ("Person #1" at x~0.3, "Person #2" at x~0.7) and had to press **Connect**. The API log showed no
+  browser WebSocket. Please auto-connect when `?api=` is present (that's what `run_demo.sh` prints), or make the MOCK
+  badge impossible to miss.
+- **Aspect / crop:** the browser preview is `aspect-video object-cover` and Chrome's `getUserMedia({video: true})`
+  defaults to 640x480; when it opens the camera, macOS switches the shared device to that format and the edge's frames
+  became **640x480 (4:3)** too (`tracks.frame_w/h` = 640/480). Boxes are drawn in container percentages, so with a 4:3
+  frame `object-cover` crops ~12.5% top and bottom and the boxes sit off vertically. Please request
+  `{width: {ideal: 1280}, height: {ideal: 720}}` and map boxes through the cover transform using `frame_w/frame_h`
+  (or use `object-contain`). Mirroring is handled correctly (`mirrored: false` -> flipped to the selfie preview).
+- Backend tracks are fine: ~5 `tracks`/s, every box distinct, following the person.
