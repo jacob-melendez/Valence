@@ -6,9 +6,10 @@ projects with a precise log of the work done during the event; this file is that
 
 ## Baseline: what existed before the event
 
-- **Git tag `hackohio-2026-baseline`** marks the repository as it stood before the event:
-  <https://github.com/jacob-melendez/Valence/tree/hackohio-2026-baseline>. Everything after it is event work, and
-  `git diff hackohio-2026-baseline..HEAD` shows all of it.
+- **Baseline commit `cc28be9`** (Oct 23, before the event; tag `hackohio-2026-baseline`) marks the repository as it
+  stood before the event: <https://github.com/jacob-melendez/Valence/commit/cc28be9fe5315791e8dcc715c382ae94869f61d0>.
+  Everything after it is event work, and `git diff cc28be9..HEAD` shows all of it. A commit hash cannot be moved
+  or edited, so the baseline is fixed even without the tag.
 - At the baseline, Valence is an on-device, privacy-first context-aware emotion recognition engine (Python):
   - laptop perception (pose, face blendshapes, gestures, laughter, compliment keywords), with raw media zeroed after
     feature extraction;
@@ -50,8 +51,9 @@ _Times in America/New_York. Add entries as `### HH:MM — title`, newest last._
 
 ### Before the event (Oct 23)
 
-Logging tooling only: this file, `scripts/hack_log.py` (+ test), `make hacklog`, the baseline tag. Plan written in
-`docs/HACKOHIO_PLAN.md`.
+Logging tooling only: this file, `scripts/hack_log.py` (+ test), `make hacklog`, and the baseline (`cc28be9`). The plan
+is in `docs/HACKOHIO_PLAN.md`. One more pre-event commit pins the baseline commit in the script and this file; the
+generated log lists it, marked as before the window.
 
 ## Generated from git
 

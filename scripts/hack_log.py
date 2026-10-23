@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parents[1]
 BASE_TAG = "hackohio-2026-baseline"
+BASE_SHA = "cc28be9fe5315791e8dcc715c382ae94869f61d0"  # the commit the tag points to (used if the tag isn't fetched)
 LOG_FILE = REPO / "docs" / "HACKOHIO_LOG.md"
 START_MARK, END_MARK = "<!-- hacklog:start -->", "<!-- hacklog:end -->"
 TRACKS = {"web": "Valence Web", "emotion": "Emotion map", "eval": "Evaluation", "infra": "Infrastructure",
@@ -138,8 +139,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         base_sha = _git(args.repo, "rev-parse", f"{args.base}^{{commit}}").strip()
     except subprocess.CalledProcessError:
-        print(f"unknown baseline {args.base!r}", file=sys.stderr)
-        return 2
+        if args.base != BASE_TAG:
+            print(f"unknown baseline {args.base!r}", file=sys.stderr)
+            return 2
+        try:  # the tag is created from the Mac; a checkout without it uses the pinned commit
+            base_sha = _git(args.repo, "rev-parse", f"{BASE_SHA}^{{commit}}").strip()
+        except subprocess.CalledProcessError:
+            print(f"unknown baseline {args.base!r} (and {BASE_SHA[:7]} not in this checkout)", file=sys.stderr)
+            return 2
+        args.base = base_sha
     commits = commits_since(args.repo, args.base)
     body = render(commits, base=args.base, base_sha=base_sha, tz=ZoneInfo(args.tz), start=args.start,
                   end=args.end, shortstat=_git(args.repo, "diff", "--shortstat", f"{args.base}..HEAD"))
