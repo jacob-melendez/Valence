@@ -41,6 +41,9 @@ e2e:             ## pre-demo end-to-end check: own replay server, or API=http://
 audit-verify:    ## verify audit hash chains (FILE=path/to/session.jsonl or a dir; default var/audit; HEAD=<audit_hash>)
 	$(PY) scripts/audit_verify.py $(or $(FILE),$(or $(VALENCE_AUDIT_DIR),var/audit)) $(if $(HEAD),--head $(HEAD))
 
-.PHONY: soak
+.PHONY: soak hacklog
 soak:            ## 10-minute memory soak -> reports/mem_soak.json + reports/figs/memory_flat.png
 	$(PY) scripts/mem_soak.py --minutes $(or $(MINUTES),10)
+
+hacklog:         ## refresh the generated Hack OHI/O log in docs/HACKOHIO_LOG.md (START=/END= ISO 8601 with offset)
+	$(PY) scripts/hack_log.py --write $(if $(START),--start $(START)) $(if $(END),--end $(END))

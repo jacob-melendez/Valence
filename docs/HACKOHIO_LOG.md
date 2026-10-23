@@ -1,0 +1,60 @@
+# Hack OHI/O 2026: work log (Valence, continued project)
+
+Hack OHI/O (The Ohio State University), October 24–25, 2026, virtual, 24 hours. Valence is a continuation of the
+project that won the AI Data Governance track at TrojanHacks @ USC (October 2026). Hack OHI/O allows continued
+projects with a precise log of the work done during the event; this file is that log.
+
+## Baseline: what existed before the event
+
+- **Git tag `hackohio-2026-baseline`** marks the repository as it stood before the event:
+  <https://github.com/jacob-melendez/Valence/tree/hackohio-2026-baseline>. Everything after it is event work, and
+  `git diff hackohio-2026-baseline..HEAD` shows all of it.
+- At the baseline, Valence is an on-device, privacy-first context-aware emotion recognition engine (Python):
+  - laptop perception (pose, face blendshapes, gestures, laughter, compliment keywords), with raw media zeroed after
+    feature extraction;
+  - a 15-minute rolling window of room-relative features feeding a LightGBM model: 4 core states plus 2 extra
+    (Focused, Frustrated / Masked, Exhausted, Collaborative / Happy; Overwhelmed, Tense);
+  - a face-only baseline model and the mask override;
+  - TreeSHAP explanations and a local LLM narrator;
+  - a FastAPI + WebSocket backend and a React console;
+  - governance: purge gate, hash-chained audit log, no-network sandbox.
+
+  Evaluation at the baseline is in `docs/RESULTS.md` and `docs/MODEL_CARD.md`, on simulated data plus small
+  real captures from one person.
+- The only commit made before the event for Hack OHI/O is the logging tooling itself: this file,
+  `scripts/hack_log.py`, its test and `make hacklog`. Planning notes in `docs/HACKOHIO_PLAN.md` describe intent,
+  not code.
+
+## Event goals (tracks)
+
+| Tag | Track | Goal |
+|---|---|---|
+| `[web]` | **Valence Web** | Run the pipeline entirely in the browser, as a hosted link anyone can try live. Camera and mic data never leave the device. |
+| `[emotion]` | **Emotion map** | A valence–arousal core with about 10 named states mapped onto it, and a first evaluation on real labeled data. |
+| `[eval]` | Evaluation | Tests, parity checks and measurements supporting both tracks. |
+| `[infra]`, `[docs]`, `[pitch]` | Supporting work | Tooling, documentation and the presentation. |
+
+## How this log is kept
+
+1. **Every commit subject starts with its track tag**, e.g. `[web] Port the feature function to TypeScript`. The
+   commit time is the record of when the work happened.
+2. **A manual entry at least every 2 hours** in "Narrative" below: time, what was done, why, and the result
+   (numbers, screenshots, links).
+3. **The generated section** is rebuilt from git with
+   `make hacklog START=<ISO start> END=<ISO end>`. It lists every commit since the baseline, by track, with time,
+   lines changed and files, and flags anything outside the event window.
+
+## Narrative
+
+_Times in America/New_York. Add entries as `### HH:MM — title`, newest last._
+
+### Before the event (Oct 23)
+
+Logging tooling only: this file, `scripts/hack_log.py` (+ test), `make hacklog`, the baseline tag. Plan written in
+`docs/HACKOHIO_PLAN.md`.
+
+## Generated from git
+
+<!-- hacklog:start -->
+_Run `make hacklog START=... END=...` to fill this section._
+<!-- hacklog:end -->
