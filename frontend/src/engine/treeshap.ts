@@ -14,25 +14,18 @@ import { type Booster, type Tree, decide, predictorRow } from "./lgbm";
 
 // ---------- Expected value ----------
 
-const expectedCache = new WeakMap<Tree, number>();
-
 /**
  * Tree::ExpectedValue: the leaf values weighted by their share of the root's training rows, summed in leaf
  * order. This is what each tree adds to the bias slot (and what makes contributions sum to the raw score).
+ * Recomputed on every call, like LightGBM: a cache keyed by the tree would go stale when a leaf value is
+ * edited in place (the analogue of `Booster.set_leaf_output`), and it costs one pass over the leaves.
  */
 export function expectedValue(tree: Tree): number {
-  const cached = expectedCache.get(tree);
-  if (cached !== undefined) return cached;
-  let e: number;
-  if (tree.num_leaves <= 1) {
-    e = tree.leaf_value[0] as number;
-  } else {
-    const total = tree.internal_count[0] as number;
-    e = 0.0;
-    for (let i = 0; i < tree.num_leaves; i++)
-      e += ((tree.leaf_count[i] as number) / total) * (tree.leaf_value[i] as number);
-  }
-  expectedCache.set(tree, e);
+  if (tree.num_leaves <= 1) return tree.leaf_value[0] as number;
+  const total = tree.internal_count[0] as number;
+  let e = 0.0;
+  for (let i = 0; i < tree.num_leaves; i++)
+    e += ((tree.leaf_count[i] as number) / total) * (tree.leaf_value[i] as number);
   return e;
 }
 
