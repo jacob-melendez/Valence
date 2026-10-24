@@ -54,3 +54,13 @@ npm run build && node scripts/check-static.mjs --path "/?source=browser" --fake-
 `console-in-browser.jpg` is that run (15:14 ET, Oct 24): the portrait tracked as Person #1, a prediction with its
 layers and template text, the emotion map, and the governance panel with frames decoded 236 / purged 235 (one in
 flight), 428 audio blocks purged, 0 violations; 0 off-origin requests and 0 CSP violations.
+
+## Soak
+
+`node e2e/soak.mjs --minutes 15` runs the real perception for 15 minutes and samples the RSS of every Chromium process
+every 30 s. Result at 15:50 ET, Oct 24 (worker, CPU delegate):
+- 6.7 fps sustained;
+- 5,646 frames decoded and 5,645 purged (one in flight), 8,981 audio chunks purged, 0 violations, 0 page errors;
+- 3 main-thread long tasks (234 ms in total);
+- total Chromium RSS in a sawtooth between 1.60 and 1.65 GB, falling back after collections (at 4.5 and 12 min):
+  no leak trend.

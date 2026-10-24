@@ -211,3 +211,14 @@ portrait and speech (new `--fake-video` / `--fake-audio` flags in `scripts/check
 in `data/browser/README.md`.
 
 **Fixtures.** At 15:38 every one reproduces byte for byte.
+
+### 15:55 — 15-minute soak
+
+`frontend/e2e/soak.mjs`: the real perception in headless Chromium for 15 min (worker, CPU delegate), with every
+Chromium process's RSS sampled every 30 s.
+- **Throughput:** 6.7 fps sustained.
+- **Counters:** 5,646 frames decoded and 5,645 purged (one in flight), 8,981 audio chunks purged, 0 violations,
+  0 page errors.
+- **Main thread:** 3 long tasks, 234 ms in total.
+- **Memory:** total Chromium RSS moved in a sawtooth between 1.60 and 1.65 GB and fell back after each collection
+  (at 4.5 and 12 min). No leak trend.
