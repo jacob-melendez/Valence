@@ -187,6 +187,18 @@ describe("numpy clip", () => {
   });
 });
 
+describe("ulpDistance", () => {
+  it("counts representable doubles between two values", () => {
+    expect(num.ulpDistance(1, 1)).toBe(0);
+    expect(num.ulpDistance(0, -0)).toBe(0);
+    expect(num.ulpDistance(1, 1 + Number.EPSILON)).toBe(1);
+    expect(num.ulpDistance(-5e-324, 5e-324)).toBe(2);
+    expect(num.ulpDistance(Number.MAX_VALUE, Infinity)).toBe(1);
+    expect(num.ulpDistance(NaN, NaN)).toBe(0);
+    expect(num.ulpDistance(NaN, 1)).toBe(Infinity);
+  });
+});
+
 describe("python slices", () => {
   it("copies the last n values like a[-n:], whole array for n <= 0 or n > length", () => {
     expect(Array.from(num.tail([1, 2, 3], 2))).toEqual([2, 3]);

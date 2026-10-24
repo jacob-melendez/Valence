@@ -12,6 +12,9 @@
  *
  * Not bit-exact by design: the sign of a zero returned by nanmax/nanmin/median/percentileLinear when the
  * input mixes 0.0 and -0.0 (numpy's answer there depends on its SIMD lanes and partition order).
+ * Out of scope: exp/log/pow/sin/cos. V8's Math functions, glibc (CPython `math`) and numpy's AVX-512
+ * builds (np.exp, np.power, np.log10) disagree in the last bit for a few percent of inputs, so values that
+ * pass through them need a ulp tolerance (ulpDistance) rather than bit equality.
  */
 
 // ---------- NaN helpers ----------
@@ -326,6 +329,27 @@ function decompose(x: number): { mant: bigint; exp: number } {
   const e = (hi >>> 20) & 0x7ff;
   const frac = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
   return e === 0 ? { mant: frac, exp: -1074 } : { mant: frac | (1n << 52n), exp: e - 1075 };
+}
+
+/** Position of a double on the ordered number line; -0.0 and +0.0 both map to 0. */
+function orderedBits(x: number): bigint {
+  F64[0] = x;
+  const hi = (LITTLE_ENDIAN ? U32[1] : U32[0]) as number;
+  const lo = (LITTLE_ENDIAN ? U32[0] : U32[1]) as number;
+  const mag = (BigInt(hi & 0x7fffffff) << 32n) | BigInt(lo);
+  return hi >>> 31 ? -mag : mag;
+}
+
+/**
+ * How many representable doubles apart a and b are: 0 when equal (either zero sign), 0 for two NaNs,
+ * Infinity when only one is NaN. For tolerance checks on values that went through exp/log/pow/sin/cos:
+ * V8's Math functions, glibc's (CPython `math`) and numpy's AVX-512 SIMD builds (np.exp, np.power,
+ * np.log10) each round the last bit differently, so those values cannot be bit-exact across them.
+ */
+export function ulpDistance(a: number, b: number): number {
+  if (isnan(a) || isnan(b)) return isnan(a) && isnan(b) ? 0 : Infinity;
+  const d = orderedBits(a) - orderedBits(b);
+  return Number(d < 0n ? -d : d);
 }
 
 /** round-half-even(num / den) for non-negative bigints. */
