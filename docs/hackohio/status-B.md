@@ -57,3 +57,53 @@ reported. Written in `docs/EMOTION_FEATURES.md` §5.
 Next: model-card section; self-report evaluation when real taps exist; error analysis on Confused.
 
 Blockers: none.
+
+### 15:25 ET — Two reviews, fixes, retrain (emotion-v1@006a8d7d)
+
+Done:
+- **Spec-vs-reference review** (independent agent, 10 findings, all fixed in `140d7e5`, `1418119`):
+  - blink rate is missing, not 0, when a visible face has no cues (older producers);
+  - a 1e-9 tolerance on the 10 s blink test;
+  - the JSON tree reader zeroes |x| ≤ 1e-35f and reads ±1e300 thresholds as ±inf, so it now matches LightGBM on
+    4 600 probes with inf, huge, tiny and NaN inputs;
+  - golden data adds 17 blink edge-case frames and 3 missing-data windows;
+  - the spec now states the exact edge rules. Cloud A ported these with 0 mismatches.
+- **Four-lens review workflow** (38 agents, 17 findings, 14 confirmed by adversarial verification), all addressed:
+  - The simulator's head pose is now per frame, so `head_away` agrees with yaw and pitch as it does live. Retrained:
+    `emotion-v1@006a8d7d`.
+  - The trained shuffled-context control is no longer cited as a leak test.
+  - Robustness conditions now stress every face-cue spread.
+  - Self-report: the evaluator skips duplicate and non-object lines and has a fair constant baseline.
+  - Capture replay handles time of day and short recordings.
+  - Model card §9 is now generated from the artifacts (`scripts/emotion_card.py`).
+
+Numbers (simulated; 90 test sessions):
+
+| Metric | Result |
+|---|---|
+| Macro-F1 | 0.681 (95% CI 0.667–0.695) |
+| Face only | 0.616 |
+| Context gain | +0.066 (CI +0.059 to +0.074) |
+| ECE | 0.007 |
+| Map-position MAE | valence 0.174, arousal 0.236 |
+| Weakest state | Confused, F1 0.46 |
+
+Robustness:
+
+| Shift | Macro-F1 |
+|---|---|
+| None (fresh sessions) | 0.691 |
+| Every face-cue spread × 2 | 0.554 |
+| Between-person cue spread × 1.5 | 0.649 |
+| Pitch sign flipped | 0.604 |
+| Blinks halved | 0.681 |
+
+Pre-event real captures (no cues):
+
+- Quiet typing reads Focused 78%, Calm 22%, and no stress state.
+- Cued fists read Focused 83% and Frustrated 12%.
+
+Next: real self-report taps once Cloud A's browser-engine glue registers the feature provider. Then re-run
+`valence.eval.emotion_capture` on browser recordings to measure real cue spreads against the simulator.
+
+Blockers: none (self-report capture depends on Cloud A's glue, in progress).
