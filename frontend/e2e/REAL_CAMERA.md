@@ -15,8 +15,8 @@ scalars only.
 3. In DevTools → Network: every request goes to the site's own origin. The first load fetches `/mediapipe/wasm/*`
    (about 18 MB) and `/mediapipe/models/*` (about 21 MB); a reload serves them from the cache.
    **Load time** = `status().load_ms`.
-4. `status().video_backend` should read `worker/GPU` on a Mac (`worker/CPU` or `main/CPU` on a phone is fine).
-   **fps** = `status().fps` (target 10; note what you get) and **video_ms** = `status().video_ms`.
+4. `status().video_backend` should read `worker/CPU` (the default delegate; `main/CPU` means workers were
+   unavailable). **fps** = `status().fps` (target 10; note what you get) and **video_ms** = `status().video_ms`.
 5. Console: no red errors, no "Content Security Policy" messages.
 
 ## 2. Face (sit 50–80 cm from the camera, face lit)
@@ -56,11 +56,11 @@ scalars only.
 
 ## 6. GPU vs CPU (Mac, 3 minutes)
 
-The cloud tests ran on the CPU delegate, where the browser matches the Python edge to ~1e-4 on identical frames. On
+The default is the CPU delegate, where the browser matches the Python edge to ~1e-4 on identical frames. On
 software WebGL the GPU delegate drifted more (face valence p95 0.06, landmarks ~1 px), and a real GPU has not been
-measured. Open the console once with `&delegate=CPU` and once with `&delegate=GPU` added to the URL. For each, sit
-still for 30 s and note `status().fps`, and how much `face_valence` wobbles in `__valencePerception.last()`
-(a few readings). If GPU is clearly noisier, say so: the default can switch to CPU.
+measured. Open the console once as is and once with `&delegate=GPU` added to the URL. For each, sit still for 30 s
+and note `status().fps`, `video_backend`, and how much `face_valence` wobbles in `__valencePerception.last()` (a few
+readings). If CPU is too slow (fps well under 10) and GPU looks as steady, say so: the default can switch.
 
 ## What to send back
 

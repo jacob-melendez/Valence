@@ -75,8 +75,8 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   the emotion cues' blink detector needs the face rate (`status().face_hz` reports it). Head yaw and pitch are not
   taken from the head-crop retry (its matrix is in the crop's own camera); roll is.
 - **Face hold.** 0.45 s, i.e. 2.25 face passes at 10 Hz, stretched to 2.25 measured passes on slower devices.
-- **Workers and delegates.** The video models run in a Web Worker. The GPU delegate is used unless WebGL is
-  software-rendered.
+- **Workers and delegates.** The video models run in a Web Worker, on MediaPipe's CPU delegate by default. On
+  identical frames that matches the native edge to ~1e-4. `?delegate=GPU` on the page URL tries the GPU instead.
 - **Not included.** No compliment keywords, no lux or SPL calibration (the uncalibrated defaults, as on a fresh
   desktop install).
 

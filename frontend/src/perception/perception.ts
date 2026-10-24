@@ -206,7 +206,7 @@ class BrowserPerception implements Perception {
     }
     if (gen !== this.gen) return false; // stopped while the camera opened (teardown released both)
     this.setStatus({ video_backend: `${backend.where}/${backend.delegate}` }, false);
-    if (backend.delegate === "CPU" && this.opts.delegate !== "CPU") this.degrade("no hardware GPU: CPU delegate", true);
+    if (backend.delegate === "CPU" && this.opts.delegate === "GPU") this.degrade("GPU unavailable: CPU delegate", true);
 
     const onEnded = () => {
       this.degrade("camera stopped", true);
@@ -401,7 +401,7 @@ function urlDelegate(): PerceptionOptions["delegate"] | undefined {
 }
 
 export function createPerception(opts: PerceptionOptions = {}, deps?: Partial<PerceptionDeps>): Perception {
-  const delegate = opts.delegate ?? urlDelegate();
+  const delegate = opts.delegate ?? urlDelegate() ?? "CPU";
   const p = new BrowserPerception({ ...opts, ...(delegate ? { delegate } : {}) }, { ...BROWSER, ...deps });
   // DevTools handle for the real-camera check (frontend/e2e/REAL_CAMERA.md): status, counters and the latest
   // observations, all scalars; no frame or sample is reachable from it.

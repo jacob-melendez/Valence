@@ -162,7 +162,12 @@ export interface PerceptionOptions {
   video?: boolean;
   /** Process the stream's audio track (default true when it has one). */
   audio?: boolean;
-  /** MediaPipe delegate (default "GPU", falling back to "CPU" if it fails to start). */
+  /**
+   * MediaPipe delegate. Default "CPU": on identical frames the CPU path matches the Python edge to ~1e-4
+   * (blendshapes, valence, head pose), while the GPU path is unmeasured on real hardware and drifted 100-300x more on
+   * software WebGL. "GPU" (also `?delegate=GPU` on the page URL) falls back to "CPU" if it fails to start, or when
+   * WebGL is software-rendered.
+   */
   delegate?: "GPU" | "CPU";
   /** dB SPL = dBFS + this (Python default spl_offset_db = 94, uncalibrated). */
   splOffsetDb?: number;

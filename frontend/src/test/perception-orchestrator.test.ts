@@ -193,6 +193,28 @@ describe("createPerception orchestration", () => {
     p.stop();
   });
 
+  it("asks for the CPU delegate by default; a GPU request that falls back to CPU is reported", async () => {
+    const asked: (string | undefined)[] = [];
+    const { deps } = harness();
+    const wrapped: Partial<PerceptionDeps> = {
+      ...deps,
+      visionBackend: async (o) => {
+        asked.push(o.delegate);
+        return deps.visionBackend!(o);
+      },
+    };
+    const p = createPerception({ fps: 20 }, wrapped);
+    await p.start(stream(track("video")));
+    expect(asked).toEqual(["CPU"]);
+    expect(p.status().degraded).not.toContain("GPU unavailable: CPU delegate");
+    p.stop();
+    const g = createPerception({ fps: 20, delegate: "GPU" }, wrapped);
+    await g.start(stream(track("video")));
+    expect(asked.at(-1)).toBe("GPU");
+    expect(g.status().degraded).toContain("GPU unavailable: CPU delegate"); // the fake backend runs on CPU
+    g.stop();
+  });
+
   it("exposes a scalar-only DevTools handle", async () => {
     const { deps } = harness();
     const p = createPerception({ fps: 20 }, deps);
@@ -255,7 +277,7 @@ describe("createPerception orchestration", () => {
     await started;
     expect(statuses).toEqual([]);
     expect(p.status()).toMatchObject({ phase: "stopped", video_backend: null });
-    expect(p.status().degraded).not.toContain("no hardware GPU: CPU delegate");
+    expect(p.status().degraded).not.toContain("GPU unavailable: CPU delegate");
     expect(v.listeners.size + a.listeners.size).toBe(0);
   });
 
