@@ -1,9 +1,12 @@
 /**
  * Perception end-to-end harness page: opens the (fake) camera and mic like the console does, runs the real
  * createPerception(), and exposes compact summaries on window.__e2e for frontend/e2e/run.mjs. Query parameters:
- * delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face cadence), mock=1 (createMockPerception instead).
+ * delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face cadence), record=1 (keep every observation as an
+ * obs_to_dict line), mock=1 (createMockPerception instead).
  */
-import { createMockPerception, createPerception, openMediaStream, type Obs, type PerceptionOptions } from "@/perception";
+import {
+  createMockPerception, createPerception, obsToDict, openMediaStream, type Obs, type PerceptionOptions,
+} from "@/perception";
 
 interface E2E {
   ready: boolean;
@@ -15,13 +18,15 @@ interface E2E {
   counters: unknown;
   violations: string[];
   t0: number;
+  /** record=1: every observation in contracts.obs_to_dict form (PersonObs fields only, no `raw`). */
+  records: unknown[];
   /** Main-thread tasks over 50 ms after start(): count and total ms (what the page's UI would feel). */
   longTasks: { n: number; ms: number; max: number };
 }
 
 const e2e: E2E = {
   ready: false, error: null, media: null, video: [], audio: [], status: null, counters: null, violations: [],
-  t0: performance.now(), longTasks: { n: 0, ms: 0, max: 0 },
+  t0: performance.now(), longTasks: { n: 0, ms: 0, max: 0 }, records: [],
 };
 (window as unknown as { __e2e: E2E }).__e2e = e2e;
 document.addEventListener("securitypolicyviolation", (e) => e2e.violations.push(`${e.violatedDirective} ${e.blockedURI}`));
@@ -31,7 +36,14 @@ const statusEl = document.getElementById("status")!;
 const latestEl = document.getElementById("latest")!;
 const r3 = (v: number) => (Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null);
 
+const RECORD = params.get("record") === "1";
+
 function summarize(o: Obs): void {
+  if (RECORD && e2e.records.length < 20000) {
+    const d = obsToDict(o);
+    if (Array.isArray(d["persons"])) for (const p of d["persons"] as Record<string, unknown>[]) delete p["raw"];
+    e2e.records.push(d);
+  }
   if (o.type === "audio") {
     e2e.audio.push({ t: r3(o.t), seq: o.block_seq, db: r3(o.db_spl), speech: r3(o.speech_prob), laugh: o.laughter_onsets });
     return;

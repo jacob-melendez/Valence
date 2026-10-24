@@ -5,7 +5,8 @@
 // download size.
 //
 //   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
-//                    [--audio file.wav] [--python-cadence] [--main-thread] [--deny camera|mic] [--no-build] [--headed]
+//                    [--audio file.wav] [--video file.y4m] [--record out.jsonl [--record-seconds N]] [--python-cadence]
+//                    [--main-thread] [--deny camera|mic] [--no-build] [--headed]
 //
 // Run from frontend/. Needs `npm install`, the repo's Python venv (for make_media.py) and Playwright's Chromium
 // (NODE_PATH or /opt/node-tools/node_modules provides `playwright`).
@@ -47,7 +48,12 @@ const DELEGATE = opt("--delegate", "");
 const CSP_KIND = opt("--csp", "task");
 const MEDIA = path.join(E2E, ".media");
 const AUDIO = path.resolve(opt("--audio", path.join(MEDIA, "speech.wav")));
-const VIDEO = path.join(MEDIA, `${SCENARIO}.y4m`);
+// --video file.y4m: any clip instead of a scenario scene (the report is tagged with --scenario).
+const VIDEO = path.resolve(opt("--video", path.join(MEDIA, `${SCENARIO}.y4m`)));
+// --record out.jsonl [--record-seconds N]: write the observations (obs_to_dict lines, PersonObs fields only) from the
+// first video observation for N seconds (default: the whole run), e.g. one pass of a clip.
+const RECORD = opt("--record", null);
+const RECORD_S = Number(opt("--record-seconds", "Infinity"));
 const DIST = path.join(E2E, "dist");
 const OUT = path.join(E2E, ".out");
 
@@ -142,6 +148,7 @@ const params = new URLSearchParams();
 if (DELEGATE) params.set("delegate", DELEGATE);
 if (args.includes("--python-cadence")) params.set("faceEveryFrame", "0");
 if (args.includes("--main-thread")) params.set("worker", "0");
+if (RECORD) params.set("record", "1");
 const query = params.size ? `?${params}` : "";
 const resp = await page.goto(`${origin}/${query}`, { waitUntil: "load" });
 const startedAt = Date.now();
@@ -246,6 +253,12 @@ const report = {
   sample_audio: audio.slice(-3),
 };
 writeFileSync(path.join(OUT, `report-${TAG}.json`), `${JSON.stringify(report, null, 2)}\n`);
+if (RECORD) {
+  const t0 = data.records.find((r) => r.type === "video")?.t ?? 0;
+  const kept = data.records.filter((r) => r.t >= t0 && r.t < t0 + RECORD_S);
+  writeFileSync(path.resolve(RECORD), kept.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  console.log(`recorded ${kept.length} observations (${kept.filter((r) => r.type === "video").length} video) -> ${RECORD}`);
+}
 console.log(JSON.stringify({ scenario: TAG, ok: report.ok, checks, metrics: report.metrics, medians: report.medians,
   error: data.error, errors: pageErrors.slice(0, 5), csp: report.csp_violations.slice(0, 5), off: offOrigin.slice(0, 5),
   console: consoleLog.slice(0, 10) }, null, 2));
