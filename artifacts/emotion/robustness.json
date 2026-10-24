@@ -1,0 +1,40 @@
+{
+ "model_id": "emotion-v1@378fa16c",
+ "noise_1.0": {
+  "macro_f1": 0.6812,
+  "ece": 0.0119,
+  "valence_mae": 0.1709,
+  "arousal_mae": 0.2425
+ },
+ "noise_0.5": {
+  "macro_f1": 0.7528,
+  "ece": 0.029,
+  "valence_mae": 0.1492,
+  "arousal_mae": 0.2041
+ },
+ "noise_1.5": {
+  "macro_f1": 0.5795,
+  "ece": 0.0478,
+  "valence_mae": 0.1972,
+  "arousal_mae": 0.2914
+ },
+ "face_cues_x2_noise": {
+  "macro_f1": 0.6097,
+  "ece": 0.0506,
+  "valence_mae": 0.1943,
+  "arousal_mae": 0.266
+ },
+ "blinks_halved": {
+  "macro_f1": 0.672,
+  "ece": 0.0137,
+  "valence_mae": 0.1745,
+  "arousal_mae": 0.2491
+ },
+ "pitch_sign_flipped": {
+  "macro_f1": 0.5987,
+  "ece": 0.0369,
+  "valence_mae": 0.1976,
+  "arousal_mae": 0.2699
+ },
+ "_note": "60 fresh sessions (seed 2027), simulated; not real data"
+}

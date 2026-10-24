@@ -401,3 +401,148 @@ nothing about the thesis.
 9. At a new venue, capture the room baseline on arrival while sitting neutral (`POST /api/room/baseline`) before
    reading any label. `VALENCE_ARTIFACTS_DIR=artifacts/legacy` rolls back to the previous model (`85874e97`), which
    reads absolute levels and drifts toward negative states in a loud hall (§5 venue shift).
+
+## 9. Emotion map (Hack OHI/O)
+
+> Added during Hack OHI/O (Oct 24–25, 2026). **Every number in this section comes from simulated data**, generated
+> under the assumptions in [EMOTION_FEATURES.md](EMOTION_FEATURES.md) §7 and [DATASET.md](DATASET.md). The
+> valence–arousal anchors are assumptions, not measurements. No real labeled data has been evaluated yet (§9.6).
+> The served desktop models above (M2/M0, `artifacts/`, `artifacts/all/`) are unchanged.
+
+Sources: `artifacts/emotion/meta.json` (model), `metrics.json` (held-out evaluation, scenario replays),
+`robustness.json` (shifted test corpora). Regenerate with `python -m valence.models.emotion` (≈ 12 min on 4 cores),
+`python -m valence.eval.emotion_eval`, then `python scripts/emotion_export.py` and `python scripts/emotion_tour.py`.
+
+### 9.1 Model details
+
+| Item | Value |
+|---|---|
+| Version id | **`emotion-v1@378fa16c`**: first 8 hex of the SHA-256 of the three JSON dumps (`meta.json` `model_id`) |
+| Models | 10-state LightGBM classifier (`multiclass`, 15 leaves, learning rate 0.1, ≤ 280 rounds → 279; class weights n/(k·count)); LightGBM valence and arousal regressors (L2, 31 leaves, learning rate 0.1, early stop → 246 and 390 rounds, unweighted). `deterministic=True` |
+| Input | 132 features (`meta.json` `input_features`): the served M2 set (101 of the frozen 123, room-relative) + the 31 `emotion-v1` face-cue features (brow lowering, eye openness, frown, smile, head yaw and pitch, looking away, blink rate; `valence/features/emotion.py`). NaN = missing; no input clipping |
+| Output | 10 calibrated probabilities (`softmax(raw / T)`, T = 0.948 fitted by NLL on the calibration sessions); **map position = probability-weighted anchors** `Σ p_k · anchor_k` (served); regressor valence/arousal (exported for comparison); `pred_contrib` (TreeSHAP) per output |
+| Training data | Simulator, state set `emotion`: 600 sessions (seed 11), 169 171 windows (random 1–180 tick history, every 6 ticks); session split 70 / 7.5 / 7.5 / 15 (train / early stop / calibration / test = 117 672 / 12 206 / 14 745 / 24 548 windows; 90 test sessions) |
+| Modality dropout | as M2: +30% training copies with the whole face block hidden, +20% degraded (face valence ± 0.25, cues ± 0.08, pose ± 6°, blink rate × U(0.5, 1.5), visible share × U(0.3, 0.8)) |
+| Size | `classifier.json.gz` 2.78 MB, `valence.json.gz` 0.45 MB, `arousal.json.gz` 0.71 MB (gzipped `dump_model()` JSON for the web engine); the `.txt.gz` files are the same models in LightGBM's text format for Python |
+| Parity | `golden.json`: 23 input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; 8 feature windows; 370 face-cue frames. `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone with zero error on all of them (`tests/test_emotion_models.py`) |
+
+**States and anchors** (class order; anchors from the plan's circumplex, **assumptions**):
+
+| State | Valence | Arousal | | State | Valence | Arousal |
+|---|---|---|---|---|---|---|
+| Focused | +0.1 | +0.3 | | Tense | −0.4 | +0.5 |
+| Frustrated / Masked Stress | −0.6 | +0.6 | | Bored | −0.3 | −0.5 |
+| Exhausted | −0.4 | −0.7 | | Confused | −0.2 | +0.3 |
+| Collaborative / Happy | +0.7 | +0.5 | | Calm | +0.4 | −0.4 |
+| Overwhelmed / Distressed | −0.6 | +0.8 | | Anxious | −0.5 | +0.6 |
+
+In the simulator, an episode's true valence/arousal is its state's anchor plus N(0, 0.10) per axis, so the
+regression targets are the anchors by construction, with a little within-state spread.
+
+### 9.2 Held-out results (90 test sessions, 24 548 windows, up to 15 min of history)
+
+| Model (features) | Macro-F1 | Accuracy | ECE | Valence MAE / CCC | Arousal MAE / CCC | Quadrant |
+|---|---|---|---|---|---|---|
+| **Full (132), map position = Σ p·anchor (served)** | **0.688** | 0.702 | 0.007 (0.019 before T) | **0.176 / 0.78** | **0.238 / 0.72** | 0.78 |
+| Full (132), regressors | — | — | — | 0.199 / 0.75 | 0.267 / 0.70 | 0.76 |
+| Face only (38: the 7 face features + the 31 cues) | 0.621 | 0.631 | 0.007 | 0.205 / 0.71 | 0.275 / 0.65 | 0.73 |
+| Context only (94) | 0.425 | 0.447 | 0.005 | 0.274 / 0.48 | 0.329 / 0.51 | 0.64 |
+| Full, face hidden on every test window | 0.414 | 0.437 | 0.014 | 0.275 / 0.48 | 0.329 / 0.51 | 0.63 |
+| Shuffled-context control, test time | 0.429 | 0.430 | 0.163 | 0.266 / 0.50 | 0.366 / 0.40 | 0.59 |
+| Shuffled-context control, trained | 0.618 | 0.628 | 0.007 | 0.206 / 0.70 | 0.277 / 0.64 | 0.73 |
+
+Reading:
+
+- **Context adds +0.067 macro-F1 over the face alone** (0.621 → 0.688) and improves both axes. The face cues carry
+  most of the signal for the four new states, by the simulator's design.
+- **The controls behave.** With context from a random other window, the full model drops to 0.429 (and its
+  calibration breaks, ECE 0.163): it really uses the context. A model trained on shuffled context lands at 0.618,
+  the face-only level, so the context features do not leak the label some other way.
+- **Modality dropout works as intended:** with the face hidden, the full model falls back to the context-only level
+  (0.414 vs 0.425).
+- **The regressors lose to the probability-weighted anchors** on both axes and both metrics, after tuning (class
+  weights off, other learning rates and leaf counts: valence MAE stayed at 0.198–0.200). The within-state spread
+  shows only weakly in the simulated cues, so a state-mixture estimate is close to optimal here. The map position
+  is therefore `Σ p_k · anchor_k`; the regressors stay exported for real-data retraining.
+- **Calibration** is good in distribution (ECE 0.007); it degrades under shift (§9.4).
+- Warm-up: macro-F1 0.658 with ≤ 1 min of history, 0.692 at 1–5 min, 0.690 at 5–15 min.
+
+**Per-state F1** (full / face only): Collaborative 0.84 / 0.77, Tense 0.79 / 0.74, Frustrated 0.76 / 0.71,
+Exhausted 0.75 / 0.64, Overwhelmed 0.68 / 0.64, Focused 0.68 / 0.60, Calm 0.67 / 0.57, Anxious 0.62 / 0.52,
+Bored 0.61 / 0.56, **Confused 0.48 / 0.46** (weakest: the brow-lowering cue overlaps Focused and Tense, and Confused
+has the least context of its own).
+
+**Confusion** (full model, rows = true state, row-normalized; · < 0.005):
+
+| True ↓ / predicted → | Foc | Fru | Exh | Col | Ovw | Ten | Bor | Cnf | Clm | Anx |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Focused (Foc) | **0.67** | 0.01 | 0.02 | 0.01 | 0.01 | 0.01 | 0.04 | 0.09 | 0.11 | 0.03 |
+| Frustrated_Masked (Fru) | 0.02 | **0.74** | 0.01 | 0.11 | 0.02 | 0.01 | 0.01 | 0.03 | 0.03 | 0.01 |
+| Exhausted (Exh) | 0.03 | 0.01 | **0.71** | 0.01 | 0.06 | 0.02 | 0.09 | 0.02 | 0.03 | 0.03 |
+| Collaborative_Happy (Col) | · | 0.08 | 0.01 | **0.84** | · | · | · | · | 0.04 | 0.01 |
+| Overwhelmed (Ovw) | 0.02 | 0.01 | 0.06 | 0.01 | **0.70** | 0.05 | 0.06 | 0.03 | 0.02 | 0.05 |
+| Tense (Ten) | 0.01 | 0.01 | 0.02 | · | 0.04 | **0.79** | 0.01 | 0.04 | · | 0.09 |
+| Bored (Bor) | 0.06 | 0.01 | 0.10 | 0.01 | 0.07 | 0.02 | **0.62** | 0.03 | 0.03 | 0.05 |
+| Confused (Cnf) | 0.13 | 0.02 | 0.03 | 0.01 | 0.05 | 0.05 | 0.06 | **0.53** | 0.03 | 0.10 |
+| Calm (Clm) | 0.13 | 0.03 | 0.03 | 0.04 | · | · | 0.03 | 0.03 | **0.68** | 0.02 |
+| Anxious (Anx) | 0.04 | 0.01 | 0.02 | 0.01 | 0.05 | 0.10 | 0.04 | 0.09 | 0.02 | **0.63** |
+
+- **The shared negative, high-arousal region (Frustrated / Tense / Anxious / Overwhelmed):** 83% of its windows are
+  predicted inside the region and 87% of those on the right state. They are separated by context and behavior
+  (fists and a loud room for Tense and Frustrated, a quiet room and fidgeting for Anxious, head in hands for
+  Overwhelmed), not by valence–arousal: their anchors are within 0.3 of each other.
+- Masked frustration still reads as Collaborative 11% of the time: the forced smile shows in `smile` as intended.
+- Focused ↔ Calm / Confused are the main low-stakes confusions.
+
+**Scripted scenarios** (`metrics.json` `scenarios`; existing replay scenarios, ticks after a 2-min grace in each
+segment): every scripted state reads as scripted on ≥ 0.84 of ticks, except the `focused` scenario (Focused 0.69)
+and the short Focused lead-in of `overwhelmed` (13 scored ticks, read mostly as Bored). The repo has no
+replay scenarios for the four new states (`scenarios/` is outside this track); `artifacts/emotion/tour.json.gz` is a
+50-min scripted walk through all ten states (label = scripted state on 70% of all ticks, transitions included).
+
+### 9.3 Explanations
+
+`pred_contrib` (TreeSHAP) is exported for all three models, and `meta.json` `layers` maps each input to a layer
+(the 31 cues → Facial Surface). As with M2, the attributions explain the model, which learned the simulator's
+assumptions; they are not evidence about a person.
+
+### 9.4 Robustness (`robustness.json`, 60 fresh simulated sessions)
+
+| Condition | Macro-F1 | ECE | Valence MAE | Arousal MAE |
+|---|---|---|---|---|
+| Same simulator, new sessions | 0.681 | 0.012 | 0.171 | 0.243 |
+| All noise × 0.5 | 0.753 | 0.029 | 0.149 | 0.204 |
+| All noise × 1.5 | 0.580 | 0.048 | 0.197 | 0.291 |
+| Face cues 2× noisier than in training | 0.610 | 0.051 | 0.194 | 0.266 |
+| Blink rates halved (low face fps in the browser) | 0.672 | 0.014 | 0.175 | 0.249 |
+| **Pitch sign flipped** (matrix read transposed) | **0.599** | 0.037 | 0.198 | 0.270 |
+
+The model is robust to under-counted blinks but sensitive to the pitch sign: perception must pass the "nodding down
+decreases pitch" check in EMOTION_FEATURES.md §1.1 before the map is trusted.
+
+### 9.5 Limits (read these before the numbers)
+
+- **Simulated training and test data.** The face-cue values per state (EMOTION_FEATURES.md §7) are the hypothesis,
+  written before any measurement. The face-only score shows how strongly the cues were set, not how expressive
+  people are.
+- **The anchors are assumptions**, and the regression targets are built from them. The map position cannot be more
+  right than the anchors are; self-reports (§9.6) are the first check.
+- **Frustrated, Tense, Anxious and Overwhelmed share a region** of the plane (anchors within 0.3); a point there
+  says "negative, aroused", and the state label comes from context and behavior.
+- **Confused is weak** (F1 0.48) and easy to mistake for Focused.
+- **Perception assumptions:** blendshapes relative to a 20 s neutral baseline (taken while the person may not be
+  neutral), blink detection needs ≥ 15 face fps, and the pitch sign must be right (§9.4). Head pose is relative to
+  the starting pose, so a camera moved mid-session shifts it.
+- **No demographic or fairness evaluation**, as for the rest of the system (§7); MediaPipe's own model cards apply.
+- **Calibration is sim-calibrated**; ECE rises 4–7× under the shifts above.
+- Intended use is the same as M2's (§2): a demonstration of context-aware affect estimation with explanations, not
+  a measurement of a person, never for workplace or school monitoring.
+
+### 9.6 Real data
+
+- **Self-report sessions** (guaranteed track): `python -m valence.eval.self_report <taps.jsonl>` scores taps from
+  the console's capture (format: EMOTION_FEATURES.md §6; features and taps only, never media). It reports MAE, CCC
+  and quadrant agreement for the map position, the regressors and a constant (0, 0) guess, per person.
+  **Status: no real taps yet**; the evaluator has only run on a synthetic simulator fixture
+  (`tests/test_emotion_models.py`), whose numbers say nothing about people.
+- **Public dataset** (stretch): see the status file for whether one could be obtained without a request form.

@@ -217,3 +217,79 @@ def scenario_check(predictor, grace_s: float = 120.0) -> dict:
                               "top_label": max(set(x[3] for x in v), key=[x[3] for x in v].count)}
                           for s, v in per_state.items()}
     return out
+
+
+def robustness(predictor, sessions: int = 60, seed: int = 2027) -> dict:
+    """The exported models on fresh test corpora under deployment-like shifts (simulated):
+
+    * ``noise_scale`` 0.5 / 1.0 / 1.5 (every noise term of the simulator, face cues included);
+    * face cues twice as noisy (episode, tick and neutral-baseline spread x2) than in training;
+    * blink rates halved (browser face tracking below ~15 fps misses blinks);
+    * pitch sign flipped (a transposed matrix read in perception).
+    """
+    from dataclasses import replace
+
+    import valence.sim.generator as gen
+    from valence.features.emotion_dataset import build_emotion
+    from valence.sim.params import FACE_CUE_NUISANCE
+
+    def run(noise_scale: float, cues=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+        saved = gen.FACE_CUE_NUISANCE
+        try:
+            if cues is not None:
+                gen.FACE_CUE_NUISANCE = cues
+            df = gen.simulate_corpus(sessions, seed, state_set="emotion", noise_scale=noise_scale)
+        finally:
+            gen.FACE_CUE_NUISANCE = saved
+        return build_emotion(df, seed=seed)
+
+    def metrics(X: pd.DataFrame, meta: pd.DataFrame) -> dict:
+        r = predictor.predict(X[predictor.cols].to_numpy())
+        y = meta["label"].map({s: i for i, s in enumerate(predictor.states)}).to_numpy()
+        tv, ta = meta["valence"].to_numpy(), meta["arousal"].to_numpy()
+        return {"macro_f1": round(float(f1_score(y, r["proba"].argmax(axis=1), average="macro")), 4),
+                "ece": round(ece(r["proba"], y), 4),
+                "valence_mae": round(float(np.abs(r["valence_mix"] - tv).mean()), 4),
+                "arousal_mae": round(float(np.abs(r["arousal_mix"] - ta).mean()), 4)}
+
+    out = {}
+    base_X, base_meta = run(1.0)
+    out["noise_1.0"] = metrics(base_X, base_meta)
+    for ns in (0.5, 1.5):
+        out[f"noise_{ns}"] = metrics(*run(ns))
+    noisy = replace(FACE_CUE_NUISANCE, episode_sd=2 * FACE_CUE_NUISANCE.episode_sd,
+                    tick_sd=2 * FACE_CUE_NUISANCE.tick_sd, neutral_sd=2 * FACE_CUE_NUISANCE.neutral_sd,
+                    neutral_deg_sd=2 * FACE_CUE_NUISANCE.neutral_deg_sd)
+    out["face_cues_x2_noise"] = metrics(*run(1.0, noisy))
+    Xb = base_X.copy()
+    for c in ("blink_rate_1m", "blink_rate_5m", "blink_rate_15m"):
+        Xb[c] = Xb[c] * 0.5
+    out["blinks_halved"] = metrics(Xb, base_meta)
+    Xp = base_X.copy()
+    for c in ("pitch_now", "pitch_mean_1m", "pitch_mean_5m"):
+        Xp[c] = -Xp[c]
+    out["pitch_sign_flipped"] = metrics(Xp, base_meta)
+    out["_note"] = f"{sessions} fresh sessions (seed {seed}), simulated; not real data"
+    return out
+
+
+def main() -> None:
+    """``python -m valence.eval.emotion_eval`` writes artifacts/emotion/robustness.json and scenarios.json."""
+    import argparse
+    import json
+    from pathlib import Path
+
+    from valence.models.emotion import EmotionPredictor, clean_json
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", default="artifacts/emotion")
+    ap.add_argument("--sessions", type=int, default=60)
+    args = ap.parse_args()
+    pred = EmotionPredictor(Path(args.dir))
+    rob = {"model_id": pred.model_id, **robustness(pred, sessions=args.sessions)}
+    (Path(args.dir) / "robustness.json").write_text(json.dumps(clean_json(rob), indent=1, allow_nan=False))
+    print(json.dumps(rob, indent=1))
+
+
+if __name__ == "__main__":
+    main()
