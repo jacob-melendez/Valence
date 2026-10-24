@@ -224,6 +224,11 @@ describe("aggregator golden replay", () => {
         worst[k] = Math.max(worst[k] ?? 0, v);
       featErr = Math.max(featErr, compareCheckpoints(c, runOf(c)).maxErr);
     }
+    const nonzero = Object.entries(worst).filter(([, v]) => v > 0);
+    console.log(
+      `[engine-aggregator] ${fixture.cases.length} cases: record fields max abs ${JSON.stringify(Object.fromEntries(nonzero))}` +
+        ` (all ${Object.keys(worst).length - nonzero.length} other numeric fields 0); checkpoint features max abs ${featErr}`,
+    );
     for (const [k, v] of Object.entries(worst))
       expect(v, k).toBeLessThanOrEqual(TRANSCENDENTAL.has(k) ? TOL : 0);
     expect(featErr).toBeLessThanOrEqual(TOL * 1e3);

@@ -725,7 +725,7 @@ describe("runtime behaviour", () => {
  * (outputs keyed by "tick:person_id", none = predict() returns None), a stub purge gate, the audit / aggregator /
  * engine clocks patched to `clock` and np.random.normal patched to `draws`. The specs are built below exactly as
  * the generator built them; Python's results (canonical text digest as in the extra runs, audit chain head, end
- * state) are pasted as literals. Generator: rt_edge.py + gen_specs.py (session scratchpad; suggested home
+ * state) are pasted as literals. Generator: rt_edge.py + gen_specs.py (session scratchpad, runtime_review/; suggested home
  * scripts/export_web_golden_runtime_edges.py). Rerun it whenever valence/runtime/engine.py changes.
  */
 type SpecRecord = Record<string, number | string | null | string[]>;
@@ -1204,6 +1204,8 @@ interface SpecRun {
   rt: Runtime;
   ticks: TickMessage[][];
   text: string[];
+  /** The narrator's calls: [event_id, label_display, confidence] per request, ["clear"] per clear_cache(). */
+  narrated: (string | number)[][];
 }
 
 /** Drive a Runtime through a spec the way rt_edge.py drives Python's. */
@@ -1224,12 +1226,17 @@ function runSpec(spec: Spec): SpecRun {
   const clock = { now: spec.wall_init ?? 0, mono: spec.mono_init ?? 0 };
   const draws = spec.draws ?? [];
   let k = 0;
+  const narrated: (string | number)[][] = [];
   const rt = new Runtime(makeSettings(spec.settings ?? {}), stub, {
     sessionId: "session-edge",
     clock: () => clock.now,
     monoClock: () => clock.mono,
     tz: "UTC",
     gauss: () => draws[k++] as number,
+    narrator: {
+      request: (sheet) => narrated.push([sheet.event_id, sheet.label_display, sheet.confidence]),
+      clearCache: () => narrated.push(["clear"]),
+    },
   });
   rt.roomOnly = spec.room_only ?? false;
   rt.sourceLabel = spec.label ?? "replay";
@@ -1256,7 +1263,7 @@ function runSpec(spec: Spec): SpecRun {
     const recs = st.records === null ? null : st.records.map((r) => specRecord(r, "session-edge"));
     ticks.push(rt.step(recs, st.wall, st.mono));
   }
-  return { rt, ticks, text: ticks.map((t) => canon(t)) };
+  return { rt, ticks, text: ticks.map((t) => canon(t)), narrated };
 }
 
 describe("runtime against Python on inputs the golden runs never produce", () => {
@@ -1383,6 +1390,35 @@ describe("runtime against Python on inputs the golden runs never produce", () =>
     expect(pred?.explanation.text).toBe(
       "Upbeat (40%) is the most likely state for Person #1. Main evidence: average noise of 72 dB over 15 minutes.",
     );
+  });
+
+  it("asks the narrator on a new shown label or confidence band, else every 30 s, and clears it on a reset", () => {
+    const C = "Collaborative / Happy";
+    expect((runs["sv"] as SpecRun).narrated).toEqual([
+      ["p1-000000", "Upbeat", 0.4],
+      ["p-3-000003", C, 0.4],
+      ["p1-000003", C, 0.4],
+      ["p2-000003", C, 0.4],
+      ["p2-000009", C, 0.4],
+      ["p2-000015", C, 0.4],
+      ["p2-000021", C, 0.4],
+      ["p2-000027", C, 0.4],
+      ["p2-000033", C, 0.4],
+    ]);
+    expect((runs["room"] as SpecRun).narrated).toEqual([
+      ["p0-000000", "Upbeat", 0.4],
+      ["p0-000006", "Upbeat", 0.4],
+      ["p1-000010", C, 0.4],
+    ]);
+    expect((runs["op"] as SpecRun).narrated).toEqual([
+      ["p1-000000", C, 0.4],
+      ["clear"],
+      ["p1-000006", C, 0.4],
+      ["clear"],
+      ["p1-000012", C, 0.4],
+      ["p1-000018", C, 0.4],
+      ["p1-000024", C, 0.4],
+    ]);
   });
 
   it("audits a break's person id as the JSON value it was (null, int, float) instead of throwing on 1.5", () => {
@@ -1541,6 +1577,167 @@ describe("runtime pieces against Python (push_obs, ScenarioSource, hello)", () =
   });
 });
 
+// ---------- Perturbed golden runs (served predictor, against Python) ----------
+
+/**
+ * The golden runs' records, perturbed by a xorshift32 stream (NaN, +-0.0, 1e-300, 1e300, half-unit ties, scaled
+ * and shifted values, odd counts and people numbers, extra SIMULATED tags), with person 1 leaving for 20 ticks
+ * and a second person (person 1's row as id 3) coming and going, stepped through Python's Runtime with the served
+ * predictor and through this one. Python's canonical-text digest and audit head are pasted below; the generator
+ * is rt_perturb.py (session scratchpad, runtime_review/; suggested home scripts/export_web_golden_runtime_edges.py), which uses
+ * exactly the constants and draw order of perturbRecord(). Exploratory runs of the same kind over all 9
+ * scenarios (6480 ticks, both state sets) matched Python on every tick.
+ */
+const PERTURB = {
+  floats: [
+    "ambient_db",
+    "light_lux",
+    "posture_slump",
+    "head_in_hands_frac",
+    "motion_energy",
+    "face_valence",
+    "face_visible",
+    "hours_since_break",
+    "tod_h",
+    "room_db_base",
+    "smile",
+    "head_yaw",
+  ] as const,
+  special: [
+    0.0, -0.0, 1e-300, 1e6, -1e6, 1e300, 0.5, 2.5, 0.0005, 0.00049999999999999, 23.999999, -0.01,
+  ],
+  mult: [0.5, 1.5, -1.0, 10.0],
+  add: [0.0, 0.001, -0.25],
+  ints: [
+    "laughter_count",
+    "compliments_count",
+    "clenched_fists_count",
+    "social_withdrawal_flag",
+    "n_people",
+  ] as const,
+  intChoices: [0, 1, 2, 3, 7, 40],
+  tags: ["low_light", "room_history", "été"],
+};
+
+/** xorshift32 (13, 17, 5), as rt_perturb.py's XorShift32: draws x / 2**32. */
+class XorShift32 {
+  constructor(private x: number) {}
+  next(): number {
+    let x = this.x;
+    x = (x ^ (x << 13)) >>> 0;
+    x = (x ^ (x >>> 17)) >>> 0;
+    x = (x ^ (x << 5)) >>> 0;
+    this.x = x;
+    return x / 4294967296;
+  }
+  pick<T>(xs: readonly T[]): T {
+    return xs[Math.floor(this.next() * xs.length)] as T;
+  }
+}
+
+function perturbRecord(rng: XorShift32, rec: TickRecord): TickRecord {
+  const d = { ...rec, simulated_fields: [...rec.simulated_fields] };
+  for (const k of PERTURB.floats) {
+    const u = rng.next();
+    if (u < 0.04) d[k] = NaN;
+    else if (u < 0.055) d[k] = rng.pick(PERTURB.special);
+    else if (u < 0.1 && !Number.isNaN(d[k]))
+      d[k] = d[k] * rng.pick(PERTURB.mult) + rng.pick(PERTURB.add);
+  }
+  for (const k of PERTURB.ints) if (rng.next() < 0.03) d[k] = rng.pick(PERTURB.intChoices);
+  if (rng.next() < 0.02) d.simulated_fields.push(rng.pick(PERTURB.tags));
+  return d;
+}
+
+function perturbedTicks(
+  run: RuntimeRun,
+  n: number,
+): { wall: number; mono: number; records: TickRecord[] }[] {
+  const rng = new XorShift32(0x9e3779b9);
+  return run.ticks.slice(0, n).map((t, i) => {
+    let recs = t.records.map((d) => perturbRecord(rng, tickRecordFromDict(d)));
+    if (i % 97 >= 40 && i % 97 < 60) recs = recs.filter((r) => r.person_id !== 1); // person 1 away
+    if (i % 50 > 35) {
+      const twins = recs
+        .filter((r) => r.person_id === 1)
+        .map((r) => ({
+          ...r,
+          person_id: 3,
+          display_id: "Person #3",
+          n_people: 2,
+          simulated_fields: [...r.simulated_fields],
+        }));
+      recs = [...recs, ...twins];
+    }
+    return { wall: t.wall, mono: t.mono, records: recs };
+  });
+}
+
+const PERTURBED: {
+  name: string;
+  ticks: number;
+  predictions: number;
+  digest: string;
+  auditN: number;
+  auditLast: string;
+}[] = [
+  {
+    name: "full_demo",
+    ticks: 200,
+    predictions: 147,
+    digest: "a86815ed26dff92da206f2902e674c8ef7526257f0eafc73d2ac630751d5729b",
+    auditN: 37,
+    auditLast: "9979a27c84526d68421c848b7498e0cc96a1118d935517d4b88b3c14a1e385b3",
+  },
+  {
+    name: "overwhelmed",
+    ticks: 156,
+    predictions: 136,
+    digest: "a5b14a238389e518a4e403582c5cbe86fb9105c138abe963d6e1098c1db82255",
+    auditN: 33,
+    auditLast: "2f3a1f6da04b5984a715a85f8c5307a8694cb6f169353251e9f1832a2cfdeaf5",
+  },
+  {
+    name: "context_blindness",
+    ticks: 120,
+    predictions: 164,
+    digest: "c2657d671596892efbf67fc1554f6a340e4a3b55f5966c301342219a907c267d",
+    auditN: 34,
+    auditLast: "ade2057cc7c125af7d3669ec2ad8a770601fdaddd3d85819d64855b2840569b7",
+  },
+];
+
+describe("runtime against Python on perturbed golden runs (served predictor)", () => {
+  for (const want of PERTURBED) {
+    it(`${want.name}: same messages and audit chain for ${want.ticks} perturbed ticks`, () => {
+      const run = runNamed(want.name);
+      let now = WALL0;
+      const rt = new Runtime(makeSettings({ state_set: run.state_set }), SERVED[run.state_set], {
+        sessionId: "session-golden",
+        clock: () => now,
+        tz: "UTC",
+      });
+      rt.sourceLabel = "replay";
+      rt.mode = "replay";
+      const texts: string[] = [];
+      let predictions = 0;
+      for (const t of perturbedTicks(run, want.ticks)) {
+        now = t.wall;
+        const msgs = rt.step(t.records, t.wall, t.mono);
+        predictions += msgs.filter((m) => m.type === "prediction").length;
+        texts.push(canon(msgs));
+      }
+      expect([texts.length, predictions]).toEqual([want.ticks, want.predictions]);
+      expect(sha256Hex(texts.join("\n"))).toBe(want.digest);
+      const entries = rt.audit.entries();
+      expect([entries.length, entries[entries.length - 1]?.hash]).toEqual([
+        want.auditN,
+        want.auditLast,
+      ]);
+    }, 120_000);
+  }
+});
+
 // ---------- Performance (3 people) ----------
 
 describe("runtime performance", () => {
@@ -1598,42 +1795,4 @@ afterAll(() => {
     );
   }
   console.info(`[engine-runtime] ${perf.notes.join("; ")}`);
-});
-
-// ---------- SCRATCH2 ----------
-describe("SCRATCH2 randomized", () => {
-  it("matches Python on perturbed scenario runs", async () => {
-    const fs = await import("node:fs");
-    const dir = "/tmp/claude-0/-home-user-Valence/edc06eea-8c6d-582a-80d8-fd955eff8124/scratchpad/rand";
-    const report: string[] = [];
-    for (const f of fs.readdirSync(dir).filter((x: string) => x.endsWith(".json")).sort()) {
-      const d = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
-      let now = WALL0;
-      const rt = new Runtime(makeSettings({ state_set: d.state_set }), SERVED[d.state_set as StateSet], {
-        sessionId: "session-rand", clock: () => now, tz: "UTC",
-      });
-      rt.sourceLabel = "replay";
-      rt.mode = "replay";
-      let bad = 0;
-      let first = "";
-      d.ticks.forEach((t: any, i: number) => {
-        now = t.wall;
-        const recs = t.records.map((r: any) => tickRecordFromDict(r));
-        const text = canon(rt.step(recs, t.wall, t.mono));
-        const want = d.canon[i] as string;
-        if (text !== want) {
-          bad++;
-          if (!first) {
-            let j = 0;
-            while (j < want.length && text[j] === want[j]) j++;
-            first = `tick ${i} @${j}: got ...${text.slice(Math.max(0, j - 150), j + 100)}\n   want ...${want.slice(Math.max(0, j - 150), j + 100)}`;
-          }
-        }
-      });
-      const hashes = rt.audit.entries().map((e) => e.hash);
-      const auditOk = JSON.stringify(hashes) === JSON.stringify(d.audit);
-      report.push(`${f}: ${bad}/${d.ticks.length} ticks differ, audit ${auditOk ? "ok" : "DIFF"} ${first}`);
-    }
-    fs.writeFileSync(`${dir}/../rand_report.txt`, report.join("\n"));
-  }, 600_000);
 });
