@@ -3,7 +3,7 @@
 //
 //   /models/core/{m2.txt, m0.txt, model_meta.json, clip_bounds.json}     4-state served models (artifacts/)
 //   /models/all/{...same}                                                6-state models (artifacts/all/)
-//   /models/emotion/{classifier,valence,arousal}.json.gz, meta.json      emotion map (artifacts/emotion/, Cloud B)
+//   /models/emotion/{classifier,valence,arousal}.{txt,json}.gz, meta.json   emotion map (artifacts/emotion/, Cloud B)
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -11,7 +11,11 @@ import { fileURLToPath } from "node:url";
 
 const ARTIFACTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../artifacts");
 const SERVED = ["m2.txt", "m0.txt", "model_meta.json", "clip_bounds.json"];
-const EMOTION = ["classifier.json.gz", "valence.json.gz", "arousal.json.gz", "meta.json"];
+const EMOTION = [
+  "classifier.txt.gz", "valence.txt.gz", "arousal.txt.gz", // LightGBM text models, gzipped (smaller than the dumps)
+  "classifier.json.gz", "valence.json.gz", "arousal.json.gz", // booster.dump_model() of the same models
+  "meta.json",
+];
 
 /** [url path under /models/, absolute source file] for every model file that exists. */
 export function modelFiles() {
