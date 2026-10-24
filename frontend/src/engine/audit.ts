@@ -13,10 +13,13 @@
  * Floats are the common case. Everything a 'prediction' entry carries is a float or not a number at all:
  * confidence = float(p[k]) (valence/models/served.py:129), layer contributions = round(float, 4)
  * (valence/explain/explainer.py:56), mask_override is a bool. Operator payloads that hold Python ints
- * must pass a bigint, e.g. demo_seed's `minutes: BigInt(minutes)`, room_baseline_captured's
- * `target_samples` / `db_samples` / `lux_samples`, sim_event's `laughter` / `compliments`, break's
- * `person_id`. The entry's own fields are typed: `seq` is an int and `ts` = round(now, 3) a float,
- * whatever JS number holds them.
+ * must pass a bigint: room_baseline_captured's `target_samples` / `db_samples` / `lux_samples`
+ * (valence/runtime/aggregator.py:108), sim_event's `laughter` / `compliments` and self_report's
+ * `person_id` (int() in valence/api/app.py:470, :559). Stay floats: demo_seed's `minutes` and
+ * `hours_since_break` (float() in valence/api/app.py:488), replay `speed`, room_baseline `seconds`,
+ * calibrate_room's values. break's `person_id` and sim_lux's `lux` echo the request's JSON number, so
+ * they are whatever the client sent. The entry's own fields are typed: `seq` is an int and
+ * `ts` = round(now, 3) a float, whatever JS number holds them.
  *
  * Storage. Python appends each entry to var/audit/<session>.jsonl and deletes the file at session end.
  * In the browser the chain lives in this object's memory and is gone when the tab closes, so there is
@@ -58,6 +61,18 @@ export const MAX_STR = 200;
 export const MAX_DEPTH = 4;
 /** Longest allowed list (audit.py:49). */
 export const MAX_LIST = 64;
+/**
+ * CPython's default sys.get_int_max_str_digits(): json.dumps and json.loads raise ValueError for an int
+ * with more decimal digits (sign not counted), so Python's append() refuses such a payload.
+ */
+export const PY_INT_MAX_STR_DIGITS = 4300;
+/**
+ * Deepest container nesting CPython 3.12's C json encoder and scanner accept before RecursionError (measured
+ * with this repo's .venv, also from inside AuditLog.verify()). The budget is CPython's C recursion limit minus
+ * the C frames already on the stack, so it is environment-dependent; the point is that it is ~10k, while a
+ * recursive JS encoder overflows the stack near 2.5k, so both codecs here use an explicit stack instead.
+ */
+export const PY_JSON_MAX_DEPTH = 9997;
 
 /** Raised for a payload the audit log refuses (valence/governance/audit.py:27). */
 export class AuditPayloadError extends Error {
@@ -118,42 +133,47 @@ function setKey(obj: Record<string, unknown>, key: string, value: unknown): void
 // ---------- Payload rules ----------
 
 /**
+ * `_check` and the snapshot in one pass: every value is read once, so a getter or Proxy cannot hand the
+ * check one value and the hash another. The copy is deep and frozen because Python reads entries back
+ * from its file, so later edits to the caller's object never reach the chain.
+ */
+function checkedCopy(value: unknown, depth: number): PyJson {
+  if (depth > MAX_DEPTH) throw new AuditPayloadError("payload nested too deeply");
+  if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new AuditPayloadError("NaN/inf not allowed; use null");
+    return value;
+  }
+  if (typeof value === "string") {
+    if (pyLen(value) > MAX_STR) throw new AuditPayloadError(`string longer than ${MAX_STR} chars refused`);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const n = value.length;
+    if (n > MAX_LIST) throw new AuditPayloadError(`lists longer than ${MAX_LIST} items refused`);
+    // indexed reads, so a hole is undefined (refused) like it is for json.dumps
+    const out: PyJson[] = [];
+    for (let i = 0; i < n; i++) out.push(checkedCopy((value as unknown[])[i], depth + 1));
+    return Object.freeze(out);
+  }
+  // JS object keys are always strings, so Python's "keys must be strings" cannot happen here. Python checks
+  // items in insertion order; Object.keys lists integer-like keys first, so with two bad items the message
+  // can name a different one (both refuse the payload).
+  if (typeof value === "object" && isPlainObject(value)) {
+    const out: Record<string, PyJson> = {};
+    for (const k of Object.keys(value)) setKey(out, k, checkedCopy((value as Record<string, unknown>)[k], depth + 1));
+    return Object.freeze(out);
+  }
+  throw new AuditPayloadError(`type ${typeName(value)} not allowed in audit payloads`);
+}
+
+/**
  * valence/governance/audit.py:31 `_check`: throw AuditPayloadError unless `value` is JSON made of
  * null / bool / int (bigint) / finite float (number) / str of at most MAX_STR code points / plain objects /
  * arrays of at most MAX_LIST items, nested at most MAX_DEPTH levels. The depth test comes first, as in Python.
  */
 export function checkAuditValue(value: unknown, depth = 0): void {
-  if (depth > MAX_DEPTH) throw new AuditPayloadError("payload nested too deeply");
-  if (value === null || typeof value === "boolean" || typeof value === "bigint") return;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new AuditPayloadError("NaN/inf not allowed; use null");
-    return;
-  }
-  if (typeof value === "string") {
-    if (pyLen(value) > MAX_STR) throw new AuditPayloadError(`string longer than ${MAX_STR} chars refused`);
-    return;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > MAX_LIST) throw new AuditPayloadError(`lists longer than ${MAX_LIST} items refused`);
-    for (const v of value as unknown[]) checkAuditValue(v, depth + 1);
-    return;
-  }
-  // JS object keys are always strings, so Python's "keys must be strings" cannot happen here
-  if (typeof value === "object" && isPlainObject(value)) {
-    for (const k of Object.keys(value)) checkAuditValue((value as Record<string, unknown>)[k], depth + 1);
-    return;
-  }
-  throw new AuditPayloadError(`type ${typeName(value)} not allowed in audit payloads`);
-}
-
-/** A deep, frozen copy of a checked value: Python reads entries back from its file, so later edits to the
- * caller's object never reach the chain. */
-function frozenCopy(v: PyJson): PyJson {
-  if (v === null || typeof v !== "object") return v;
-  if (Array.isArray(v)) return Object.freeze((v as readonly PyJson[]).map(frozenCopy));
-  const out: Record<string, PyJson> = {};
-  for (const k of Object.keys(v)) setKey(out, k, frozenCopy((v as PyObject)[k] as PyJson));
-  return Object.freeze(out);
+  checkedCopy(value, depth);
 }
 
 // ---------- json.dumps ----------
@@ -195,46 +215,89 @@ function encodeFloat(x: number, allowNan: boolean): string {
   return Number.isNaN(x) ? "NaN" : x > 0 ? "Infinity" : "-Infinity";
 }
 
+/** Python int.__repr__, with the ValueError CPython raises past PY_INT_MAX_STR_DIGITS digits. */
+function encodeInt(v: bigint): string {
+  const s = v.toString();
+  if ((v < 0n ? s.length - 1 : s.length) > PY_INT_MAX_STR_DIGITS) {
+    throw new RangeError(`Exceeds the limit (${PY_INT_MAX_STR_DIGITS} digits) for integer string conversion; `
+      + "use sys.set_int_max_str_digits() to increase the limit");
+  }
+  return s;
+}
+
+/** An open array or object while encoding: `keys` is null for an array. */
+interface EncodeFrame {
+  readonly v: object;
+  readonly keys: readonly string[] | null;
+  readonly n: number;
+  i: number;
+}
+
 /**
  * Python `json.dumps(value, ...)` with ensure_ascii / allow_nan / sort_keys / separators, byte for byte:
- * numbers print as Python floats (repr), bigints as Python ints, keys sort by code point. Anything that
- * is not JSON throws TypeError (Python: "Object of type X is not JSON serializable"), a cycle throws
- * (Python: "Circular reference detected").
+ * numbers print as Python floats (repr), bigints as Python ints, keys sort by code point. Errors follow
+ * CPython's encoder: anything that is not JSON (including an array hole) throws TypeError ("Object of type
+ * X is not JSON serializable"); Python's ValueErrors (a cycle, NaN with allowNan off, an int over
+ * PY_INT_MAX_STR_DIGITS digits) and its RecursionError past PY_JSON_MAX_DEPTH levels throw RangeError.
+ * Without sortKeys, keys come in JS property order, which lists integer-like keys first (a Python dict
+ * keeps insertion order), so pass sortKeys whenever such keys can occur.
  */
 export function pyJsonDumps(value: unknown, opts: PyJsonDumpsOptions = {}): string {
   const sortKeys = opts.sortKeys ?? false;
   const [itemSep, keySep] = opts.separators ?? [", ", ": "];
   const ascii = opts.ensureAscii ?? true;
   const allowNan = opts.allowNan ?? true;
+  const parts: string[] = [];
+  // an explicit stack instead of recursion, so nesting as deep as CPython's does not overflow the JS stack
+  const stack: EncodeFrame[] = [];
   const active = new Set<object>();
 
-  const enc = (v: unknown): string => {
-    if (v === null) return "null";
-    if (v === true) return "true";
-    if (v === false) return "false";
-    if (typeof v === "string") return encodeString(v, ascii);
-    if (typeof v === "number") return encodeFloat(v, allowNan);
-    if (typeof v === "bigint") return v.toString();
-    if (typeof v === "object" && (Array.isArray(v) || isPlainObject(v))) {
-      if (active.has(v)) throw new TypeError("Circular reference detected");
-      active.add(v);
-      let s: string;
-      if (Array.isArray(v)) {
-        s = (v as unknown[]).length === 0 ? "[]" : "[" + (v as unknown[]).map(enc).join(itemSep) + "]";
-      } else {
-        const keys = Object.keys(v);
-        if (sortKeys) keys.sort(comparePyStr);
-        const rec = v as Record<string, unknown>;
-        s = keys.length === 0
-          ? "{}"
-          : "{" + keys.map((k) => encodeString(k, ascii) + keySep + enc(rec[k])).join(itemSep) + "}";
+  /** Write a scalar, or open a container (its items are written by the loop below). */
+  const emit = (v: unknown): void => {
+    if (v === null) parts.push("null");
+    else if (v === true) parts.push("true");
+    else if (v === false) parts.push("false");
+    else if (typeof v === "string") parts.push(encodeString(v, ascii));
+    else if (typeof v === "number") parts.push(encodeFloat(v, allowNan));
+    else if (typeof v === "bigint") parts.push(encodeInt(v));
+    else if (typeof v === "object" && (Array.isArray(v) || isPlainObject(v))) {
+      // CPython's order: the recursion budget, the empty shortcut, then the circular-reference check
+      if (stack.length >= PY_JSON_MAX_DEPTH) throw new RangeError("maximum recursion depth exceeded while encoding a JSON object");
+      const keys = Array.isArray(v) ? null : Object.keys(v);
+      const n = keys === null ? (v as unknown[]).length : keys.length;
+      if (n === 0) {
+        parts.push(keys === null ? "[]" : "{}");
+        return;
       }
-      active.delete(v);
-      return s;
+      if (active.has(v)) throw new RangeError("Circular reference detected");
+      if (keys !== null && sortKeys) keys.sort(comparePyStr);
+      active.add(v);
+      parts.push(keys === null ? "[" : "{");
+      stack.push({ v, keys, n, i: 0 });
+    } else {
+      throw new TypeError(`Object of type ${typeName(v)} is not JSON serializable`);
     }
-    throw new TypeError(`Object of type ${typeName(v)} is not JSON serializable`);
   };
-  return enc(value);
+
+  emit(value);
+  for (let top = stack[stack.length - 1]; top !== undefined; top = stack[stack.length - 1]) {
+    if (top.i === top.n) {
+      parts.push(top.keys === null ? "]" : "}");
+      active.delete(top.v);
+      stack.pop();
+      continue;
+    }
+    if (top.i > 0) parts.push(itemSep);
+    const at = top.i++;
+    if (top.keys === null) {
+      emit((top.v as unknown[])[at]);
+    } else {
+      const k = top.keys[at] as string;
+      parts.push(encodeString(k, ascii) + keySep);
+      emit((top.v as Record<string, unknown>)[k]);
+    }
+  }
+  return parts.join("");
 }
 
 // ---------- json.loads ----------
@@ -249,11 +312,16 @@ const SIMPLE_ESCAPES = new Map([
   ['"', '"'], ["\\", "\\"], ["/", "/"], ["b", "\b"], ["f", "\f"], ["n", "\n"], ["r", "\r"], ["t", "\t"],
 ]);
 
+/** An open array or object while decoding; an object frame holds the key its next value goes under. */
+type DecodeFrame = { readonly arr: PyJson[] } | { readonly obj: Record<string, PyJson>; key: string };
+
 /**
  * Python `json.loads(text)` keeping Python's number types: an integer token ("2", "-7") becomes a
  * bigint, a token with a fraction or exponent ("2.0", "1e-05") or NaN / Infinity / -Infinity becomes a
  * number, exactly how json.loads picks int or float. Strict like Python: raw control characters inside
- * strings, bad escapes and trailing data throw PyJsonDecodeError. Duplicate keys keep the last value.
+ * strings, bad escapes and trailing data throw PyJsonDecodeError. Duplicate keys keep the last value (in
+ * the first one's position, as in a dict). Python's ValueError for an int token over PY_INT_MAX_STR_DIGITS
+ * digits and its RecursionError past PY_JSON_MAX_DEPTH nested containers throw RangeError.
  */
 export function pyJsonLoads(text: string): PyJson {
   let i = 0;
@@ -308,61 +376,19 @@ export function pyJsonLoads(text: string): PyJson {
     }
   };
 
-  const value = (depth: number): PyJson => {
-    if (depth > 10_000) fail("Maximum nesting depth exceeded");
-    ws();
-    const c = text[i];
-    if (c === '"') return str();
-    if (c === "{") {
-      i++;
-      const obj: Record<string, PyJson> = {};
-      ws();
-      if (text[i] === "}") {
-        i++;
-        return obj;
-      }
-      for (;;) {
-        ws();
-        if (text[i] !== '"') fail("Expecting property name enclosed in double quotes");
-        const k = str();
-        ws();
-        if (text[i] !== ":") fail("Expecting ':' delimiter");
-        i++;
-        setKey(obj, k, value(depth + 1));
-        ws();
-        if (text[i] === ",") {
-          i++;
-          continue;
-        }
-        if (text[i] === "}") {
-          i++;
-          return obj;
-        }
-        fail("Expecting ',' delimiter");
-      }
+  /** int(token), with the ValueError CPython raises past PY_INT_MAX_STR_DIGITS digits. */
+  const intToken = (tok: string): bigint => {
+    const digits = tok.startsWith("-") ? tok.length - 1 : tok.length;
+    if (digits > PY_INT_MAX_STR_DIGITS) {
+      throw new RangeError(`Exceeds the limit (${PY_INT_MAX_STR_DIGITS} digits) for integer string conversion: `
+        + `value has ${digits} digits; use sys.set_int_max_str_digits() to increase the limit`);
     }
-    if (c === "[") {
-      i++;
-      const arr: PyJson[] = [];
-      ws();
-      if (text[i] === "]") {
-        i++;
-        return arr;
-      }
-      for (;;) {
-        arr.push(value(depth + 1));
-        ws();
-        if (text[i] === ",") {
-          i++;
-          continue;
-        }
-        if (text[i] === "]") {
-          i++;
-          return arr;
-        }
-        fail("Expecting ',' delimiter");
-      }
-    }
+    return BigInt(tok);
+  };
+
+  /** A string, constant or number at i; containers are opened by the loop below. */
+  const scalar = (): PyJson => {
+    if (text[i] === '"') return str();
     if (lit("null")) return null;
     if (lit("true")) return true;
     if (lit("false")) return false;
@@ -374,15 +400,80 @@ export function pyJsonLoads(text: string): PyJson {
     if (m) {
       i += m[0].length;
       // Python: float(token) if it has a fraction or an exponent, else int(token); both parse exactly
-      return m[1] !== undefined || m[2] !== undefined ? Number(m[0]) : BigInt(m[0]);
+      return m[1] !== undefined || m[2] !== undefined ? Number(m[0]) : intToken(m[0]);
     }
     return fail("Expecting value");
   };
 
-  const out = value(0);
-  ws();
-  if (i < text.length) fail("Extra data");
-  return out;
+  /** After "{" or ",": the next key and its ":" (CPython's _parse_object_unicode). */
+  const key = (): string => {
+    ws();
+    if (text[i] !== '"') fail("Expecting property name enclosed in double quotes");
+    const k = str();
+    ws();
+    if (text[i] !== ":") fail("Expecting ':' delimiter");
+    i++;
+    return k;
+  };
+
+  // an explicit stack instead of recursion, so nesting as deep as CPython's does not overflow the JS stack
+  const stack: DecodeFrame[] = [];
+  for (;;) {
+    // a value starts here
+    ws();
+    const c = text[i];
+    let v: PyJson;
+    if (c === "[" || c === "{") {
+      // CPython checks its recursion budget before it reads the container's contents
+      if (stack.length >= PY_JSON_MAX_DEPTH) {
+        throw new RangeError(`maximum recursion depth exceeded while decoding a JSON ${c === "[" ? "array" : "object"} from a unicode string`);
+      }
+      i++;
+      ws();
+      if (c === "[") {
+        const arr: PyJson[] = [];
+        if (text[i] !== "]") {
+          stack.push({ arr });
+          continue;
+        }
+        v = arr;
+      } else {
+        const obj: Record<string, PyJson> = {};
+        if (text[i] !== "}") {
+          stack.push({ obj, key: key() });
+          continue;
+        }
+        v = obj;
+      }
+      i++; // the empty container's closing bracket
+    } else {
+      v = scalar();
+    }
+    // store the finished value, then close every container that ends right after it
+    for (;;) {
+      const top = stack[stack.length - 1];
+      if (top === undefined) {
+        ws();
+        if (i < text.length) fail("Extra data");
+        return v;
+      }
+      if ("arr" in top) top.arr.push(v);
+      else setKey(top.obj, top.key, v);
+      ws();
+      if (text[i] === ",") {
+        i++;
+        if ("obj" in top) top.key = key();
+        break;
+      }
+      if (text[i] === ("arr" in top ? "]" : "}")) {
+        i++;
+        stack.pop();
+        v = "arr" in top ? top.arr : top.obj;
+        continue;
+      }
+      fail("Expecting ',' delimiter");
+    }
+  }
 }
 
 // ---------- Hashing ----------
@@ -428,8 +519,13 @@ function verifyRows<T>(rows: readonly T[], bodyOf: (row: T) => PyJson, prevOf: (
   let n = 0;
   for (const row of rows) {
     n++;
+    // Python's order: the body's four keys first, then prev, then the digest, and hash only when prev
+    // matched (the `or` short-circuits), so a damaged row raises the same KeyError, or none, as in Python
+    const body = bodyOf(row);
+    if (prevOf(row) !== prev) return [false, n];
+    const digest = auditDigest(prev, body);
     const hash = hashOf(row);
-    if (prevOf(row) !== prev || auditDigest(prev, bodyOf(row)) !== hash) return [false, n];
+    if (digest !== hash) return [false, n];
     prev = hash as string;
   }
   return [true, n];
@@ -523,11 +619,12 @@ export class AuditChain {
    */
   append(kind: string, payload: AuditPayload, now: number = Date.now() / 1000): AuditEntry {
     checkAuditValue(kind);
-    checkAuditValue(payload);
+    const snapshot = checkedCopy(payload, 0) as AuditPayload;
     // time.time() is always finite; a NaN clock here would be a caller bug, not something to hash
     if (!Number.isFinite(now)) throw new RangeError(`audit clock must be finite, got ${now}`);
-    const snapshot = frozenCopy(payload) as AuditPayload;
     const ts = pyRound(now, 3);
+    // json.dumps can still refuse a checked payload (an int over PY_INT_MAX_STR_DIGITS digits): it throws
+    // here, before anything changes, as Python's append raises before writing or advancing seq
     const hash = auditDigest(this.last, { seq: BigInt(this.seq), ts, kind, payload: snapshot });
     const entry: AuditEntry = Object.freeze({ seq: this.seq, ts, kind, payload: snapshot, prev: this.last, hash });
     this.rows.push(entry);
@@ -553,9 +650,9 @@ export class AuditChain {
 
   /**
    * valence/governance/audit.py:121 `close(delete=True)`: drop the entries. As in Python (which only deletes
-   * the file), seq and lastHash are kept.
+   * the file), seq and lastHash are kept. close(false) keeps everything, like Python's close(delete=False).
    */
-  close(): void {
-    this.rows = [];
+  close(deleteEntries = true): void {
+    if (deleteEntries) this.rows = [];
   }
 }

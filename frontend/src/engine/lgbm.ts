@@ -1,7 +1,7 @@
 /**
  * LightGBM inference for the browser engine: model loading and raw scores.
  *
- * The served predictor (valence/models/served.py:76-96) loads artifacts/m2.txt and m0.txt with
+ * The served predictor (valence/models/served.py:73-74, 100, 114) loads artifacts/m2.txt and m0.txt with
  * `lgb.Booster(model_file=...)` and calls `predict(row, raw_score=True)`. This module reads the same text
  * model (format v4) into flat per-tree arrays, mirroring LightGBM's own `Tree` (include/LightGBM/tree.h), and
  * walks them with LightGBM's decision rule, so raw scores match the C++ library bit for bit: leaves are
@@ -11,7 +11,10 @@
  *
  * Supported: numerical splits with any missing type (None / Zero / NaN), default_left, single-leaf trees.
  * Rejected at load: categorical splits, linear trees and average_output (random forest) models; none of the
- * Valence artifacts use them.
+ * Valence artifacts use them. Optional text fields LightGBM defaults (num_tree_per_iteration, decision_type,
+ * the counts) get its defaults; fields it requires (feature_names of the right size) are required here too.
+ * Verified bit for bit against LightGBM 4.7.0 beyond the golden fixtures: deep trees with repeated features,
+ * every missing type, +-inf / NaN / tiny / threshold-tie inputs, and the emotion models (text and dump).
  */
 
 // ---------- Types ----------

@@ -209,7 +209,8 @@ describe("python json.dumps", () => {
   it("refuses values that are not JSON and circular references", () => {
     const loop: Record<string, unknown> = {};
     loop["self"] = loop;
-    expect(() => pyJsonDumps(loop)).toThrow(/Circular reference/);
+    // Python raises ValueError here (RangeError in this port), and TypeError for the unserializable types
+    expect(() => pyJsonDumps(loop)).toThrow(new RangeError("Circular reference detected"));
     expect(() => pyJsonDumps({ a: undefined })).toThrow(/not JSON serializable/);
     expect(() => pyJsonDumps(new Map())).toThrow(/Object of type Map/);
     // the same object twice is not a cycle
@@ -408,6 +409,119 @@ describe("audit chain against python", () => {
     expect(next.prev).toBe(head);
     // as in Python, a chain resumed after close() no longer starts at GENESIS
     expect(chain.verify()).toEqual([false, 1]);
+  });
+});
+
+// ---------- Beyond the golden fixtures ----------
+
+/** Two 'tick' entries ({"i": 0}, {"i": 1}) at clock 1792850400.25, as Python's AuditLog wrote them. */
+function twoTicks(): AuditChain {
+  const chain = new AuditChain("s");
+  chain.append("tick", { i: 0n }, 1792850400.25);
+  chain.append("tick", { i: 1n }, 1792850400.25);
+  return chain;
+}
+
+/** The outcome of verifyJsonl as Python reports it: [ok, n], or the KeyError's key. */
+function verifyOutcome(text: string): string {
+  try {
+    return JSON.stringify(verifyJsonl(text));
+  } catch (e) {
+    const m = /^KeyError: '(\w+)'$/.exec((e as Error).message);
+    if (!m) throw e;
+    return `KeyError ${m[1]}`;
+  }
+}
+
+describe("audit edge cases checked against python", () => {
+  it("reads a damaged row's keys in python's order, so it raises the same KeyError or none", () => {
+    const chain = twoTicks();
+    // hashes from valence/governance/audit.py with time.time patched to 1792850400.25
+    expect(chain.entries().map((e) => e.hash)).toEqual([
+      "208e6afcadac0dbb239c26c7ec2c440638503d0ee36b41faa4937e881e5e3fe6",
+      "abf239b0e41473cc2249add60178a72c563bce11b2072994f776a698ec600996",
+    ]);
+    const rows = chain.toJsonl().trim().split("\n").map((l) => pyJsonLoads(l) as Record<string, PyJson>);
+    const damaged = (edit: (r: Record<string, PyJson>) => void): string => {
+      const r = { ...rows[1] };
+      edit(r);
+      return pyFileText([rows[0] as PyJson, r]);
+    };
+    const badPrev = "x".repeat(64);
+    // AuditLog.verify() on the same files: body keys first, then prev, and hash only when prev matched
+    const cases: [string, (r: Record<string, PyJson>) => void, string][] = [
+      ["no hash, wrong prev", (r) => { delete r["hash"]; r["prev"] = badPrev; }, "[false,2]"],
+      ["no kind, wrong prev", (r) => { delete r["kind"]; r["prev"] = badPrev; }, "KeyError kind"],
+      ["no kind, no hash", (r) => { delete r["kind"]; delete r["hash"]; }, "KeyError kind"],
+      ["no hash, right prev", (r) => { delete r["hash"]; }, "KeyError hash"],
+      ["no prev, no hash", (r) => { delete r["prev"]; delete r["hash"]; }, "KeyError prev"],
+      ["no payload, no prev", (r) => { delete r["payload"]; delete r["prev"]; }, "KeyError payload"],
+    ];
+    for (const [name, edit, python] of cases) expect(verifyOutcome(damaged(edit)), name).toBe(python);
+  });
+
+  it("refuses an int over 4300 digits like python's json.dumps, leaving the chain unchanged", () => {
+    const chain = twoTicks();
+    const head = chain.lastHash;
+    // Python: ValueError "Exceeds the limit (4300 digits) for integer string conversion", seq stays 2
+    expect(() => chain.append("tick", { big: 10n ** 4300n }, 1792850401.0)).toThrow(RangeError);
+    expect(() => chain.append("tick", { big: -(10n ** 4300n) }, 1792850401.0)).toThrow(/Exceeds the limit \(4300 digits\)/);
+    expect(chain.length).toBe(2);
+    expect(chain.lastHash).toBe(head);
+    // 4300 digits are fine, with or without a sign (hashes from Python)
+    expect(chain.append("tick", { big: 10n ** 4300n - 1n }, 1792850401.0).hash)
+      .toBe("882a4688ee6ef4ad85565742280e303d82d730f2f44ad8f6db2c12a05f2ac728");
+    expect(chain.append("tick", { big: -(10n ** 4300n - 1n) }, 1792850401.0).hash)
+      .toBe("9ef0b9bbcdc6fb054b4a5d39fc493746c063e9d495cb17fc77412307662fb220");
+    expect(chain.verify()).toEqual([true, 4]);
+    expect(verifyJsonl(chain.toJsonl())).toEqual([true, 4]);
+    // json.loads has the same limit
+    expect(pyJsonLoads("-" + "9".repeat(4300))).toBe(-(10n ** 4300n - 1n));
+    expect(() => pyJsonLoads("9".repeat(4301))).toThrow(/value has 4301 digits/);
+  });
+
+  it("accepts nesting as deep as cpython's json and refuses one level more", () => {
+    // CPython 3.12 (this repo's .venv): json.loads / json.dumps take 9997 nested containers, 9998 raise RecursionError
+    const deep = (n: number): string => "[".repeat(n) + "]".repeat(n);
+    expect(pyJsonDumps(pyJsonLoads(deep(9997)))).toBe(deep(9997));
+    expect(() => pyJsonLoads(deep(9998))).toThrow(
+      new RangeError("maximum recursion depth exceeded while decoding a JSON array from a unicode string"));
+    let v: PyJson = [];
+    for (let i = 1; i < 9998; i++) v = [v];
+    expect(() => pyJsonDumps(v)).toThrow(new RangeError("maximum recursion depth exceeded while encoding a JSON object"));
+    // AuditLog.verify() on one row whose payload is {"a": <n nested lists>}: (False, 1) for 9995, RecursionError for 9996
+    const row = (n: number): string => `{"hash": "x", "kind": "k", "payload": {"a": ${deep(n)}}, "prev": "${GENESIS}", "seq": 0, "ts": 1.0}\n`;
+    expect(verifyJsonl(row(9995))).toEqual([false, 1]);
+    expect(() => verifyJsonl(row(9996))).toThrow(/maximum recursion depth exceeded/);
+  });
+
+  it("keeps the entries on close(false), as close(delete=False) keeps python's file", () => {
+    const chain = twoTicks();
+    chain.close(false);
+    expect(chain.entries().length).toBe(2);
+    expect(chain.verify()).toEqual([true, 2]);
+    chain.close();
+    expect(chain.verify()).toEqual([true, 0]);
+  });
+
+  it("refuses an array hole like any other undefined", () => {
+    const holey: PyJson[] = new Array<PyJson>(2);
+    holey[1] = 1n;
+    expect(() => pyJsonDumps(holey)).toThrow(new TypeError("Object of type undefined is not JSON serializable"));
+    expect(() => new AuditChain().append("tick", { l: holey })).toThrow(
+      new AuditPayloadError("type undefined not allowed in audit payloads"));
+  });
+
+  it("reads each payload value once, so what was checked is what gets hashed", () => {
+    let reads = 0;
+    const payload = Object.defineProperty({}, "x", {
+      enumerable: true,
+      get: () => (reads++ === 0 ? 0.5 : NaN),
+    }) as AuditPayload;
+    const entry = new AuditChain().append("tick", payload, 1792850400);
+    expect(reads).toBe(1);
+    expect(entry.payload).toEqual({ x: 0.5 });
+    expect(entry.hash).toBe(new AuditChain().append("tick", { x: 0.5 }, 1792850400).hash);
   });
 });
 

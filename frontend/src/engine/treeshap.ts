@@ -1,10 +1,10 @@
 /**
  * Path-dependent TreeSHAP for LightGBM models, as `booster.predict(x, pred_contrib=True)` computes it.
  *
- * valence/models/served.py:91 reads the M2 contributions with LightGBM's `pred_contrib`; the face push and the
+ * valence/models/served.py:101 reads the M2 contributions with LightGBM's `pred_contrib`; the face push and the
  * explanation layers are built from them. This is Lundberg et al.'s Algorithm 2 exactly as LightGBM implements
  * it (src/io/tree.cpp Tree::TreeSHAP / ExtendPath / UnwindPath / UnwoundPathSum, include/LightGBM/tree.h
- * Tree::PredictContrib, src/boosting/gbdt_prediction.cpp GBDT::PredictContrib): the cover of a node is its
+ * Tree::PredictContrib, src/boosting/gbdt.cpp GBDT::PredictContrib): the cover of a node is its
  * training row count (leaf_count / internal_count, not the hessian weights), each tree first adds its expected
  * value to the bias slot, and the arithmetic follows the C++ expression for expression and in the same order.
  * Measured against LightGBM 4.7.0 (src/test/engine-lgbm.test.ts): identical doubles for every class of every
