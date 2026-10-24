@@ -16,6 +16,9 @@ Newest entry last.
 | CPU delegate when WebGL is software-rendered | In headless Chromium (SwiftShader) MediaPipe's GPU path is ~10x slower: pose 660 ms vs 68 ms per frame, face 180 vs 33 ms, gestures 306 vs 58 ms. `autoDelegate()` checks the WebGL renderer string. |
 | Video models in a Web Worker | MediaPipe takes 10-100 ms per frame; in a worker the console's main thread stays free. Main-thread fallback where workers can't run it. |
 | Pose: PoseLandmarker lite + a simple IoU tracker | Stands in for YOLO26n-pose + ByteTrack (track buffer 6 s, as `bytetrack_valence.yaml`). BlazePose landmarks 0,2,5,7,8,11-16,23-28 map to COCO 0-16; confidence = BlazePose visibility, 0 outside the frame. The person box is the landmarks' extent with the top raised above the eyes. |
+| Pose detection and presence thresholds 0.4 | The Python edge's YOLO person threshold. MediaPipe's default 0.5 found one of the two people in the two-person scene (15/15 frames); 0.4, 0.3 and 0.2 all find both. |
+| Hips, knees, ankles (COCO 11-16) never confident | BlazePose always predicts a whole body: on the waist-up portrait it put the hips at 72% of the frame height with visibility 1.00 (knees 0.5-0.6, ankles 0.3). YOLO at a desk gives hidden hips low confidence, and of the Python rules only motion reads them (COCO 5-12), so motion is measured on shoulders, elbows and wrists. |
+| Confidence thresholds 0.3 / 0.5 / 0.6 kept | BlazePose visibility on the e2e scenes: nose, eyes, ears, shoulders 1.00; elbows 0.6-0.8; partly hidden wrists 0.45-0.8 (YOLO usually reports 0.8-0.95 for visible wrists, so a wrist near 0.5 may miss the hand assignment: on the real-camera checklist). |
 | `frontend/package-lock.json` re-synced | `npm ci` failed on the committed lock (ajv 6/8 entries missing). `npm install` fixed it while adding MediaPipe; `bun.lock` got the two MediaPipe entries by hand (bun can't reach the private registry its lock names for `@lovable.dev/vite-tanstack-config`). |
 
 ## Log
@@ -38,7 +41,7 @@ Cloud B's `docs/EMOTION_FEATURES.md` (emotion-v1) landed: `PersonObs` gains `bro
 recordings the Python defaults), `faceCues.ts` ports `valence/features/face_cues.py` (baseline, blink detector, head
 pose from the matrix), and the mock fills them. The raw extras follow B's sign convention (pitch > 0 = face up).
 
-### 13:05 — MediaPipe runs under the strict CSP
+### 12:57 — MediaPipe runs under the strict CSP
 
 - A throwaway probe loaded all four models from `/mediapipe/` under `default-src 'self'; script-src 'self'
   'wasm-unsafe-eval'; connect-src 'self'; worker-src 'self' blob:` in headless Chromium with a fake camera playing
@@ -53,3 +56,14 @@ pose from the matrix), and the mock fills them. The raw extras follow B's sign c
   `hands.py` + `ids.py`, `lux.py` + `regions.py` + OpenCV's BGR2GRAY, and the face parity checks run as parallel
   agents, each followed by an adversarial review. The video pipeline (`video.ts`), the audio pipeline, the capture
   loop and the worker are written and wait on them.
+
+### 13:10 — Ports landing, pose checked on the test scenes
+
+- Pushed `e8b552a`: `audio_features.py` + scipy `resample_poly` (bit-identical to scipy in float32, also for
+  44.1 kHz) and `posture.py`, with 124 parity and unit tests on 2.4 MB of gzipped fixtures written by
+  `scripts/export_perception_fixtures.py`; plus the pose glue, capture, model loading, the audio pipeline and the
+  e2e runner. A clean worktree of that commit: 212 frontend tests pass, `tsc` clean, `npm run build` OK.
+- BlazePose on the e2e scenes (CPU delegate): 70-100 ms per frame on this container; the threshold and lower-body
+  decisions above.
+- Running: the `hands.py` + `ids.py`, `lux.py` + `regions.py` + BGR2GRAY ports and the face parity agent; the
+  audio and posture adversarial reviews.
