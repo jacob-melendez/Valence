@@ -74,6 +74,12 @@ interface FaceHit {
   valence: number;
   blendshapes: Record<string, number>;
   matrix: ArrayLike<number> | null;
+  /**
+   * Found on the head-crop retry. Its matrix is in the crop's own virtual camera, so yaw and pitch are off by the
+   * crop's viewing angle (a median 2-3 degrees, p95 6, against the full frame on the same face): they are reported
+   * as missing. Roll (in-plane) is unaffected and kept.
+   */
+  fromCrop: boolean;
 }
 
 /** Ephemeral per-display-id state: scalars and keypoint history only. */
@@ -258,6 +264,7 @@ export class VisionPipeline {
       valence: valenceRaw(blendshapeScores(bs.categories)),
       blendshapes: Object.fromEntries(bs.categories.map((c) => [c.categoryName, c.score])),
       matrix: res.facialTransformationMatrixes?.[i]?.data ?? null,
+      fromCrop: false,
     }));
     const noses = new Map<number, [number, number, number]>();
     for (const [did, d] of byId) noses.set(did, VisionPipeline.nose(d));
@@ -277,7 +284,7 @@ export class VisionPipeline {
       if (hit) {
         p.faceValence = p.face.update(hit.valence, t);
         p.faceSeenT = t;
-        const [yaw, pitch] = headPoseDeg(hit.matrix);
+        const [yaw, pitch] = hit.fromCrop ? [NaN, NaN] : headPoseDeg(hit.matrix);
         p.raw = { blendshapes: hit.blendshapes, head_yaw_deg: yaw, head_pitch_deg: pitch, head_roll_deg: headRollDeg(hit.matrix) };
       }
       // Emotion cues (docs/EMOTION_FEATURES.md 1.2-1.3): a face without a valence reading counts as not visible. A miss
@@ -285,7 +292,7 @@ export class VisionPipeline {
       // neither resets the blink detector nor breaks the visible-time clock. Frames past the hold reset in process().
       if (hit === undefined) continue;
       const readable = Number.isFinite(p.faceValence);
-      const cues = p.cues.update(readable ? rawCues(hit.blendshapes, hit.matrix) : null, t * 1000);
+      const cues = p.cues.update(readable ? rawCues(hit.blendshapes, hit.fromCrop ? null : hit.matrix) : null, t * 1000);
       if (readable) {
         p.lastCues = cues;
         p.blinkPending = cues.blink_onsets;
@@ -309,6 +316,7 @@ export class VisionPipeline {
       valence: valenceRaw(blendshapeScores(bs.categories)),
       blendshapes: Object.fromEntries(bs.categories.map((c) => [c.categoryName, c.score])),
       matrix: res.facialTransformationMatrixes?.[0]?.data ?? null,
+      fromCrop: true,
     };
   }
 

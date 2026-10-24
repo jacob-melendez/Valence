@@ -54,6 +54,14 @@ scalars only.
 3. Governance panel: frames decoded = frames purged at every tick; audio blocks purged grows by ~10 per second.
 4. Optional: unplug an external camera: "camera stopped".
 
+## 6. GPU vs CPU (Mac, 3 minutes)
+
+The cloud tests ran on the CPU delegate, where the browser matches the Python edge to ~1e-4 on identical frames. On
+software WebGL the GPU delegate drifted more (face valence p95 0.06, landmarks ~1 px), and a real GPU has not been
+measured. Open the console once with `&delegate=CPU` and once with `&delegate=GPU` added to the URL. For each, sit
+still for 30 s and note `status().fps`, and how much `face_valence` wobbles in `__valencePerception.last()`
+(a few readings). If GPU is clearly noisier, say so: the default can switch to CPU.
+
 ## What to send back
 
 `load_ms`, `fps`, `video_ms`, `video_backend` and the browser/device for each device tried, plus anything in the list

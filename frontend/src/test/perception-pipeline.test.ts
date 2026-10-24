@@ -227,6 +227,12 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     const obs = run(new VisionPipeline(models, fakePixels().pixels), 4);
     expect(obs[1]!.persons[0]!.face_visible).toBe(true);
     expect(obs[1]!.persons[0]!.raw!.blendshapes["mouthSmileLeft"]).toBe(0.4);
+    // The crop's matrix is in the crop's own camera: no yaw/pitch from it (raw or cue), roll kept.
+    expect(obs[1]!.persons[0]!.raw!.head_yaw_deg).toBeNaN();
+    expect(obs[1]!.persons[0]!.raw!.head_pitch_deg).toBeNaN();
+    expect(obs[1]!.persons[0]!.raw!.head_roll_deg).toBeCloseTo(0);
+    expect(obs[3]!.persons[0]!.head_yaw).toBeNaN();
+    expect(Number.isFinite(obs[3]!.persons[0]!.smile)).toBe(true);
   });
 
   it("counts a debounced fist for a raised hand, ignores hands in the keyboard zone", () => {

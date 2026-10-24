@@ -387,8 +387,22 @@ class BrowserPerception implements Perception {
   }
 }
 
+/**
+ * `?delegate=CPU` or `?delegate=GPU` on the page URL picks the MediaPipe delegate when the caller does not, so the
+ * real-camera check (frontend/e2e/REAL_CAMERA.md) can compare the two on the deployed console without a code change.
+ */
+function urlDelegate(): PerceptionOptions["delegate"] | undefined {
+  try {
+    const d = new URLSearchParams(globalThis.location?.search ?? "").get("delegate");
+    return d === "CPU" || d === "GPU" ? d : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createPerception(opts: PerceptionOptions = {}, deps?: Partial<PerceptionDeps>): Perception {
-  const p = new BrowserPerception(opts, { ...BROWSER, ...deps });
+  const delegate = opts.delegate ?? urlDelegate();
+  const p = new BrowserPerception({ ...opts, ...(delegate ? { delegate } : {}) }, { ...BROWSER, ...deps });
   // DevTools handle for the real-camera check (frontend/e2e/REAL_CAMERA.md): status, counters and the latest
   // observations, all scalars; no frame or sample is reachable from it.
   (globalThis as { __valencePerception?: unknown }).__valencePerception = {

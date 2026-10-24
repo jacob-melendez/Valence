@@ -70,9 +70,10 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 - **Pose.** PoseLandmarker lite + an IoU tracker replace YOLO26n-pose + ByteTrack. BlazePose `visibility` is used as
   keypoint confidence; it is 0 outside the frame and for hips and legs, which BlazePose extrapolates with visibility
   ~1. Detection and presence thresholds are 0.4, YOLO's `conf`.
-- **Faces.** FaceLandmarker runs in VIDEO mode with up to 3 faces, plus the transformation matrix for head pose, and
-  on every frame by default (Python: every other frame, still available as `faceEveryFrame: false`), because the
-  emotion cues' blink detector needs the face rate. `status().face_hz` reports it.
+- **Faces.** FaceLandmarker in IMAGE mode as on the edge, up to 3 faces, plus the transformation matrix for head
+  pose; on every frame by default (Python: every other frame, still available as `faceEveryFrame: false`), because
+  the emotion cues' blink detector needs the face rate (`status().face_hz` reports it). Head yaw and pitch are not
+  taken from the head-crop retry (its matrix is in the crop's own camera); roll is.
 - **Face hold.** 0.45 s, i.e. 2.25 face passes at 10 Hz, stretched to 2.25 measured passes on slower devices.
 - **Workers and delegates.** The video models run in a Web Worker. The GPU delegate is used unless WebGL is
   software-rendered.

@@ -89,8 +89,11 @@ export async function loadVisionModels(
         minPoseDetectionConfidence: 0.4, minPosePresenceConfidence: 0.4,
       });
       created.push(pose);
+      // IMAGE mode as on the edge: on identical frames VIDEO mode was bit-identical wherever the detector fired (it
+      // runs on every frame either way with fewer than numFaces faces), and only added a stale "ghost" face about once
+      // per 2000 frames.
       const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
-        baseOptions: base(MODEL.face), runningMode: "VIDEO", numFaces: 3, outputFaceBlendshapes: true,
+        baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 3, outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
       created.push(faces);
@@ -107,7 +110,7 @@ export async function loadVisionModels(
       return {
         delegate,
         pose: (image, ts) => pose.detectForVideo(image, ts),
-        faces: (image, ts) => faces.detectForVideo(image, ts),
+        faces: (image) => faces.detect(image),
         faceCrop: (image) => faceCrop.detect(image),
         gestures: (image, ts) => gestures.recognizeForVideo(image, ts),
         close: () => created.forEach((t) => t.close()),
