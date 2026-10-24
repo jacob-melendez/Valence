@@ -47,7 +47,12 @@ continued projects with a precise log of the work done at the event:
 | 2:30 | The **Self-report** panel: tap how you feel, then Download JSONL. | "For real-data evaluation we ask people, not a dataset of actors: every two minutes you tap how you feel, and only the numbers are kept." |
 | 2:45 | `docs/WEB_ENGINE.md`: the parity table. | "The browser engine reproduces the Python engine: identical model scores, explanations and audit hashes on golden data; a 3-person tick takes 26 ms." |
 
-Backup: if the camera misbehaves, stay on the tour; it shows everything except your own face.
+Backup: if the camera misbehaves, stay on the tour; it shows everything except your own face. A 75 s recording of
+the tour is in `docs/media/valence-web-tour.mp4` (simulated, and captioned so).
+
+Optional 20 s for a governance-minded judge: in the governance panel press **Download audit log**, then run
+`python scripts/audit_verify.py <file> --head <head>` from the repo. The desktop's verifier accepts the browser's
+chain ("chain intact"), and editing any line makes it fail at that line.
 
 ## Devpost draft
 
