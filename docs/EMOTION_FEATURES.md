@@ -181,7 +181,7 @@ every feature (blink rates included). Nothing is imputed and nothing is clipped.
 `|x| <= 1e-35f` (1.0000000180025095e-35) is read as exactly 0; then a split with `missing_type` `NaN` sends NaN the
 `default_left` way, `Zero` reads NaN as 0 and sends 0 the default way, and `None` reads NaN as 0 and compares.
 A dump threshold of `±1e300` stands for `±inf` (JSON has no infinity; the text models keep `inf`), so `x = +inf` or
-`x > 1e300` goes left at such a split (11 splits, on `blink_rate_1m` and `db_rel_15m`). All 31
+`x > 1e300` goes left at such a split (in the current dumps: a few splits on `blink_rate_1m` and `motion_slope_1m`). All 31
 emotion features only meet `NaN` splits; 30 of the M2 inputs (e.g. `lux_room_now`, `hours_since_break`,
 `face_visible_now`, `fill_ratio`) only meet `None` splits, so for them NaN behaves like 0.
 
@@ -195,7 +195,7 @@ model reads the 7 existing face features plus the 31.
 
 Ten states: the existing six plus Bored, Confused, Calm and Anxious. Class order (also `meta.json` → `states`):
 
-| id | Display | Valence | Arousal | Main cues (simulator, §6 of the model card) |
+| id | Display | Valence | Arousal | Main cues (simulator, §7 below and `valence/sim/params.py`) |
 |---|---|---|---|---|
 | `Focused` | Focused | +0.1 | +0.3 | still, eyes on the screen (low `head_away`), low blink rate, slight brow lowering |
 | `Frustrated_Masked` | Frustrated / Masked Stress | −0.6 | +0.6 | loud room, fists, a forced smile over lowered brows |
@@ -206,7 +206,7 @@ Ten states: the existing six plus Bored, Confused, Calm and Anxious. Class order
 | `Bored` | Bored | −0.3 | −0.5 | looking away or down (phone) a lot, slumped, chin in hand, little motion |
 | `Confused` | Confused | −0.2 | +0.3 | strongly lowered brows without a frown, moderate motion, quiet room |
 | `Calm` | Calm | +0.4 | −0.4 | relaxed, slight smile, normal blink rate, after breaks |
-| `Anxious` | Anxious | −0.5 | +0.6 | fidgeting, high blink rate, glancing around, quiet room, no fists |
+| `Anxious` | Anxious | −0.5 | +0.6 | fidgeting, high blink rate, glancing around, quiet room, few fists (0.1/min vs 0.8 for Tense) |
 
 **The anchors are assumptions**, taken from the plan's circumplex placement, not measured. In the simulator each
 episode's true valence and arousal is the anchor plus a per-episode offset (N(0, 0.10) each, clipped to −1..1) that
@@ -222,7 +222,8 @@ not by valence–arousal.
 |---|---|
 | `classifier.json.gz` | `booster.dump_model()` of the 10-state LightGBM classifier (multiclass, raw scores per class) |
 | `valence.json.gz`, `arousal.json.gz` | `booster.dump_model()` of the two LightGBM regressors (raw score = prediction) |
-| `classifier.txt.gz`, `valence.txt.gz`, `arousal.txt.gz` | the same three models in LightGBM's text format, for Python (`EmotionPredictor`) |
+| `classifier.txt.gz`, `valence.txt.gz`, `arousal.txt.gz` | the same three models in LightGBM's text format: what Python (`EmotionPredictor`) loads, and what the web engine reads first (it falls back to the JSON dumps) |
+| `tour.json.gz` | a 50-min scripted walk through all ten states: tick records + Python's per-tick features, probabilities and map position (camera-free demo, end-to-end parity) |
 | `meta.json` | `feature_version`, `model_id` (`emotion-v1@<sha8>`, what `Affect.model` carries), `input_features` (exact order), `emotion_feature_names`, `states` (id, display, valence, arousal, in class order), `temperature`, `layers` (feature → explanation layer), training summary and metrics |
 | `golden.json` | ~20 input vectors with Python's raw scores, temperature-softmax probabilities, valence/arousal predictions and `pred_contrib`, plus golden windows (tick channels → the 31 features) and golden frames (blendshapes + matrix → per-frame cues) |
 
@@ -272,7 +273,9 @@ One JSON line per tap, appended by the console's capture; **never media, never a
 
 The training data is simulated. These numbers **are** the hypothesis the emotion models are trained and evaluated
 under; none of them was measured on people. Values are episode means relative to the person's neutral
-(`FACE_CUES`); blinks per minute of visible face; away = share of time with `|yaw|` or `|pitch|` > 20°.
+(`FACE_CUES`); blinks per minute of visible face; away = long-run share of ticks in the looking-away phase
+(`away_p`): within such a tick 50–100% of the frames are turned away, so the measured `head_away` (frames past
+20°) averages about 0.75 × away, plus the frames where a lowered head passes −20° on its own.
 
 | State | brow | eye | frown | smile | blinks/min | away | pitch (°) | pitch when away |
 |---|---|---|---|---|---|---|---|---|

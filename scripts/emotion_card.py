@@ -121,8 +121,8 @@ def render() -> str:
         f"| Output | 10 calibrated probabilities (`softmax(raw / T)`, T = {meta['temperature']:.3f} fitted by NLL on the calibration sessions); **map position = probability-weighted anchors** `Σ p_k · anchor_k` (served); regressor valence/arousal (exported for comparison); `pred_contrib` (TreeSHAP) per output |",
         f"| Training data | Simulator, state set `emotion`: {tr['sessions']} sessions (seed {tr['seed']}), {tr['windows']:,} windows (random 1–180 tick history, every 6 ticks); session split 70 / 7.5 / 7.5 / 15 (train / early stop / calibration / test = {sw['train']:,} / {sw['early']:,} / {sw['calib']:,} / {sw['test']:,} windows; {n_test_sessions} test sessions) |",
         "| Modality dropout | as M2: +30% training copies with the whole face block hidden, +20% degraded (face valence ± 0.25, cues ± 0.08, pose ± 6°, blink rate × U(0.5, 1.5), visible share × U(0.3, 0.8)) |",
-        f"| Size | `classifier.json.gz` {sz['classifier']['json_gz_bytes'] / 1e6:.2f} MB, `valence.json.gz` {sz['valence']['json_gz_bytes'] / 1e6:.2f} MB, `arousal.json.gz` {sz['arousal']['json_gz_bytes'] / 1e6:.2f} MB (gzipped `dump_model()` JSON for the web engine); the `.txt.gz` files are the same models in LightGBM's text format for Python |",
-        f"| Parity | `golden.json`: {len(golden['vectors'])} input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; {len(golden['windows'])} feature windows (3 of them missing-data edge cases); {len(golden['frames'])} face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port matches bit for bit (Cloud A) |",
+        f"| Size | `classifier.json.gz` {sz['classifier']['json_gz_bytes'] / 1e6:.2f} MB, `valence.json.gz` {sz['valence']['json_gz_bytes'] / 1e6:.2f} MB, `arousal.json.gz` {sz['arousal']['json_gz_bytes'] / 1e6:.2f} MB (gzipped `dump_model()` JSON); the `.txt.gz` files are the same models in LightGBM's text format, which Python loads and the web engine reads first (the JSON dumps are its fallback) |",
+        f"| Parity | `golden.json`: {len(golden['vectors'])} input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; {len(golden['windows'])} feature windows (3 of them missing-data edge cases); {len(golden['frames'])} face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (Cloud A, `frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |",
         "",
         "**States and anchors** (class order; anchors from the plan's circumplex, **assumptions**):",
         "",
@@ -210,13 +210,19 @@ def render() -> str:
         cells = [f"**{v:.2f}**" if k == i else (f"{v:.2f}" if v >= 0.005 else "·") for k, v in enumerate(rows[i])]
         out.append(f"| {s} ({SHORT[s]}) | " + " | ".join(cells) + " |")
     reg = conf["region"]
+    REGION = reg["states"]
+    face_f1, ctx_f1 = face["per_state_f1"], ctx["per_state_f1"]
     fru_col = rows[states.index("Frustrated_Masked"), states.index("Collaborative_Happy")]
     out += [
         "",
         f"- **The shared negative, high-arousal region (Frustrated / Tense / Anxious / Overwhelmed):** {reg['predicted_inside_region']:.0%} of",
         f"  its windows are predicted inside the region and {reg['exact_within_region']:.0%} of those on the right state. They are",
-        "  separated by context and behavior (fists and a loud room for Tense and Frustrated, a quiet room and fidgeting",
-        "  for Anxious, head in hands for Overwhelmed), not by valence–arousal: their anchors are within 0.3 of each other.",
+        "  told apart mostly by the face cues (brow lowering and frown for Tense, the forced smile over lowered brows for",
+        "  Frustrated, blink rate and glancing around for Anxious, a hidden face and a lowered head for Overwhelmed; the",
+        f"  face-only model's F1 on these four is {', '.join(f'{face_f1[s]:.2f}' for s in REGION)} against "
+        f"{', '.join(f'{ctx_f1[s]:.2f}' for s in REGION)} for context only),",
+        "  with context adding the rest (fists and a loud room, a quiet room, head in hands); not by valence–arousal:",
+        "  their anchors are within 0.3 of each other on each axis.",
         f"- Masked frustration still reads as Collaborative {fru_col:.0%} of the time: the forced smile shows in `smile` as",
         "  intended.",
         "",
@@ -263,7 +269,7 @@ def render() -> str:
     allx2 = rob["face_cues_all_spreads_x2"]["macro_f1"]
     out += [
         "",
-        "`noise_scale` widens only the per-tick terms (and the lags); the episode- and person-level spreads, which make",
+        "`noise_scale` widens only the per-tick terms, the session baselines and the lags; the episode- and person-level spreads, which make",
         "up most of the cue variance, are stressed by the two face-cue rows. Against the same fresh corpus (ECE",
         f"{f3(base_ece)}), ECE is {f3(min(eces.values()))}–{f3(max(eces.values()))} under these shifts, up to "
         f"{max(eces.values()) / base_ece:.1f}× with {dict(labels_)[worst].split(' (')[0].lower().replace('**', '')}; less noise also",
@@ -291,8 +297,8 @@ def render() -> str:
         "  people are.",
         "- **The anchors are assumptions**, and the regression targets are built from them. The map position cannot be more",
         "  right than the anchors are; self-reports (§9.6) are the first check.",
-        "- **Frustrated, Tense, Anxious and Overwhelmed share a region** of the plane (anchors within 0.3); a point there",
-        "  says \"negative, aroused\", and the state label comes from context and behavior.",
+        "- **Frustrated, Tense, Anxious and Overwhelmed share a region** of the plane (anchors within 0.3 on each axis); a",
+        "  point there says \"negative, aroused\", and the state label comes from the face cues and context.",
         f"- **{NICE.get(weakest, weakest)} is weak** (F1 {f1[weakest]:.2f}).",
         "- **Perception assumptions:** blendshapes relative to a 20 s neutral baseline (taken while the person may not be",
         "  neutral), blink detection needs ≥ 15 face fps, and the pitch sign must be right (§9.4). Head pose is relative to",

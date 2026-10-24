@@ -426,8 +426,8 @@ This section is generated from them by `python scripts/emotion_card.py`. Regener
 | Output | 10 calibrated probabilities (`softmax(raw / T)`, T = 0.958 fitted by NLL on the calibration sessions); **map position = probability-weighted anchors** `Σ p_k · anchor_k` (served); regressor valence/arousal (exported for comparison); `pred_contrib` (TreeSHAP) per output |
 | Training data | Simulator, state set `emotion`: 600 sessions (seed 11), 169,171 windows (random 1–180 tick history, every 6 ticks); session split 70 / 7.5 / 7.5 / 15 (train / early stop / calibration / test = 117,672 / 12,206 / 14,745 / 24,548 windows; 90 test sessions) |
 | Modality dropout | as M2: +30% training copies with the whole face block hidden, +20% degraded (face valence ± 0.25, cues ± 0.08, pose ± 6°, blink rate × U(0.5, 1.5), visible share × U(0.3, 0.8)) |
-| Size | `classifier.json.gz` 2.79 MB, `valence.json.gz` 0.57 MB, `arousal.json.gz` 0.63 MB (gzipped `dump_model()` JSON for the web engine); the `.txt.gz` files are the same models in LightGBM's text format for Python |
-| Parity | `golden.json`: 23 input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; 11 feature windows (3 of them missing-data edge cases); 387 face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port matches bit for bit (Cloud A) |
+| Size | `classifier.json.gz` 2.79 MB, `valence.json.gz` 0.57 MB, `arousal.json.gz` 0.63 MB (gzipped `dump_model()` JSON); the `.txt.gz` files are the same models in LightGBM's text format, which Python loads and the web engine reads first (the JSON dumps are its fallback) |
+| Parity | `golden.json`: 23 input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; 11 feature windows (3 of them missing-data edge cases); 387 face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (Cloud A, `frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |
 
 **States and anchors** (class order; anchors from the plan's circumplex, **assumptions**):
 
@@ -511,8 +511,11 @@ The weakest is **Confused**, mistaken for Focused (14%) and Anxious (9%).
 
 - **The shared negative, high-arousal region (Frustrated / Tense / Anxious / Overwhelmed):** 82% of
   its windows are predicted inside the region and 86% of those on the right state. They are
-  separated by context and behavior (fists and a loud room for Tense and Frustrated, a quiet room and fidgeting
-  for Anxious, head in hands for Overwhelmed), not by valence–arousal: their anchors are within 0.3 of each other.
+  told apart mostly by the face cues (brow lowering and frown for Tense, the forced smile over lowered brows for
+  Frustrated, blink rate and glancing around for Anxious, a hidden face and a lowered head for Overwhelmed; the
+  face-only model's F1 on these four is 0.67, 0.72, 0.50, 0.63 against 0.40, 0.48, 0.40, 0.42 for context only),
+  with context adding the rest (fists and a loud room, a quiet room, head in hands); not by valence–arousal:
+  their anchors are within 0.3 of each other on each axis.
 - Masked frustration still reads as Collaborative 12% of the time: the forced smile shows in `smile` as
   intended.
 
@@ -541,7 +544,7 @@ What the classifier leans on (mean |TreeSHAP| over all classes, 3 000 test windo
 | Blink rates halved (low face fps in the browser) | 0.681 | 0.015 | 0.176 | 0.251 |
 | **Pitch sign flipped** (matrix read transposed) | 0.604 | 0.020 | 0.196 | 0.275 |
 
-`noise_scale` widens only the per-tick terms (and the lags); the episode- and person-level spreads, which make
+`noise_scale` widens only the per-tick terms, the session baselines and the lags; the episode- and person-level spreads, which make
 up most of the cue variance, are stressed by the two face-cue rows. Against the same fresh corpus (ECE
 0.014), ECE is 0.015–0.076 under these shifts, up to 5.4× with face cues: every spread × 2; less noise also
 miscalibrates (the model is then underconfident). The model shrugs off under-counted blinks; it is sensitive
@@ -565,8 +568,8 @@ cues are.
   people are.
 - **The anchors are assumptions**, and the regression targets are built from them. The map position cannot be more
   right than the anchors are; self-reports (§9.6) are the first check.
-- **Frustrated, Tense, Anxious and Overwhelmed share a region** of the plane (anchors within 0.3); a point there
-  says "negative, aroused", and the state label comes from context and behavior.
+- **Frustrated, Tense, Anxious and Overwhelmed share a region** of the plane (anchors within 0.3 on each axis); a
+  point there says "negative, aroused", and the state label comes from the face cues and context.
 - **Confused is weak** (F1 0.46).
 - **Perception assumptions:** blendshapes relative to a 20 s neutral baseline (taken while the person may not be
   neutral), blink detection needs ≥ 15 face fps, and the pitch sign must be right (§9.4). Head pose is relative to
