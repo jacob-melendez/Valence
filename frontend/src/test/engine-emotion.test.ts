@@ -7,8 +7,13 @@
  *   position (valence_mix / arousal_mix) and the regressors.
  * - emotion.json.gz (scripts/export_web_golden_emotion.py): simulator sessions of the ten-state set with
  *   compute_emotion at every 4th row of every person, synthetic edge windows (no readable face, partial face,
- *   blink-rate threshold, NaN counters, empty, > 180 ticks), and 261 model inputs (the frozen 123 features +
- *   the 31) with EmotionPredictor's outputs and the Affect message.
+ *   blink-rate threshold, NaN counters, empty, > 180 ticks), 261 model inputs (the frozen 123 features +
+ *   the 31) with EmotionPredictor's outputs and the Affect message (as affect_for_window builds it), and whole
+ *   TickRecord windows through valence/models/emotion.py affect_for_window.
+ * Sections (e) and (f), and the last model tests, pin inputs the fixtures do not cover to literals computed
+ * with the .venv: null as missing, the pairwise-summed 10 s blink threshold, old producers without cues,
+ * signed yaw, signed zeros, +inf on AvoidInf'd dump thresholds, the row width check, and a toy 3-class dump
+ * for class order, temperature, anchors, raw ties and argmax of p.
  *
  * The models are read from ../artifacts/emotion through loadEmotionModel with a fetch stub, once preferring the
  * LightGBM text models (*.txt.gz) and once forced onto the dump_model() JSON (*.json.gz).
@@ -17,7 +22,12 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { makeTickRecord, type TickRecord } from "@/engine/contracts";
+import {
+  type Affect,
+  makeTickRecord,
+  type TickRecord,
+  tickRecordFromDict,
+} from "@/engine/contracts";
 import {
   EMOTION_FEATURE_NAMES,
   EMOTION_FIELDS,
@@ -30,14 +40,17 @@ import {
   type EmotionModel,
   type EmotionResult,
   type FetchLike,
+  affectForWindow,
   boosterFromText,
   emotionInput,
   loadEmotionModel,
   makeEmotionModel,
   predictEmotion,
   toAffect,
+  validateEmotionMeta,
 } from "@/engine/emotion-model";
 import { FEATURE_SETS, N_FEATURES } from "@/engine/features";
+import { loadDumpModel } from "@/engine/lgbm";
 import { ARTIFACTS_DIR, artifactJson, loadFixture, nn } from "./engine-fixtures";
 
 // ---------- Fixtures ----------
@@ -124,6 +137,13 @@ interface EmotionFixture {
   }[];
   edge_windows: { name: string; channels: ChannelsJson; features: Num[] }[];
   model_cases: ModelCaseJson[];
+  /** Whole TickRecord windows through valence/models/emotion.py affect_for_window. */
+  affect_windows: {
+    name: string;
+    person: Record<string, unknown>[];
+    room: Record<string, unknown>[];
+    affect: AffectJson | null;
+  }[];
 }
 
 const EMO_DIR = path.join(ARTIFACTS_DIR, "emotion");
@@ -155,6 +175,32 @@ function bitEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
   return true;
+}
+
+/**
+ * Affect vs Python's: label, display and model exact, every number within TARGET (p differs from numpy by a
+ * few ulp, see emotion-model.ts); returns the largest numeric error.
+ */
+function expectAffect(a: Affect, want: AffectJson, what: string): number {
+  expect(Object.keys(a), what).toEqual(Object.keys(want));
+  expect([a.label, a.label_display, a.model], what).toEqual([
+    want.label,
+    want.label_display,
+    want.model,
+  ]);
+  expect(Object.keys(a.probabilities), what).toEqual(Object.keys(want.probabilities));
+  const ids = Object.keys(want.probabilities);
+  const err = maxErr(
+    [a.valence, a.arousal, a.confidence, ...ids.map((k) => a.probabilities[k] as number)],
+    [
+      want.valence,
+      want.arousal,
+      want.confidence,
+      ...ids.map((k) => want.probabilities[k] as number),
+    ],
+  );
+  expect(err, what).toBeLessThanOrEqual(TARGET);
+  return err;
 }
 
 /** TickRecords carrying the emotion channels (other fields at their defaults), one per tick. */
@@ -204,7 +250,7 @@ function stubFetch(
     }
     let bytes: Uint8Array = readFileSync(file);
     if (opts.inflate?.(name)) bytes = gunzipSync(bytes); // as served with Content-Encoding: gzip
-    const copy = bytes.slice();
+    const copy = new Uint8Array(bytes); // a real copy: Buffer#slice is a view onto a possibly larger pool
     return { ok: true, status: 200, arrayBuffer: async () => copy.buffer as ArrayBuffer };
   };
 }
@@ -449,14 +495,34 @@ describe("emotion models (emotion-model.ts)", () => {
     expect(() => emotionInput(new Float64Array(123), new Float64Array(30), txt.meta)).toThrow();
   });
 
-  it("toAffect: the Affect message with round(x, 4)", () => {
-    let mismatches = 0;
+  it("toAffect: the Affect message as affect_for_window builds it (unrounded)", () => {
+    let identical = 0;
+    let worst = 0;
     for (const m of fx.model_cases) {
       const a = toAffect(predictEmotion(txt, nn(m.x)), txt);
-      if (JSON.stringify(a) !== JSON.stringify(m.affect)) mismatches++;
-      expect(a, m.name).toEqual(m.affect);
+      worst = Math.max(worst, expectAffect(a, m.affect, m.name));
+      if (JSON.stringify(a) === JSON.stringify(m.affect)) identical++;
     }
-    note("affect_mismatches", mismatches);
+    note("affect_max_err", worst);
+    note("affect_bit_identical", `${identical}/${fx.model_cases.length}`);
+  });
+
+  it("affectForWindow: whole TickRecord windows (affect_for_window, incl. room or person, empty person)", () => {
+    expect(fx.affect_windows.length).toBeGreaterThanOrEqual(4);
+    for (const w of fx.affect_windows) {
+      const got = affectForWindow(
+        txt,
+        w.person.map(tickRecordFromDict),
+        w.room.map(tickRecordFromDict),
+      );
+      if (w.affect === null) {
+        expect(got, w.name).toBeNull();
+        continue;
+      }
+      expect(got, w.name).not.toBeNull();
+      note("affect_windows_max_err", expectAffect(got as Affect, w.affect, w.name));
+    }
+    expect(affectForWindow(txt, [], [])).toBeNull();
   });
 
   it("predictEmotion timing (node)", () => {
@@ -478,6 +544,77 @@ describe("emotion models (emotion-model.ts)", () => {
       "trees",
       `classifier ${txt.classifier.trees.length}, valence ${txt.valence?.trees.length}, arousal ${txt.arousal?.trees.length}`,
     );
+  });
+
+  // Python literals below: .venv/bin/python -B with valence.models.emotion.EmotionPredictor(artifacts/emotion).
+
+  it("null inputs are missing values, as np.asarray(x, dtype=float) reads None", () => {
+    // golden.json vector 0 with every third value null: Python predicts Collaborative_Happy (Calm without
+    // the nulls); a null stored as 0 instead of NaN reads as Focused.
+    const x = (golden.vectors[0]?.x as Num[]).map((v, j) => (j % 3 === 0 ? null : v));
+    for (const model of [txt, json]) {
+      const r = predictEmotion(model, x);
+      expect(
+        bitEqual(
+          r.raw,
+          [
+            -1.8529446928943965, -5.480007054392827, -8.13052744212107, -0.5699124882379649,
+            -7.588152795419807, -7.071893911977153, -6.246246243839615, -5.63838010879279,
+            -1.1054130901993928, -6.412385136832736,
+          ],
+        ),
+      ).toBe(true);
+      expect(r.label).toBe("Collaborative_Happy");
+      expect([r.valenceReg, r.arousalReg]).toEqual([0.4711485653986967, 0.34890303780807363]);
+      expect(
+        maxErr([r.valence, r.arousal], [0.5131636693114864, 0.19293648793990295]),
+      ).toBeLessThanOrEqual(1e-15);
+    }
+    const row = emotionInput(
+      new Array<null>(N_FEATURES).fill(null),
+      new Array<null>(31).fill(null),
+      txt.meta,
+    );
+    expect(row.every(Number.isNaN)).toBe(true);
+  });
+
+  it("a row of the wrong width throws, like LightGBM's shape check", () => {
+    // Python: LightGBMError "The number of features in data (131) is not the same as it was in training data (132)"
+    expect(() => predictEmotion(txt, new Float64Array(131))).toThrow(/132/);
+    expect(() => predictEmotion(txt, new Float64Array(N_FEATURES))).toThrow(/132/);
+  });
+
+  it("x = +inf on an AvoidInf'd 1e300 dump threshold decides like LightGBM (both loaders)", () => {
+    // blink_rate_1m has dump thresholds printed as 1e300 (Common::AvoidInf); LightGBM sends +inf and 1e301
+    // left there. valence/models/emotion_json.py raw_scores reads 1e300 literally and gives -4.240549872195816
+    // for class 4 instead; the served Python path (EmotionPredictor, LightGBM) is the reference.
+    const want = [
+      -4.912850835712999, 1.6677329084260717, -4.898543823628142, -4.528140477128561,
+      -4.363780206572808, -5.365849990152937, -4.632673134523343, -4.762989341181959,
+      -3.317202148384535, -4.3794788074941975,
+    ];
+    const f = txt.meta.input_features.indexOf("blink_rate_1m");
+    for (const v of [Infinity, 1e301]) {
+      const x = nn(golden.vectors[1]?.x as Num[]);
+      x[f] = v;
+      for (const model of [txt, json]) {
+        const r = predictEmotion(model, x);
+        expect(bitEqual(r.raw, want), `${v}`).toBe(true);
+        expect(r.label).toBe("Frustrated_Masked");
+      }
+    }
+  });
+
+  it("brow_max_1m = -0.0 or +0.0 gives the same prediction (the one non-bit-exact feature)", () => {
+    const f = txt.meta.input_features.indexOf("brow_max_1m");
+    const a = nn(golden.vectors[0]?.x as Num[]);
+    const b = [...a];
+    a[f] = 0;
+    b[f] = -0;
+    const ra = predictEmotion(txt, a);
+    const rb = predictEmotion(txt, b);
+    expect(bitEqual(ra.raw, rb.raw) && bitEqual(ra.p, rb.p)).toBe(true);
+    expect(ra.valenceReg).toBe(rb.valenceReg);
   });
 });
 
@@ -551,5 +688,253 @@ describe("loadEmotionModel without the emotion map", () => {
     expect(r.arousalReg).toBeNull();
     expect(r.valenceReg).not.toBeNull();
     expect(() => makeEmotionModel(meta, a)).toThrow(/outputs/);
+  });
+
+  it("a SPA fallback page for classifier.txt.gz falls through to classifier.json.gz", async () => {
+    const log: string[] = [];
+    const base = stubFetch(EMO_DIR, {
+      log,
+      missing: (n) => n.startsWith("valence") || n.startsWith("arousal"),
+    });
+    const html = new TextEncoder().encode("\n  <!doctype html><title>console</title>");
+    const m = await loadEmotionModel("/models/emotion/", async (url) =>
+      url.endsWith("/classifier.txt.gz")
+        ? { ok: true, status: 200, arrayBuffer: async () => html.slice().buffer as ArrayBuffer }
+        : base(url),
+    );
+    expect(m?.classifier.trees.length).toBe(2790);
+    expect(m?.valence).toBeUndefined();
+    expect(log).toContain("/models/emotion/classifier.json.gz");
+  });
+
+  it("a truncated gzip rejects (Python: gzip.decompress raises EOFError)", async () => {
+    const base = stubFetch(EMO_DIR);
+    const cut = new Uint8Array(
+      readFileSync(path.join(EMO_DIR, "classifier.txt.gz")).subarray(0, 50_000),
+    );
+    await expect(
+      loadEmotionModel("/models/emotion/", async (url) =>
+        url.endsWith("/classifier.txt.gz")
+          ? { ok: true, status: 200, arrayBuffer: async () => cut.slice().buffer as ArrayBuffer }
+          : base(url),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("validateEmotionMeta: own feature names only, states need a display name", () => {
+    for (const bad of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(
+        () => validateEmotionMeta({ ...meta, input_features: [...meta.input_features, bad] }),
+        bad,
+      ).toThrow(/unknown input feature/);
+    }
+    const states = meta.states.map((s, i) => (i === 3 ? { ...s, display: undefined } : s));
+    expect(() => validateEmotionMeta({ ...meta, states })).toThrow(/display/);
+    expect(validateEmotionMeta(meta)).toBe(meta);
+  });
+});
+
+// ---------- (e) window features on inputs the fixtures do not cover (Python literals) ----------
+
+/** A TickRecord at tick i with every field at its default (cues NaN, blink_count 0, face_visible 0). */
+function bareRecord(i: number): TickRecord {
+  return makeTickRecord({
+    tick: i,
+    ts: i * 5,
+    t_mono: i * 5,
+    session_id: "s",
+    person_id: 1,
+    display_id: "Person #1",
+    n_people: 1,
+  });
+}
+
+/** Channels for n ticks: every EMOTION_FIELDS channel 0.0, then the overrides. */
+function chan(n: number, over: Partial<Record<EmotionField, (number | null)[]>>) {
+  const out = {} as Record<EmotionField, (number | null)[]>;
+  for (const f of EMOTION_FIELDS) out[f] = over[f] ?? new Array<number>(n).fill(0);
+  return out;
+}
+
+describe("emotion-v1 window features: adversarial cases (valence/features/emotion.py literals)", () => {
+  it("null is NaN in channels and TickRecords, as np.asarray(..., dtype=float) reads None", () => {
+    const ch = {} as Record<EmotionField, (number | null)[]>;
+    for (const f of EMOTION_FIELDS) ch[f] = [0.2, null, 0.4];
+    ch.face_visible = [1.0, null, 1.0];
+    ch.blink_count = [1, null, 2];
+    // compute_emotion of these channels (a null read as 0 would give a 1m mean of 0.2 and a std of 0.163)
+    const cue = [0.4, 0.30000000000000004, 0.30000000000000004, 0.1];
+    const want = [
+      ...cue,
+      ...cue,
+      ...cue,
+      ...cue,
+      ...cue,
+      ...cue,
+      0.30000000000000004,
+      0.4,
+      0.30000000000000004,
+      0.30000000000000004,
+      18.0,
+      18.0,
+      18.0,
+    ];
+    expect(bitEqual(emotionFromChannels(ch), want)).toBe(true);
+    // rows taken from JSON without tickRecordFromDict carry the nulls themselves
+    const recs = [0, 1, 2].map((i) => {
+      const r = bareRecord(i) as unknown as Record<string, number | null>;
+      for (const f of EMOTION_FIELDS) r[f] = ch[f][i] as number | null;
+      return r as unknown as TickRecord;
+    });
+    expect(bitEqual(computeEmotion(recs), want)).toBe(true);
+  });
+
+  it("blink threshold: face_visible 0.2 x 10 sums (numpy pairwise) to exactly 10 s", () => {
+    const vis = new Array<number>(10).fill(0.2);
+    let naive = 0;
+    for (const v of vis) naive += v;
+    expect(naive * 5).toBeLessThan(10); // 9.999999999999998: a left-to-right sum would give NaN rates
+    const f = emotionFromChannels(
+      chan(10, { face_visible: vis, blink_count: [0, 1, 0, 0, 1, 0, 0, 0, 1, 0] }),
+    );
+    expect([...f.slice(28)]).toEqual([18.0, 18.0, 18.0]); // Python: 60 * 3 / 10.0
+  });
+
+  it("an old producer (face visible, no cue fields): 28 NaN cue features, blink rates 0.0", () => {
+    // makeTickRecord defaults: the seven cues NaN, blink_count 0 (valence/contracts.py:274-281)
+    const recs = Array.from({ length: 15 }, (_, i) => ({ ...bareRecord(i), face_visible: 1 }));
+    const f = computeEmotion(recs);
+    expect(f.slice(0, 28).every(Number.isNaN)).toBe(true);
+    expect([...f.slice(28)]).toEqual([0, 0, 0]);
+  });
+
+  it("head_yaw: signed values are averaged as they are (no abs in compute_emotion)", () => {
+    const yaw = [-30.0, -10.0, 5.0, -2.5, -30.0, -10.0, 5.0, -2.5, -30.0, -10.0, 5.0, -2.5];
+    const f = emotionFromChannels(
+      chan(12, { head_yaw: yaw, face_visible: new Array<number>(12).fill(1) }),
+    );
+    // yaw_now, yaw_mean_1m, yaw_mean_5m, yaw_std_5m
+    expect(bitEqual(f.slice(16, 20), [-2.5, -9.375, -9.375, 13.035408509133882])).toBe(true);
+  });
+
+  it("brow_max_1m of a 0.0 / -0.0 mix is a zero (numpy may return -0.0: SIMD lane order)", () => {
+    const f = emotionFromChannels(chan(2, { brow_down: [-0, 0] }));
+    expect(f[25] === 0).toBe(true);
+  });
+});
+
+// ---------- (f) a toy multiclass dump: class order, temperature, anchors, ties ----------
+
+describe("predictEmotion on a toy 3-class dump (Python: emotion_json.raw_scores + EmotionPredictor.predict)", () => {
+  const leaf = (v: number, i: number) => ({ leaf_index: i, leaf_value: v, leaf_count: 10 });
+  const single = (idx: number, v: number) => ({
+    tree_index: idx,
+    num_leaves: 1,
+    num_cat: 0,
+    shrinkage: 1,
+    tree_structure: leaf(v, 0),
+  });
+  const split = (f: number, thr: number, dl: boolean, mt: string, l: number, r: number) => ({
+    tree_index: 0,
+    num_leaves: 2,
+    num_cat: 0,
+    shrinkage: 1,
+    tree_structure: {
+      split_index: 0,
+      split_feature: f,
+      split_gain: 1,
+      threshold: thr,
+      decision_type: "<=",
+      default_left: dl,
+      missing_type: mt,
+      internal_value: 0,
+      internal_weight: 0,
+      internal_count: 20,
+      left_child: leaf(l, 0),
+      right_child: leaf(r, 1),
+    },
+  });
+  // round 0: class A splits on brow_now (NaN goes right), B 1.0, C 0.5; round 1: A 0.25, B splits on smile_now
+  // (None-type: NaN reads 0), C -0.1. Tree t adds to class t % 3.
+  const dump = {
+    name: "tree",
+    version: "v4",
+    num_class: 3,
+    num_tree_per_iteration: 3,
+    label_index: 0,
+    max_feature_idx: 1,
+    objective: "multiclass num_class:3",
+    average_output: false,
+    feature_names: ["brow_now", "smile_now"],
+    tree_info: [
+      split(0, 0.5, false, "NaN", 1.0, 0.2),
+      single(1, 1.0),
+      single(2, 0.5),
+      single(3, 0.25),
+      split(1, 1.0000000180025095e-35, false, "None", 0.25, 0.2500000000000002),
+      single(5, -0.1),
+    ],
+  };
+  const toyMeta: EmotionMeta = {
+    feature_version: "emotion-v1",
+    model_id: "toy@00000000",
+    input_features: ["brow_now", "smile_now"],
+    emotion_feature_names: [],
+    n_features: 2,
+    temperature: 1.02,
+    states: [
+      { id: "A", display: "State A", valence: 0.1, arousal: 0.3 },
+      { id: "B", display: "State B", valence: -0.6, arousal: 0.6 },
+      { id: "C", display: "State C", valence: 0.7, arousal: -0.4 },
+    ],
+  };
+  const tie = {
+    raw: [1.25, 1.25, 0.4],
+    p: [0.4107453938418902, 0.4107453938418902, 0.17850921231621972],
+    k: 0,
+    mix: [-0.08041624829959129, 0.29826716953121324],
+  };
+  const bWins = {
+    raw: [0.45, 1.25, 0.4],
+    p: [0.24136718151967113, 0.5288120492425569, 0.229820769237772],
+    k: 1,
+    mix: [-0.13227597292712662, 0.29776907630632665],
+  };
+  const cases: { note: string; x: (number | null)[]; want: typeof tie }[] = [
+    { note: "exact tie in raw: the first class", x: [0.3, 0], want: tie },
+    { note: "class B ahead", x: [0.7, 0], want: bWins },
+    { note: "null on a NaN-type split goes the default way (right)", x: [null, 0], want: bWins },
+    {
+      note: "raw B > A by 1 ulp, equal after / 1.02: argmax of p picks A",
+      x: [0.3, 1],
+      want: { ...tie, raw: [1.25, 1.2500000000000002, 0.4] },
+    },
+    { note: "null on a None-type split reads 0", x: [0.3, null], want: tie },
+    { note: "5e-36 is in LightGBM's zero band", x: [0, 5e-36], want: tie },
+  ];
+
+  it("raw, p, label, map position; no regressors", () => {
+    const model = makeEmotionModel(toyMeta, loadDumpModel(dump));
+    for (const c of cases) {
+      const r = predictEmotion(model, c.x);
+      expect(bitEqual(r.raw, c.want.raw), c.note).toBe(true);
+      expect(maxErr(r.p, c.want.p), c.note).toBeLessThanOrEqual(1e-15);
+      expect([r.k, r.label, r.labelDisplay], c.note).toEqual([
+        c.want.k,
+        toyMeta.states[c.want.k]?.id,
+        toyMeta.states[c.want.k]?.display,
+      ]);
+      expect(r.confidence).toBe(r.p[r.k]);
+      expect(maxErr([r.valence, r.arousal], c.want.mix), c.note).toBeLessThanOrEqual(1e-15);
+      expect([r.valenceReg, r.arousalReg, r.valenceRegRaw, r.arousalRegRaw]).toEqual([
+        null,
+        null,
+        null,
+        null,
+      ]);
+      const a = toAffect(r, model);
+      expect(Object.keys(a.probabilities)).toEqual(["A", "B", "C"]);
+      expect(a.model).toBe("toy@00000000");
+    }
   });
 });

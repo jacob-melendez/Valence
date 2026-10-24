@@ -26,7 +26,12 @@ the room window is the room rows up to the same tick (last <= 180).
   x123 = ``features_from_window(person, room)``, x = ``model_input(x123, emotion_from_window(person))`` (132 values,
   meta.json input_features order) and ``EmotionPredictor.predict(x)``; plus, for the first case of each state, the
   same x with the whole face block hidden (face_* and the 31 NaN, face_visible_now / face_visible_frac_5m = 0, as
-  scripts/emotion_export.py builds its face-hidden vectors; x123 is null there).
+  scripts/emotion_export.py builds its face-hidden vectors; x123 is null there). Each case's ``affect`` is built
+  the way ``valence/models/emotion.py`` ``affect_for_window`` builds it (unrounded floats, label = argmax p); for
+  every case with a TickRecord window it is checked equal to ``affect_for_window(pred, person, room)`` itself.
+* affect_windows: a few whole TickRecord windows (``TickRecord.to_dict()``, person and room) with
+  ``affect_for_window``'s result: a short window, the same window with no room rows (``room or person``), a window
+  with no readable face, and an empty person window (None).
 
 Schema
 ------
@@ -38,10 +43,11 @@ Schema
      # session = index into sessions; window = that person's rows[end - hist + 1 .. end]
  edge_windows: [{name, channels: {field: [n]}, features: [31]}],
  model_cases: [{name, state, window, x123: [123] | null, x: [132], raw: [10], p: [10], k, label, confidence,
-                valence_mix, arousal_mix, valence_raw, arousal_raw, valence, arousal, affect: AffectDict}]}
+                valence_mix, arousal_mix, valence_raw, arousal_raw, valence, arousal, affect: AffectDict}],
+ affect_windows: [{name, person: [TickRecordDict], room: [TickRecordDict], affect: AffectDict | null}]}
      # window: {session, person_id, end, hist} (a checkpoint window), {edge: name} (an edge window) or null
      # (the face-hidden x variants); valence/arousal are the clipped regressors, *_mix the served map position;
-     # affect = Affect(...).model_dump() with round(x, 4) on valence, arousal, confidence and probabilities
+     # affect = Affect(...).model_dump() as affect_for_window builds it (no rounding)
 
 Encoding: compact JSON, floats written by json.dumps (Python repr, so JSON.parse yields the identical double),
 NaN -> null, +-inf refused, gzip with mtime=0 (reruns are byte-identical). Size budget 1.5 MB.
@@ -64,7 +70,7 @@ if str(ROOT) not in sys.path:
 
 import numpy as np  # noqa: E402
 
-from valence.contracts import TICK_FIELDS, Affect, TickRecord  # noqa: E402
+from valence.contracts import EMOTION_DISPLAY, TICK_FIELDS, Affect, TickRecord  # noqa: E402
 from valence.features.compute import FEATURE_NAMES, MAX_TICKS, features_from_window  # noqa: E402
 from valence.features.emotion import (  # noqa: E402
     EMOTION_FEATURE_NAMES,
@@ -75,7 +81,7 @@ from valence.features.emotion import (  # noqa: E402
     emotion_from_window,
     model_input,
 )
-from valence.models.emotion import EmotionPredictor  # noqa: E402
+from valence.models.emotion import EmotionPredictor, affect_for_window  # noqa: E402
 from valence.sim.generator import simulate_session  # noqa: E402
 
 ART = ROOT / "artifacts" / "emotion"
@@ -173,19 +179,14 @@ def hide_face(r: TickRecord) -> TickRecord:
 # ---------- model ----------
 
 
-def affect_of(pred: EmotionPredictor, label: str, p: np.ndarray, valence: float, arousal: float) -> dict:
-    """The Prediction.affect message for one prediction (valence/contracts.py Affect).
-
-    Python has no Affect builder yet; this applies the rounding of the neighbouring Prediction fields,
-    round(x, 4) (Prediction.confidence in valence/runtime/engine.py, the fact sheet's probabilities in
-    valence/explain/explainer.py), and validates the result through the pydantic model.
+def affect_of(pred: EmotionPredictor, p: np.ndarray, valence: float, arousal: float) -> dict:
+    """The Prediction.affect message for one prediction, exactly as valence/models/emotion.py affect_for_window
+    builds it (map position, label = first argmax of p, unrounded floats), validated by the pydantic model.
     """
-    k = pred.states.index(label)
-    display = {s["id"]: s["display"] for s in pred.meta["states"]}
-    return Affect(valence=round(valence, 4), arousal=round(arousal, 4), label=label, label_display=display[label],
-                  confidence=round(float(p[k]), 4),
-                  probabilities={s: round(float(v), 4) for s, v in zip(pred.states, p)},
-                  model=pred.model_id).model_dump()
+    k = int(np.argmax(p))
+    return Affect(valence=float(valence), arousal=float(arousal), label=pred.states[k],
+                  label_display=EMOTION_DISPLAY[pred.states[k]], confidence=float(p[k]),
+                  probabilities=dict(zip(pred.states, map(float, p))), model=pred.model_id).model_dump()
 
 
 def model_case(pred: EmotionPredictor, name: str, state: str, window: dict | None, x123: np.ndarray | None,
@@ -199,7 +200,7 @@ def model_case(pred: EmotionPredictor, name: str, state: str, window: dict | Non
             "valence_mix": mix_v, "arousal_mix": mix_a,
             "valence_raw": float(r["valence_raw"][0]), "arousal_raw": float(r["arousal_raw"][0]),
             "valence": float(r["valence"][0]), "arousal": float(r["arousal"][0]),
-            "affect": affect_of(pred, pred.states[k], p, mix_v, mix_a)}
+            "affect": affect_of(pred, p, mix_v, mix_a)}
 
 
 def face_hidden_x(pred: EmotionPredictor, x: np.ndarray) -> np.ndarray:
@@ -268,6 +269,28 @@ def edge_windows(person: list[TickRecord], room: list[TickRecord]) -> list[tuple
     return out
 
 
+def affect_window_cases(pred: EmotionPredictor, person: list[TickRecord], room: list[TickRecord]) -> list[dict]:
+    """Whole TickRecord windows through affect_for_window (the live path: features_from_window, emotion_from_window,
+    model_input, predict, Affect), for the TypeScript affectForWindow."""
+    end = min(len(person) - 1, 300)
+    pw = person[end - 39:end + 1]
+    rw = room_window(room, pw[-1].tick)[-40:]
+    cases = [("40 ticks", pw, rw), ("40 ticks, no room rows (room or person)", pw, []),
+             ("12 ticks without a readable face", [hide_face(r) for r in pw[-12:]], rw[-12:]),
+             ("empty person window", [], rw[-5:])]
+    out = []
+    for name, p, r in cases:
+        a = affect_for_window(pred, p, r)
+        out.append({"name": name, "person": [x.to_dict() for x in p], "room": [x.to_dict() for x in r],
+                    "affect": None if a is None else a.model_dump()})
+    return out
+
+
+def record_of(d: dict) -> TickRecord:
+    """TickRecord.to_dict() -> TickRecord (null -> NaN, as the replay source and tickRecordFromDict read it)."""
+    return TickRecord(**{k: (math.nan if v is None else v) for k, v in d.items()})
+
+
 # ---------- export ----------
 
 
@@ -301,6 +324,8 @@ def export() -> dict[str, Any]:
                     name = f"{sid} person {pid} row {end}"
                     window = {"session": s_idx, "person_id": pid, "end": end, "hist": len(win)}
                     models.append(model_case(pred, name, st, window, x123, x))
+                    live = affect_for_window(pred, win, room_window(room, rows[end].tick))
+                    assert live is not None and live.model_dump() == models[-1]["affect"], name
                     if st not in hidden_done:
                         hidden_done.add(st)
                         models.append(model_case(pred, name + " (x face hidden)", st, None, None,
@@ -317,15 +342,18 @@ def export() -> dict[str, Any]:
                     st = state[(pid, pw[-1].tick)]
                     models.append(model_case(pred, f"edge: {name}", st, {"edge": name}, x123,
                                               model_input(x123, feats)))
+                    live = affect_for_window(pred, pw, rw)
+                    assert live is not None and live.model_dump() == models[-1]["affect"], name
                 else:
                     feats = compute_emotion({f: np.asarray(v, dtype=float) for f, v in ch.items()})
                 edges.append({"name": name, "channels": ch, "features": feats})
+            affect_windows = affect_window_cases(pred, recs[pid], room)
     return {
         "version": 1, "generator": "scripts/export_web_golden_emotion.py", "feature_version": FEATURE_VERSION,
         "model_id": pred.model_id, "temperature": pred.t, "states": pred.states,
         "emotion_feature_names": EMOTION_FEATURE_NAMES, "input_features": pred.cols,
         "emotion_fields": list(EMOTION_FIELDS), "sessions": sessions, "checkpoints": checkpoints,
-        "edge_windows": edges, "model_cases": models,
+        "edge_windows": edges, "model_cases": models, "affect_windows": affect_windows,
     }
 
 
@@ -353,18 +381,22 @@ def check(path: Path) -> None:
         r = pred.predict(np.asarray(nn(m["x"]), dtype=float))
         bad += not (same(r["raw"][0], m["raw"]) and same(r["proba"][0], m["p"])
                     and float(r["valence_mix"][0]) == m["valence_mix"] and float(r["valence_raw"][0]) == m["valence_raw"])
-        bad += affect_of(pred, m["label"], r["proba"][0], m["valence_mix"], m["arousal_mix"]) != m["affect"]
+        bad += affect_of(pred, r["proba"][0], m["valence_mix"], m["arousal_mix"]) != m["affect"]
         w = m["window"]
         if w is not None:
             xe = edges[w["edge"]] if "edge" in w else window_emotion(w["session"], w["person_id"], w["end"], w["hist"])
             bad += not same(model_input(np.asarray(nn(m["x123"]), dtype=float), xe), nn(m["x"]))
+    for a in g["affect_windows"]:
+        live = affect_for_window(pred, [record_of(d) for d in a["person"]], [record_of(d) for d in a["room"]])
+        bad += (None if live is None else live.model_dump()) != a["affect"]
     states = sorted({c["state"] for c in g["checkpoints"]})
     labels = sorted({m["label"] for m in g["model_cases"]})
     n_nan = sum(all(v is None for v in c["features"]) for c in g["checkpoints"])
     n_part = sum(any(v is None for v in c["features"]) and not all(v is None for v in c["features"])
                  for c in g["checkpoints"])
     print(f"check: {len(g['checkpoints'])} checkpoints ({n_nan} all-NaN, {n_part} partly NaN), "
-          f"{len(g['edge_windows'])} edge windows, {len(g['model_cases'])} model cases; "
+          f"{len(g['edge_windows'])} edge windows, {len(g['model_cases'])} model cases, "
+          f"{len(g['affect_windows'])} affect windows; "
           f"{len(states)} true states {states}; predicted labels {labels}; mismatches {bad}")
     if bad or len(states) != len(pred.states):
         raise SystemExit("check failed")

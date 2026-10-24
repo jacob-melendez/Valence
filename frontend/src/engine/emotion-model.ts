@@ -13,17 +13,20 @@
  *   valence = sum_k p_k * states[k].valence (likewise arousal); the regressors, exported for comparison, are
  *   clip(raw, -1, 1).
  *
- * Parity: raw scores are bit-identical to LightGBM (lgbm.ts). Probabilities go through Math.exp, which can
- * differ from numpy's np.exp in the last bit, and Python's `p @ anchors` runs through OpenBLAS, whose
- * summation order is machine dependent; both stay within a few ulps (tests target <= 1e-9).
+ * Parity: raw scores and regressors are bit-identical to LightGBM (lgbm.ts), also for inputs exactly on a
+ * split threshold, in the +-1e-35 zero band, +-inf and NaN. Probabilities go through Math.exp, and numpy's
+ * np.exp (an AVX-512 kernel here) itself differs from libm exp in the last bit for ~4% of inputs: p stays
+ * within 3 ulp. Python's `p @ anchors` runs through OpenBLAS and is not even self-consistent (one row vs a
+ * batch gives different bits for ~half the values), so the map position (numpy's pairwise order here) has
+ * no single bit target; it stays within 4e-16. Tests target <= 1e-9.
  * Golden values: artifacts/emotion/golden.json (Cloud B) and scripts/export_web_golden_emotion.py ->
  * src/test/fixtures/engine/emotion.json.gz.
  */
-import type { Affect } from "./contracts";
-import { EMOTION_INDEX, N_EMOTION_FEATURES } from "./emotion-features";
-import { FEATURE_INDEX, N_FEATURES } from "./features";
+import type { Affect, TickRecord } from "./contracts";
+import { EMOTION_INDEX, N_EMOTION_FEATURES, computeEmotion } from "./emotion-features";
+import { FEATURE_INDEX, N_FEATURES, featuresFromWindow } from "./features";
 import { type Booster, loadDumpModel, parseLightGBMText, predictRaw } from "./lgbm";
-import { clip, isnan, pairwiseSum, pyRound } from "./num";
+import { clip, isnan, pairwiseSum } from "./num";
 
 // ---------- Types ----------
 
@@ -390,26 +393,43 @@ export function predictEmotion(model: EmotionModel, xIn: ArrayLike<number | null
 // ---------- Affect message ----------
 
 /**
- * The `Prediction.affect` object (valence/contracts.py:373 Affect): the served map position, the label, its
- * display name from meta.json, the confidence and the ten probabilities keyed by state id, and the model id.
- *
- * Python has no Affect builder yet (the Python runtime does not fill `affect`), so the rounding follows the
- * neighbouring Prediction fields: `round(x, 4)` like Prediction.confidence (valence/runtime/engine.py:401) and
- * the fact sheet's probabilities (valence/explain/explainer.py:96), applied to valence, arousal, confidence and
- * every probability with Python's half-even-on-the-binary-value rounding (num.ts pyRound).
+ * The `Prediction.affect` object (valence/contracts.py:373 Affect), as valence/models/emotion.py:217
+ * affect_for_window builds it: the served map position (valence_mix / arousal_mix), the label (first argmax of
+ * p) with its display name, the confidence p[k], the probabilities keyed by state id in class order, and the
+ * model id. Plain floats, no rounding (Python passes `float(...)` straight into Affect).
  */
 export function toAffect(result: EmotionResult, model: EmotionModel): Affect {
   const probabilities: Record<string, number> = {};
   model.meta.states.forEach((s, k) => {
-    probabilities[s.id] = pyRound(result.p[k] as number, 4);
+    probabilities[s.id] = result.p[k] as number;
   });
   return {
-    valence: pyRound(result.valence, 4),
-    arousal: pyRound(result.arousal, 4),
+    valence: result.valence,
+    arousal: result.arousal,
     label: result.label,
     label_display: result.labelDisplay,
-    confidence: pyRound(result.confidence, 4),
+    confidence: result.confidence,
     probabilities,
     model: model.modelId,
   };
+}
+
+/**
+ * Live path, valence/models/emotion.py:217 affect_for_window: RollingWindow snapshots (TickRecords, oldest
+ * first) -> the Affect for the person's latest tick, or null for an empty person window. The input row is
+ * `model_input(features_from_window(person, room or person), emotion_from_window(person))`; an empty room
+ * window falls back to the person's rows, as in Python.
+ */
+export function affectForWindow(
+  model: EmotionModel,
+  person: readonly TickRecord[],
+  room: readonly TickRecord[],
+): Affect | null {
+  if (person.length === 0) return null;
+  const x = emotionInput(
+    featuresFromWindow(person, room.length ? room : person),
+    computeEmotion(person),
+    model.meta,
+  );
+  return toAffect(predictEmotion(model, x), model);
 }
