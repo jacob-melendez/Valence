@@ -1,0 +1,68 @@
+{
+ "model_id": "emotion-v1@378fa16c",
+ "test_sessions": 90,
+ "n_boot": 1000,
+ "full_macro_f1": {
+  "point": 0.6881,
+  "ci95": [
+   0.6732,
+   0.7025
+  ]
+ },
+ "full_valence_mae": {
+  "point": 0.1755,
+  "ci95": [
+   0.1674,
+   0.1833
+  ]
+ },
+ "full_arousal_mae": {
+  "point": 0.2382,
+  "ci95": [
+   0.2294,
+   0.2472
+  ]
+ },
+ "face_only_macro_f1": {
+  "point": 0.6208,
+  "ci95": [
+   0.6044,
+   0.6363
+  ]
+ },
+ "face_only_valence_mae": {
+  "point": 0.2047,
+  "ci95": [
+   0.1953,
+   0.2145
+  ]
+ },
+ "face_only_arousal_mae": {
+  "point": 0.2754,
+  "ci95": [
+   0.2645,
+   0.2871
+  ]
+ },
+ "full_minus_face_macro_f1": {
+  "point": 0.0673,
+  "ci95": [
+   0.0582,
+   0.0777
+  ]
+ },
+ "full_minus_face_valence_mae": {
+  "point": -0.0293,
+  "ci95": [
+   -0.035,
+   -0.0241
+  ]
+ },
+ "full_minus_face_arousal_mae": {
+  "point": -0.0372,
+  "ci95": [
+   -0.0426,
+   -0.0322
+  ]
+ }
+}

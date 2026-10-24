@@ -274,7 +274,7 @@ def robustness(predictor, sessions: int = 60, seed: int = 2027) -> dict:
 
 
 def main() -> None:
-    """``python -m valence.eval.emotion_eval`` writes artifacts/emotion/robustness.json and scenarios.json."""
+    """``python -m valence.eval.emotion_eval [--robustness]`` writes artifacts/emotion/ci.json (and robustness.json)."""
     import argparse
     import json
     from pathlib import Path
@@ -284,11 +284,76 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="artifacts/emotion")
     ap.add_argument("--sessions", type=int, default=60)
+    ap.add_argument("--robustness", action="store_true", help="also rerun the shifted-corpus checks (~5 min)")
     args = ap.parse_args()
     pred = EmotionPredictor(Path(args.dir))
-    rob = {"model_id": pred.model_id, **robustness(pred, sessions=args.sessions)}
-    (Path(args.dir) / "robustness.json").write_text(json.dumps(clean_json(rob), indent=1, allow_nan=False))
-    print(json.dumps(rob, indent=1))
+    ap_ci = {"model_id": pred.model_id, **bootstrap_ci(pred)}
+    (Path(args.dir) / "ci.json").write_text(json.dumps(clean_json(ap_ci), indent=1, allow_nan=False))
+    print(json.dumps(ap_ci, indent=1))
+    if args.robustness:
+        rob = {"model_id": pred.model_id, **robustness(pred, sessions=args.sessions)}
+        (Path(args.dir) / "robustness.json").write_text(json.dumps(clean_json(rob), indent=1, allow_nan=False))
+        print(json.dumps(rob, indent=1))
+
+
+
+def bootstrap_ci(predictor, n_boot: int = 1000, seed: int = 0) -> dict:
+    """Session-bootstrap 95% intervals on the held-out test sessions: macro-F1 and map-position MAE of the exported
+    model, of a face-only model retrained on the same split, and their paired difference."""
+    from valence.models.emotion import labels, load_corpus
+
+    info = predictor.meta["training"]
+    from pathlib import Path
+
+    X, meta = load_corpus(info["sessions"], info["seed"], info["noise_scale"], Path.home() / ".cache" / "valence-emotion")
+    y = labels(meta)
+    split = split_from_meta(meta, info["seed"])
+    test = split.test
+    Xt, mt, yt = X.loc[test].reset_index(drop=True), meta.loc[test].reset_index(drop=True), y[test]
+    face = train_models(X, meta, y, split, FACE_ONLY_FEATURES, augment=False, seed=info["seed"])
+    full_p = predictor.predict(Xt[predictor.cols].to_numpy())
+    preds = {"full": (full_p["proba"].argmax(axis=1), full_p["valence_mix"], full_p["arousal_mix"])}
+    fp = face.proba(Xt)
+    fmix = fp @ ANCHORS
+    preds["face_only"] = (fp.argmax(axis=1), fmix[:, 0], fmix[:, 1])
+    tv, ta = mt["valence"].to_numpy(), mt["arousal"].to_numpy()
+    sessions = mt["session_id"].to_numpy()
+    uniq = np.unique(sessions)
+    idx = {s: np.nonzero(sessions == s)[0] for s in uniq}
+    rng = np.random.default_rng(seed)
+
+    def stats(rows: np.ndarray) -> dict:
+        out = {}
+        for name, (lab, v, a) in preds.items():
+            out[name] = (f1_score(yt[rows], lab[rows], average="macro", labels=range(len(STATES)), zero_division=0),
+                         np.abs(v[rows] - tv[rows]).mean(), np.abs(a[rows] - ta[rows]).mean())
+        return out
+
+    point = stats(np.arange(len(yt)))
+    draws = []
+    for _ in range(n_boot):
+        rows = np.concatenate([idx[s] for s in rng.choice(uniq, len(uniq), replace=True)])
+        draws.append(stats(rows))
+
+    def ci(get) -> list[float]:
+        vals = np.array([get(d) for d in draws])
+        return [round(float(np.percentile(vals, 2.5)), 4), round(float(np.percentile(vals, 97.5)), 4)]
+
+    out = {"test_sessions": int(len(uniq)), "n_boot": n_boot}
+    for name in preds:
+        for j, metric in enumerate(("macro_f1", "valence_mae", "arousal_mae")):
+            out[f"{name}_{metric}"] = {"point": round(float(point[name][j]), 4), "ci95": ci(lambda d: d[name][j])}
+    for j, metric in enumerate(("macro_f1", "valence_mae", "arousal_mae")):
+        out[f"full_minus_face_{metric}"] = {
+            "point": round(float(point["full"][j] - point["face_only"][j]), 4),
+            "ci95": ci(lambda d: d["full"][j] - d["face_only"][j])}
+    return out
+
+
+def split_from_meta(meta, seed):
+    from valence.models.train_ladder import split_sessions
+
+    return split_sessions(meta, seed)
 
 
 if __name__ == "__main__":

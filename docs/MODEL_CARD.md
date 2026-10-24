@@ -410,8 +410,8 @@ nothing about the thesis.
 > The served desktop models above (M2/M0, `artifacts/`, `artifacts/all/`) are unchanged.
 
 Sources: `artifacts/emotion/meta.json` (model), `metrics.json` (held-out evaluation, scenario replays),
-`robustness.json` (shifted test corpora). Regenerate with `python -m valence.models.emotion` (≈ 12 min on 4 cores),
-`python -m valence.eval.emotion_eval`, then `python scripts/emotion_export.py` and `python scripts/emotion_tour.py`.
+`robustness.json` (shifted test corpora), `ci.json` (bootstrap intervals). Regenerate with `python -m valence.models.emotion` (≈ 12 min on 4 cores),
+`python -m valence.eval.emotion_eval --robustness`, then `python scripts/emotion_export.py` and `python scripts/emotion_tour.py`.
 
 ### 9.1 Model details
 
@@ -451,9 +451,15 @@ regression targets are the anchors by construction, with a little within-state s
 | Shuffled-context control, test time | 0.429 | 0.430 | 0.163 | 0.266 / 0.50 | 0.366 / 0.40 | 0.59 |
 | Shuffled-context control, trained | 0.618 | 0.628 | 0.007 | 0.206 / 0.70 | 0.277 / 0.64 | 0.73 |
 
+Session-bootstrap 95% intervals (`ci.json`, 90 test sessions, 1000 resamples): full macro-F1 0.688
+(0.673–0.703), face only 0.621 (0.604–0.636); paired difference **+0.067 (0.058–0.078)**;
+map-position MAE difference (full − face only) valence -0.029
+(-0.035 to -0.024), arousal -0.037 (-0.043 to -0.032).
+
 Reading:
 
-- **Context adds +0.067 macro-F1 over the face alone** (0.621 → 0.688) and improves both axes. The face cues carry
+- **Context adds +0.067 macro-F1 over the face alone** (0.621 → 0.688; interval above excludes 0) and improves both
+  axes. The face cues carry
   most of the signal for the four new states, by the simulator's design.
 - **The controls behave.** With context from a random other window, the full model drops to 0.429 (and its
   calibration breaks, ECE 0.163): it really uses the context. A model trained on shuffled context lands at 0.618,
