@@ -764,6 +764,8 @@ const QUADRANTS = [
   { x: 8, y: 95, label: "tired · bored", anchor: "start" },
   { x: 92, y: 95, label: "calm · content", anchor: "end" },
 ] as const;
+/** Vertical label nudges (map units) for anchors that sit close together (docs/EMOTION_FEATURES.md section 4). */
+const ANCHOR_NUDGE: Record<string, number> = { Frustrated_Masked: -1.6, Anxious: 1.4, Tense: 2.2, Overwhelmed: -0.8 };
 /** Valence -1..1 → x 0..100, arousal -1..1 → y 100..0. */
 const vaX = (v: number) => 50 + Math.max(-1, Math.min(1, v)) * 46;
 const vaY = (a: number) => 50 - Math.max(-1, Math.min(1, a)) * 46;
@@ -788,12 +790,20 @@ export function AffectMap() {
             <text x="97" y="48" fontSize="3" textAnchor="end" fill="currentColor" opacity="0.6">valence +</text>
             <text x="52" y="5" fontSize="3" fill="currentColor" opacity="0.6">arousal +</text>
             {QUADRANTS.map((q) => <text key={q.label} x={q.x} y={q.y} fontSize="2.8" textAnchor={q.anchor} fill="currentColor" opacity="0.35">{q.label}</text>)}
-            {s.affectStates.map((a) => (
-              <g key={a.id} opacity="0.55">
-                <circle cx={vaX(a.valence)} cy={vaY(a.arousal)} r="1" fill={stateColor(a.id, "currentColor")} />
-                <text x={vaX(a.valence) + 1.6} y={vaY(a.arousal) + 1} fontSize="2.6" fill="currentColor">{a.display.split(" /")[0]}</text>
-              </g>
-            ))}
+            {s.affectStates.map((a) => {
+              // Negative-valence states label to the left of their dot, the rest to the right; the crowded
+              // negative / high-arousal corner gets small vertical nudges so the names don't overlap.
+              const left = a.valence < 0, dy = ANCHOR_NUDGE[a.id] ?? 0;
+              return (
+                <g key={a.id} opacity="0.6">
+                  <title>{`${a.display}: valence ${a.valence}, arousal ${a.arousal} (assumed anchor)`}</title>
+                  <circle cx={vaX(a.valence)} cy={vaY(a.arousal)} r="1" fill={stateColor(a.id, "currentColor")} />
+                  <text x={vaX(a.valence) + (left ? -1.6 : 1.6)} y={vaY(a.arousal) + 1 + dy} fontSize="2.5" textAnchor={left ? "end" : "start"} fill="currentColor">
+                    {a.display.split(" /")[0]}
+                  </text>
+                </g>
+              );
+            })}
             {people.map((pid, i) => {
               const trail = s.affectTrail[pid] ?? [];
               const color = PERSON_TRAIL[i % PERSON_TRAIL.length];
