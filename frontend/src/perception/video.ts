@@ -8,6 +8,9 @@
  * luminance and crop copies are wiped by the PixelReader, and nothing image-shaped is kept here. Display ids are
  * ephemeral; per-person baselines live in memory only and die with the track.
  *
+ * Posture runs on One Euro-smoothed keypoints with motion on the shoulders only (smoothing.ts): BlazePose jitters
+ * where YOLO does not. Hands, faces and head crops use the raw keypoints, as in Python.
+ *
  * Browser additions: the emotion-v1 face cues (faceCues.ts) and the raw extras (52 blendshapes, head pose) per
  * person, held like face_valence for FACE_HOLD_S after the face pass that produced them.
  */
@@ -21,6 +24,7 @@ import { backgroundStats, LuxEstimator, MAX_WIDTH } from "./lux";
 import type { VisionModels } from "./models";
 import { PostureTracker, type PostureState } from "./posture";
 import { headBoxPx, normBbox } from "./regions";
+import { KeypointSmoother } from "./smoothing";
 import { IouTracker, type BoxPx } from "./tracker";
 import type { BBox, FaceRaw, PersonObs, VideoObs } from "./types";
 
@@ -74,7 +78,9 @@ interface FaceHit {
 
 /** Ephemeral per-display-id state: scalars and keypoint history only. */
 class Person {
-  posture = new PostureTracker();
+  /** Posture on One Euro-smoothed keypoints, motion on the shoulders only (smoothing.ts: BlazePose jitter). */
+  posture = new PostureTracker({ motionPoints: [5, 6] });
+  smoother = new KeypointSmoother();
   face = new FaceValenceCalibrator();
   cues = new FaceCueTracker();
   faceValence = NaN;
@@ -141,7 +147,7 @@ export class VisionPipeline {
     for (const [did, d] of byId) {
       let p = this.people.get(did);
       if (!p) this.people.set(did, (p = new Person()));
-      postures.set(did, p.posture.update(d.kxy, d.kconf, t));
+      postures.set(did, p.posture.update(p.smoother.update(d.kxy, t), d.kconf, t));
     }
 
     if (it % 2 === 0) this.updateFists(frame, byId, w, h, t);

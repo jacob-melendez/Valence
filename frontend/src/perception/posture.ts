@@ -50,6 +50,12 @@ export interface PostureTrackerOptions {
   earRatio?: number;
   noseOnlyRatio?: number;
   motionMinConf?: number;
+  /**
+   * Browser-only (no Python counterpart): the keypoints motion is measured on. Default BODY_POINTS (COCO 5-12), as
+   * in Python. The browser passes the shoulders only: BlazePose elbows and wrists jitter at 0.5-1 sw/s on a still
+   * scene (docs/hackohio/status-C.md, YOLO vs BlazePose side by side).
+   */
+  motionPoints?: readonly number[];
   motionJump?: number;
   motionMinPoints?: number;
 }
@@ -203,6 +209,7 @@ export class PostureTracker {
   readonly minConf: number;
   /** Never looser than `minConf`. */
   readonly motionMinConf: number;
+  readonly motionPoints: readonly number[];
   readonly motionJump: number;
   readonly motionMinPoints: number;
   private t0: number | null = null;
@@ -232,6 +239,7 @@ export class PostureTracker {
     motionMinConf = 0.6,
     motionJump = 1.0,
     motionMinPoints = 3,
+    motionPoints = BODY_POINTS,
   }: PostureTrackerOptions = {}) {
     if (!(0.0 < emaAlpha && emaAlpha <= 1.0)) throw new Error("emaAlpha must be in (0, 1]");
     this.baselineS = baselineS;
@@ -244,6 +252,7 @@ export class PostureTracker {
     this.emaAlpha = emaAlpha;
     this.minConf = minConf;
     this.motionMinConf = motionMinConf > minConf ? motionMinConf : minConf; // Python max(minConf, motionMinConf)
+    this.motionPoints = motionPoints;
     this.motionJump = motionJump;
     this.motionMinPoints = motionMinPoints;
   }
@@ -304,7 +313,7 @@ export class PostureTracker {
       const valid = conf >= this.minConf;
       xy[2 * k] = valid ? toFloat(kptsXy[2 * k]) : NaN;
       xy[2 * k + 1] = valid ? toFloat(kptsXy[2 * k + 1]) : NaN;
-      if (BODY_POINTS.includes(k) && conf >= this.motionMinConf) {
+      if (this.motionPoints.includes(k) && conf >= this.motionMinConf) {
         body[2 * k] = xy[2 * k]!;
         body[2 * k + 1] = xy[2 * k + 1]!;
       }

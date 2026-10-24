@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AudioPipeline, YAMNET_WINDOW } from "@/perception/audio";
 import { BLAZEPOSE_TO_COCO, blazeposeToCoco, poseBoxPx, type Landmark } from "@/perception/coco";
+import { PostureTracker } from "@/perception/posture";
 import { IouTracker, iou } from "@/perception/tracker";
 import { BLENDSHAPE_NAMES, type VideoObs } from "@/perception/types";
 import { FACE_HOLD_S, VisionPipeline, type FrameInput, type PixelSource } from "@/perception/video";
@@ -336,5 +337,60 @@ describe("AudioPipeline (mocked YAMNet)", () => {
     expect(out[0]!.speech_prob).toBeCloseTo(0.8);
     expect(out.map((o) => o.laughter_onsets)).toEqual([0, 1, 0, 0, 0, 0, 0, 0, 1]);
     expect(out.every((o) => o.compliment_hits === 0)).toBe(true);
+  });
+});
+
+describe("KeypointSmoother (One Euro for BlazePose jitter)", () => {
+  const frame = (dx: number, noise: () => number) =>
+    Float64Array.from({ length: 34 }, (_, i) => (i % 2 ? 300 : 400 + (i === 10 ? 0 : i === 12 ? 200 : i * 5)) + dx + noise());
+
+  it("passes the first sample through, then cuts frame-to-frame jitter on a still person", async () => {
+    const { KeypointSmoother } = await import("@/perception/smoothing");
+    let seed = 1;
+    const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 6; // +-3 px
+    const sm = new KeypointSmoother();
+    const first = frame(0, noise);
+    expect([...sm.update(first, 0)]).toEqual([...first]);
+    let raw = 0, smooth = 0;
+    let prevRaw: Float64Array = first, prevOut: Float64Array = first;
+    for (let i = 1; i < 100; i++) {
+      const f = frame(0, noise);
+      const out = sm.update(f, i * 0.1);
+      raw += Math.abs(f[0]! - prevRaw[0]!);
+      smooth += Math.abs(out[0]! - prevOut[0]!);
+      prevRaw = f;
+      prevOut = out;
+    }
+    expect(smooth).toBeLessThan(raw / 5);
+  });
+
+  it("follows real movement (higher cutoff when moving), holds non-finite points, ignores repeated timestamps", async () => {
+    const { KeypointSmoother } = await import("@/perception/smoothing");
+    const sm = new KeypointSmoother();
+    sm.update(frame(0, () => 0), 0);
+    let out: Float64Array = new Float64Array(34);
+    for (let i = 1; i <= 20; i++) out = sm.update(frame(i * 20, () => 0), i * 0.1); // 200 px/s, ~1 sw/s
+    expect(out[0]!).toBeGreaterThan(400 + 400 * 0.85 - 5); // within ~15% of the true 800 px after 2 s
+    const missing = frame(400, () => 0);
+    missing[0] = NaN;
+    const held = sm.update(missing, 2.1);
+    expect(held[0]).toBeNaN();
+    const again = sm.update(frame(400, () => 0), 2.1); // same t: nothing changes
+    expect(again[2]).toBe(held[2]);
+  });
+
+  it("PostureTracker measures motion on the configured points only (default: Python's COCO 5-12)", () => {
+    const base = Float64Array.from({ length: 34 }, (_, i) => (i % 2 ? 300 + i : 400 + i * 10));
+    const conf = new Float64Array(17).fill(0.99);
+    const make = (opts = {}) => new PostureTracker(opts);
+    for (const [opts, moving] of [[{}, true], [{ motionPoints: [5, 6] }, false]] as const) {
+      const pt = make(opts);
+      pt.update(base, conf, 0);
+      const wristsMoved = Float64Array.from(base);
+      wristsMoved[18] = wristsMoved[18]! + 5; // left wrist x (shoulders 20 px apart: 0.25 sw)
+      wristsMoved[20] = wristsMoved[20]! + 5; // right wrist x
+      const st = pt.update(wristsMoved, conf, 0.1);
+      expect(st.motion > 0).toBe(moving);
+    }
   });
 });
