@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
   shownExplanation, stateName, useValence, clearSelfReports, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
-  type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
+  type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg, type StatusMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream } from "@/lib/browser-source";
 
@@ -345,7 +345,9 @@ export function Governance() {
 
 // ---------- Status ----------
 export function SystemStatus() {
-  const st = useValence().status;
+  const s = useValence();
+  const st = s.status as (StatusMsg & { face_hz?: number; video_backend?: string | null }) | null;
+  const inBrowser = s.source === "browser";
   const item = (k: string, v: React.ReactNode, ok?: boolean) => (
     <div className="flex items-center justify-between border-b py-1.5 last:border-0">
       <span className="text-muted-foreground">{k}</span>
@@ -361,9 +363,13 @@ export function SystemStatus() {
           {item("Microphone", st.mic ? "ON" : "OFF", st.mic)}
           {item("Mode", String(st.mode ?? "—").toUpperCase())}
           {item("FPS", fmt(st.fps))}
+          {/* Blink rates are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3). */}
+          {inBrowser && typeof st.face_hz === "number" && item("Face rate (blinks)", `${fmt(st.face_hz)} Hz`, st.face_hz >= 15)}
+          {inBrowser && st.video_backend && item("Video models", st.video_backend)}
           {item("Loop latency", `${fmt(st.loop_latency_ms, 0)} ms`, (st.loop_latency_ms ?? 0) < 250)}
-          {item("Narrator", st.narrator, st.narrator === "ready")}
-          {item("Network", st.offline ? "OFFLINE ✓" : "ONLINE", st.offline)}
+          {inBrowser ? item("Narrator", "template (in-browser)") : item("Narrator", st.narrator, st.narrator === "ready")}
+          {/* In the browser the page stays online (it loads its own files) but its CSP forbids sending data anywhere. */}
+          {inBrowser ? item("Network", "SEALED · connect-src 'self'", true) : item("Network", st.offline ? "OFFLINE ✓" : "ONLINE", st.offline)}
           {item("Degraded", st.degraded?.length ? st.degraded.join(", ") : "none", !st.degraded?.length)}
           {item("Purge violation", st.purge_violation ? "ALARM" : "none", !st.purge_violation)}
           {item("Uptime", `${Math.floor(st.uptime_s / 60)}m ${Math.floor(st.uptime_s % 60)}s`)}
