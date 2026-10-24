@@ -141,3 +141,40 @@ privacy/robustness fixes:
 
 **Tests now.** 720 frontend tests pass, 300+ of them perception, with parity fixtures for every ported module.
 `e2e/run-all.mjs` passes in all four scenarios at 5.8–8.4 fps on this CPU-only container.
+
+### 14:50 — Audio checked against the edge on identical sound; faces every frame; more e2e
+
+**Audio side by side.** The test file was 90 s: room noise, LibriSpeech speech (CC BY 4.0) and eight ESC-50
+laughing clips (CC BY-NC, kept out of the repo). It played through Chromium's fake microphone into the real
+`createPerception()`, and through the edge's real `AudioPerceiver` (Python MediaPipe 0.10.35, compliments off).
+- **The model is identical.** Browser (WASM) and Python YAMNet scored the same 15600-sample windows bit for bit:
+  199/199 windows, all 6 classes, max |diff| 0.0.
+- **End to end, given the exact same 1 s span:** speech r 0.999, laughter-family r 0.998, 100% on the same side of
+  the 0.5 / 0.05 thresholds, db_spl +0.001 dB on average (0.000 on clean blocks), and **laughter onsets in exactly
+  the same blocks** in all three runs (7 of 8 laughs; the 8th falls in the 5.5 s refractory on both sides).
+- **What differs is only where the blocks fall.** The browser's 1 s grid starts at an arbitrary point in the sound,
+  and the edge's own scores move as much when its grid shifts (speech r 0.98, laughter r 0.94 at 100 ms). The
+  onset count stays the same.
+- **Chromium findings, not bugs in the page:**
+  - The headless AudioContext runs at 44.1 kHz; the 160/441 resample branch is exercised and correct.
+  - When capture hand-off runs dry under CPU load, Chromium inserts 10–40 ms buffers of zeros (71–252 ms per 200 s).
+    They shift the grid and make the affected blocks read up to 0.2 dB low.
+
+**Faces on every frame (default).** For the emotion cues' blink detector. On this CPU-only container: 7.2 fps with
+7.2 face passes/s, against 8.4 fps with 4.2 at the Python cadence (`faceEveryFrame: false`).
+`status().face_hz` reports the rate, and Cloud A has the field.
+
+**e2e.** `run-all.mjs` passes six scenarios, including a refused camera (audio alone, "no camera") and a refused
+microphone (video alone, "no microphone"), simulated as `getUserMedia` NotAllowedError. Main-thread long tasks
+during a 25 s run: **1 (171 ms) with the worker, 158 totalling 22.8 s without it**, both at 7.6 fps. That is the
+case for the worker.
+
+**Reference drift check.** `scripts/export_perception_fixtures.py` now runs at every status. It caught Cloud B's
+`_avg` change (a NaN blendshape side counts as missing); the port follows it (`95d0f14`). At 14:47 all fixtures
+reproduce byte for byte.
+
+**Interpretation for Cloud B (emotion spec section 1).** With faces on alternating frames (`faceEveryFrame: false`),
+a frame between face passes, or a face pass that misses while the face is still held (`face_visible` true within
+the 0.45 s hold), counts as visible. It neither enters the baseline nor resets the blink detector. Only frames whose
+hold has expired count as "not visible" (`update(None)`). Otherwise a single missed pass would erase a blink in
+progress.
