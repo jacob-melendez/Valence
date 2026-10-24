@@ -12,8 +12,40 @@ state from it, and every prediction comes with a plain-English explanation of th
 Built for **TrojanHacks @ USC 2026, AI Data Governance track**. This is a **build in progress**; see
 [Status](#status).
 
+## Valence Web (Hack OHI/O 2026)
+
+Valence is a continuation project at Hack OHI/O 2026. The event baseline is the tag `hackohio-2026-baseline`
+(commit `cc28be9`), and [`docs/HACKOHIO_LOG.md`](docs/HACKOHIO_LOG.md) logs every change since.
+
+At the event, the whole engine moved into the browser.
+
+- **Everything runs in the page:**
+  - perception (MediaPipe in a Web Worker);
+  - the 15-minute window and the 123 features;
+  - LightGBM with TreeSHAP;
+  - the smoother and the mask override;
+  - explanations and the hash-chained audit log.
+- **Checked against the Python engine on golden data:** identical model scores, explanations and audit hashes;
+  features and probabilities within 1–2 ulp.
+- **A new 10-state emotion map** on a valence–arousal plane, with a self-report capture for real-data evaluation.
+- **A sealed static site.** The Content-Security-Policy allows `connect-src 'self'` only, so the page cannot send
+  camera or microphone data anywhere.
+
+All model scores come from simulated data.
+
+To try it: `cd frontend && npm install && npm run dev`, then open `/?demo=tour`. This plays a scripted, simulated
+session and needs no camera. Press **Use my camera (on-device)** for your own.
+
+| Doc | What it covers |
+|---|---|
+| [`docs/WEB_ENGINE.md`](docs/WEB_ENGINE.md) | Architecture and the parity table |
+| [`docs/DEPLOY_WEB.md`](docs/DEPLOY_WEB.md) | Cloudflare deploy and the security headers |
+| [`docs/HACKOHIO_PITCH.md`](docs/HACKOHIO_PITCH.md) | Demo script |
+| [`docs/media/valence-web-tour.mp4`](docs/media/valence-web-tour.mp4) | 75 s recording of the tour |
+
 ## Contents
 
+- [Valence Web (Hack OHI/O 2026)](#valence-web-hack-ohio-2026)
 - [What Valence is](#what-valence-is)
 - [Status](#status)
 - [Quickstart](#quickstart)
