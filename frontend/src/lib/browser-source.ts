@@ -6,7 +6,7 @@
  * this host actually serves it).
  * It emits the same messages the backend WebSocket does (docs/API.md section 3), so every panel works unchanged.
  */
-import type { AffectStateInfo, Command, HelloMsg, RoomBaseline, ServerMessage, StatusMsg } from "./valence";
+import type { AffectStateInfo, Command, EvalSummary, HelloMsg, RoomBaseline, ServerMessage, StatusMsg } from "./valence";
 
 // ---------- Seams (implemented by frontend/src/engine and frontend/src/perception) ----------
 /** A person in a video observation (valence/contracts.py PersonObs; only the fields this module reads). */
@@ -61,6 +61,8 @@ export interface BrowserEngine {
   auditInfo?(): AuditInfo;
   /** The audit log as the desktop backend's JSONL file (verifiable with scripts/audit_verify.py). */
   auditJsonl?(): string;
+  /** The Evaluation panel's numbers from the loaded models' metadata (held-out scores on simulated sessions). */
+  evalSummary?(): EvalSummary;
 }
 
 export interface BrowserSourceDeps {
@@ -68,6 +70,8 @@ export interface BrowserSourceDeps {
   createPerception: () => Promise<PerceptionLike>;
   emit: (m: ServerMessage) => void;
   onBaseline: (b: RoomBaseline) => void;
+  /** The loaded models' evaluation summary, once the engine is up. */
+  onEval?: (e: EvalSummary) => void;
   onError: (what: "camera" | "mic" | "engine", detail: string) => void;
   now?: () => number; // epoch ms
   mono?: () => number; // ms
@@ -215,6 +219,7 @@ export class BrowserSource {
     if (gen !== this.generation) return;
     this.engine = engine;
     this.engineLoading = false;
+    if (engine.evalSummary) this.deps.onEval?.(engine.evalSummary());
     // Toggles pressed while it loaded (the console already shows them as set).
     if (this.roomOnly) engine.setRoomOnly(true);
     for (const w of ["face_occlusion", "low_light"] as const) if (this.overlays[w]) engine.setOverlay(w, true);

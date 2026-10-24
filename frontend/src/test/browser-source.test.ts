@@ -476,4 +476,18 @@ describe("in-browser source", () => {
     expect(src.latestInputs(1)).toBeNull();
     src.stop();
   });
+
+  it("hands the loaded engine's evaluation summary to the console once the engine is up", async () => {
+    const summary = { available: true, metrics: [{ model: "m2", accuracy: NaN, macro_f1: 0.79, ece: NaN }], disclosure: "simulated" };
+    const gate = deferred<BrowserEngine>();
+    const got: unknown[] = [];
+    const { src } = source({ needsMedia: false, createEngine: () => gate.promise, onEval: (e) => got.push(e) });
+    const started = src.start();
+    await flush();
+    expect(got).toEqual([]); // nothing while the models load
+    gate.resolve({ ...fakeEngine([]), evalSummary: () => summary });
+    await started;
+    expect(got).toEqual([summary]);
+    src.stop();
+  });
 });

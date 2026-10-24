@@ -119,6 +119,8 @@ export interface EvalSummary {
   calibration?: { predicted: number; observed: number }[];
   metrics?: EvalMetricRow[] | EvalReport;
   figures?: string[];
+  /** Where the numbers come from (the in-browser source: held-out scores on simulated sessions). */
+  disclosure?: string;
   [k: string]: unknown;
 }
 export type Scenario = string;
@@ -807,6 +809,7 @@ function startBrowser() {
     },
     emit: (m) => { if (current()) handleMessage(m); },
     onBaseline: (b) => { if (current()) set({ baseline: b }); },
+    onEval: (ev) => { if (current()) set({ evalSummary: ev }); },
     onError: (what, detail) => {
       if (!current()) return;
       if (detail.includes(STALE_BUILD)) set({ edgeError: STALE_BUILD });

@@ -133,10 +133,27 @@ describe("browser engine glue (served predictor + runtime + emotion map)", () =>
     });
   });
 
+  it("summarises the loaded models' held-out scores for the Evaluation panel, labelled as simulated", async () => {
+    const engine = await createBrowserEngine({ fetchFn: stubFetch(FILES), tz: "UTC" });
+    const meta = JSON.parse(readFileSync(path.join(ARTIFACTS, "model_meta.json"), "utf8")) as { summary: Record<string, { test_macro_f1: number }> };
+    const emo = JSON.parse(readFileSync(path.join(ARTIFACTS, "emotion/meta.json"), "utf8")) as { summary: Record<string, { macro_f1: number; accuracy: number; ece: number }> };
+    const e = engine.evalSummary?.();
+    expect(e?.available).toBe(true);
+    const rows = e?.metrics as { model: string; accuracy: number; macro_f1: number; ece: number }[];
+    expect(rows.map((r) => r.model.split(" · ")[0])).toEqual(["m2", "m0", "emotion-v1", "emotion-v1", "emotion-v1"]);
+    expect(rows[0]?.macro_f1).toBe(meta.summary["m2"]?.test_macro_f1);
+    expect(rows[1]?.macro_f1).toBe(meta.summary["m0"]?.test_macro_f1);
+    expect(rows[2]).toMatchObject({ macro_f1: emo.summary["full"]?.macro_f1, accuracy: emo.summary["full"]?.accuracy, ece: emo.summary["full"]?.ece });
+    expect(rows[3]?.macro_f1).toBe(emo.summary["face_only"]?.macro_f1);
+    expect(e?.disclosure).toMatch(/simulated/);
+  });
+
   it("runs without the emotion map when its files are missing", async () => {
     const engine = await createBrowserEngine({ fetchFn: stubFetch({ "/models/core/": ARTIFACTS }), tz: "UTC" });
     expect(engine.emotion).toBeNull();
     expect(engine.affectStates).toEqual([]);
     expect(engine.latestInputs(1)).toBeNull();
+    const rows = engine.evalSummary?.().metrics as { model: string }[];
+    expect(rows.map((r) => r.model.split(" · ")[0])).toEqual(["m2", "m0"]);
   });
 });

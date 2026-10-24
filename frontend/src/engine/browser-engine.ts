@@ -8,7 +8,7 @@
  * builds it, keeping each person's model input for the self-report capture.
  */
 import type { BrowserEngine, ObsLike, PerceptionCounters } from "../lib/browser-source";
-import type { RoomBaseline, ServerMessage } from "../lib/valence";
+import type { EvalMetricRow, EvalSummary, RoomBaseline, ServerMessage } from "../lib/valence";
 import { ROOM, makeSettings, stateInfos, type Obs, type TickRecord } from "./contracts";
 import { computeEmotion } from "./emotion-features";
 import { emotionInput, loadEmotionModel, predictEmotion, toAffect, type EmotionModel } from "./emotion-model";
@@ -31,6 +31,36 @@ export interface BrowserEngineOptions {
    */
   tour?: boolean;
   tourSpeed?: number;
+}
+
+/**
+ * The Evaluation panel's numbers for the in-browser source, from the loaded models' own metadata: held-out test
+ * scores on simulated sessions (model_meta.json summary for the served ladder, meta.json summary for the emotion map).
+ */
+export function evalSummaryOf(served: Readonly<Record<string, unknown>>, emotion: EmotionModel | null): EvalSummary {
+  const rec = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? v as Record<string, unknown> : {});
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+  const core = rec(served["summary"]);
+  const rows: EvalMetricRow[] = [
+    { model: "m2 · served, 4 states (context + face)", accuracy: NaN, macro_f1: n(rec(core["m2"])["test_macro_f1"]), ece: NaN },
+    { model: "m0 · face only, 4 states", accuracy: NaN, macro_f1: n(rec(core["m0"])["test_macro_f1"]), ece: NaN },
+  ];
+  const es = rec(emotion?.meta.summary);
+  const add = (key: string, label: string) => {
+    const r = rec(es[key]);
+    if (Object.keys(r).length) rows.push({ model: label, accuracy: n(r["accuracy"]), macro_f1: n(r["macro_f1"]), ece: n(r["ece"]) });
+  };
+  add("full", "emotion-v1 · 10 states (context + face)");
+  add("face_only", "emotion-v1 · face only");
+  add("context_only", "emotion-v1 · context only");
+  const va = rec(rec(es["full"])["va_from_probabilities"]);
+  const vaText = Object.keys(va).length
+    ? ` Emotion-map position (probability-weighted anchors): valence MAE ${n(va["valence_mae"]).toFixed(3)}, arousal MAE ${n(va["arousal_mae"]).toFixed(3)}.`
+    : "";
+  return {
+    available: true, metrics: rows,
+    disclosure: `Held-out test scores on simulated sessions: the models are trained and evaluated on simulated data (docs/MODEL_CARD.md).${vaText}`,
+  };
 }
 
 /** The emotion model's input for a person's window, keyed by feature name (null = missing), for self-reports. */
@@ -138,6 +168,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
     auditInfo: () => ({ entries: runtime.audit.length, head: runtime.audit.lastHash, verified: runtime.audit.verify()[0] }),
     // The exact text of the desktop's var/audit/<session>.jsonl: scripts/audit_verify.py verifies it offline.
     auditJsonl: () => runtime.audit.toJsonl(),
+    evalSummary: () => evalSummaryOf(predictor.meta, emotion),
     latestInputs(personId: number) {
       const x = inputs.get(personId);
       if (!x || !emotion) return null;

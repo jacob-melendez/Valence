@@ -741,8 +741,10 @@ export function Evaluation() {
   const s = useValence();
   const e = s.evalSummary;
   const { accLabel, rows } = metricRows(e?.metrics);
-  const disclosure = e && !Array.isArray(e.metrics) && typeof e.metrics?.disclosure === "string" ? e.metrics.disclosure : null;
+  const disclosure = typeof e?.disclosure === "string" ? e.disclosure
+    : e && !Array.isArray(e.metrics) && typeof e.metrics?.disclosure === "string" ? e.metrics.disclosure : null;
   const figures = Array.isArray(e?.figures) ? e.figures : [];
+  const charts = !!e && [e.accuracy_vs_history, e.robustness, e.calibration].some(Array.isArray);
   return (
     <div className="panel">
       <div className="mb-3 flex items-center gap-3">
@@ -758,17 +760,17 @@ export function Evaluation() {
           {Array.isArray(e.robustness) && <div><div className="mb-1 text-sm font-semibold">Robustness</div><BarPair xKey="" data={e.robustness.map((r) => ({ label: r.condition, context: r.context, face_only: r.face_only }))} /></div>}
           {Array.isArray(e.calibration) && <div><div className="mb-1 text-sm font-semibold">Calibration (context)</div><Calibration d={e.calibration} /></div>}
           {rows.length > 0 && (
-            <div>
+            <div className={charts ? "" : "lg:col-span-2"}>
               <div className="mb-1 text-sm font-semibold">Metrics</div>
               <table className="w-full text-sm">
-                <thead><tr className="text-left text-muted-foreground"><th className="font-normal">Model</th><th className="text-right font-normal">{accLabel}</th><th className="text-right font-normal">F1</th><th className="text-right font-normal">ECE</th></tr></thead>
+                <thead><tr className="text-left text-muted-foreground"><th className="font-normal">Model</th><th className="pl-3 text-right font-normal">{accLabel}</th><th className="pl-3 text-right font-normal">F1</th><th className="pl-3 text-right font-normal">ECE</th></tr></thead>
                 <tbody>{rows.map((m) => (
-                  <tr key={m.model} className="border-t"><td className="py-1">{m.model}</td><td className="text-right font-mono">{pct(m.acc)}</td><td className="text-right font-mono">{fmt(m.f1, 2)}</td><td className="text-right font-mono">{fmt(m.ece, 2)}</td></tr>
+                  <tr key={m.model} className="border-t"><td className="py-1">{m.model}</td><td className="pl-3 text-right font-mono">{pct(m.acc)}</td><td className="pl-3 text-right font-mono">{fmt(m.f1, 2)}</td><td className="pl-3 text-right font-mono">{fmt(m.ece, 3)}</td></tr>
                 ))}</tbody>
               </table>
             </div>
           )}
-          {disclosure && <p className="text-sm text-muted-foreground lg:col-span-3">{disclosure}</p>}
+          {disclosure && <p className={`text-sm text-muted-foreground ${charts ? "lg:col-span-3" : "lg:col-span-2"}`}>{disclosure}</p>}
           {Array.isArray(e.confusion) && e.confusion.map((c) => <div key={c.name} className="lg:col-span-2"><Confusion c={c} /></div>)}
         </div>
       )}
