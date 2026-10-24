@@ -528,6 +528,13 @@ assumptions; they are not evidence about a person.
 The model is robust to under-counted blinks but sensitive to the pitch sign: perception must pass the "nodding down
 decreases pitch" check in EMOTION_FEATURES.md §1.1 before the map is trusted.
 
+**Domain randomization, tried and not adopted.** The same recipe trained on equal shares of `noise_scale` 0.75, 1.0,
+1.25 and 1.5 (`--noise-mix`, same 600 sessions) scores, on the same fresh corpora: macro-F1 0.682 / 0.756 / 0.592 at
+noise 1.0 / 0.5 / 1.5 (served: 0.681 / 0.753 / 0.580), 0.622 with 2× noisier cues (0.610), 0.596 with the pitch
+flipped (0.599); ECE 0.024 in distribution (0.012) but 0.014 at noise 1.5 (0.048). The gain under shift is about one
+point of macro-F1, so the exported model was kept (no churn for the web engine's parity tests); the option stays for
+a retrain once real captures show how noisy the cues are.
+
 ### 9.5 Limits (read these before the numbers)
 
 - **Simulated training and test data.** The face-cue values per state (EMOTION_FEATURES.md §7) are the hypothesis,

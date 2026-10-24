@@ -61,6 +61,12 @@ def load_corpus(sessions: int, seed: int, noise_scale: float = 1.0, cache: Path 
     return X, meta
 
 
+def load_mixed_corpus(sessions: int, seed: int, scales: list[float], cache: Path | None = None):
+    """Domain randomization: equal shares of the corpus at each simulator ``noise_scale`` (own seed per share)."""
+    parts = [load_corpus(sessions // len(scales), seed * 100 + i, s, cache) for i, s in enumerate(scales)]
+    return pd.concat([p[0] for p in parts], ignore_index=True), pd.concat([p[1] for p in parts], ignore_index=True)
+
+
 def labels(meta: pd.DataFrame) -> np.ndarray:
     return meta["label"].map({s: i for i, s in enumerate(STATES)}).to_numpy()
 
@@ -282,9 +288,14 @@ def main() -> None:
     ap.add_argument("--out", default="artifacts/emotion")
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "valence-emotion"))
     ap.add_argument("--no-variants", action="store_true", help="train and export the full models only")
+    ap.add_argument("--noise-mix", help="comma-separated noise scales: train on equal shares of each")
     args = ap.parse_args()
     t0 = time.time()
-    X, meta = load_corpus(args.sessions, args.seed, args.noise_scale, Path(args.cache))
+    if args.noise_mix:
+        scales = [float(v) for v in args.noise_mix.split(",")]
+        X, meta = load_mixed_corpus(args.sessions, args.seed, scales, Path(args.cache))
+    else:
+        X, meta = load_corpus(args.sessions, args.seed, args.noise_scale, Path(args.cache))
     y = labels(meta)
     split = split_sessions(meta, args.seed)
     print(f"data: {len(X)} windows ({time.time() - t0:.0f}s); train/early/calib/test = "
@@ -305,7 +316,8 @@ def main() -> None:
                                 y[test])}
     else:
         report, _ = evaluate_all(X, meta, y, split, seed=args.seed, full=full)
-    info = {"sessions": args.sessions, "seed": args.seed, "noise_scale": args.noise_scale, "windows": int(len(X)),
+    info = {"sessions": args.sessions, "seed": args.seed, "noise_scale": args.noise_scale,
+            "noise_mix": args.noise_mix, "windows": int(len(X)),
             "split": "by session, 70/7.5/7.5/15 (train/early-stop/calibration/test)",
             "split_windows": {k: int(getattr(split, k).sum()) for k in ("train", "early", "calib", "test")},
             "data": "simulated (valence.sim, state set 'emotion'); no real data"}
