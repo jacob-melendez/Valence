@@ -27,6 +27,9 @@ NEAR_FIELD_BLOCKS = 3  # speech recognizers report a phrase 0-2 blocks after it 
 DRIFT_WINDOW_S = 300.0
 DRIFT_DB = 12.0  # room 5-min median this far above/below the baseline -> "re-capture the baseline"
 DRIFT_LUX_LOG2 = 1.0  # light halved or doubled
+# Emotion-map face cues (docs/EMOTION_FEATURES.md section 2): per-tick medians over the face frames.
+CUE_FIELDS = ("brow_down", "eye_open", "mouth_frown", "smile", "head_yaw", "head_pitch")
+HEAD_AWAY_DEG = 20.0
 
 
 @dataclass
@@ -39,6 +42,22 @@ class _PersonAcc:
     face_frames: int = 0
     motion: list[float] = field(default_factory=list)
     face: list[float] = field(default_factory=list)
+    cues: dict[str, list[float]] = field(default_factory=lambda: {k: [] for k in CUE_FIELDS})
+    pose_frames: int = 0
+    away_frames: int = 0
+    blinks: int = 0
+
+
+def _cue_values(acc: _PersonAcc) -> dict:
+    """The tick's emotion-map face cues for one person (NaN when the face was never read)."""
+    def med(vals: list[float]) -> float:
+        return float(np.median(vals)) if vals else math.nan
+
+    out = {k: med(v) for k, v in acc.cues.items()}
+    out["head_yaw"] = med([abs(v) for v in acc.cues["head_yaw"]])
+    out["head_away"] = acc.away_frames / acc.pose_frames if acc.pose_frames else math.nan
+    out["blink_count"] = acc.blinks
+    return out
 
 
 @dataclass
@@ -178,9 +197,17 @@ class Aggregator:
             acc.hih += int(p.head_in_hands)
             if not math.isnan(p.motion):
                 acc.motion.append(p.motion)
+            acc.blinks += p.blink_onsets
             if p.face_visible and not math.isnan(p.face_valence):
                 acc.face_frames += 1
                 acc.face.append(p.face_valence)
+                for k in CUE_FIELDS:
+                    v = getattr(p, k)
+                    if not math.isnan(v):
+                        acc.cues[k].append(v)
+                if not (math.isnan(p.head_yaw) or math.isnan(p.head_pitch)):
+                    acc.pose_frames += 1
+                    acc.away_frames += int(abs(p.head_yaw) > HEAD_AWAY_DEG or abs(p.head_pitch) > HEAD_AWAY_DEG)
             boxes[p.track_id] = p.bbox
             self._seen(p.track_id, obs.wall)
         self.latest_boxes = boxes
@@ -357,7 +384,7 @@ class Aggregator:
                     social_withdrawal_flag=withdrawal_flag(slump, motion), motion_energy=motion,
                     face_valence=float(np.median(acc.face)) if acc.face else math.nan,
                     face_visible=acc.face_frames / acc.frames,
-                    hours_since_break=self.hours_since_break(pid, wall),
+                    hours_since_break=self.hours_since_break(pid, wall), **_cue_values(acc),
                 ))
             self._drop_absent(wall)
             self._reset_tick()

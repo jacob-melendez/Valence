@@ -19,14 +19,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from valence.contracts import CORE_STATES, STATE_SETS, TICK_FIELDS
+from valence.contracts import AFFECT_ANCHORS, CORE_STATES, EMOTION_STATES, STATE_SETS, TICK_FIELDS
 from valence.features.spec import withdrawal_flag
-from valence.sim.params import FP, NUISANCE, Nuisance, StateParams, params_for
+from valence.sim.params import (FACE_CUE_NUISANCE, FACE_CUES, FP, NUISANCE, FaceCueNuisance, Nuisance, StateParams,
+                                params_for)
 
 TICK_S = 5.0
 TICKS_PER_MIN = 60.0 / TICK_S
 EMPTY_ROOM_DB = 40.0
 ROOM_ID = 0
+# The simulator also knows the emotion map's ten states ("emotion"); contracts.STATE_SETS stays as served.
+SIM_STATE_SETS: dict[str, tuple[str, ...]] = {**STATE_SETS, "emotion": EMOTION_STATES}
+FACE_CUE_FIELDS = ("brow_down", "eye_open", "mouth_frown", "smile", "head_yaw", "head_pitch", "head_away")
+HIDDEN_COLUMNS = ["true_state", "episode_age_s", "true_valence", "true_arousal"]
 
 LEGACY_COLUMNS = [
     "timestamp", "ambient_db", "light_lux", "hours_since_break", "clenched_fists_count",
@@ -96,6 +101,20 @@ class _Person:
         self.still = 0
         self.burst = 1.0
         self.episode_hidden: float | None = None
+        # Emotion-map face cues: their own random stream (``setup_cues``), so the channels above are unchanged.
+        self.frng: np.random.Generator | None = None
+        self.true_v = math.nan
+        self.true_a = math.nan
+
+    def setup_cues(self, frng: np.random.Generator, cn: FaceCueNuisance) -> None:
+        self.frng = frng
+        self.cn = cn
+        self.blink_mult = float(frng.uniform(*cn.blink_mult))
+        self.neutral = frng.normal(0.0, cn.neutral_sd, 4)  # error of the 20 s neutral: brow, eye, frown, smile
+        self.neutral_deg = frng.normal(0.0, cn.neutral_deg_sd, 2)  # yaw, pitch
+        self.cue_target: np.ndarray | None = None
+        self.cue_lag: np.ndarray | None = None
+        self.away_on = 0
 
     # --- hidden state -------------------------------------------------------------------------
     def _fatigue(self) -> float:
@@ -104,6 +123,7 @@ class _Person:
     def _next_state(self, after_break: bool) -> str:
         if after_break:
             options = ["Focused"] + (["Collaborative_Happy"] if self.n_people >= 2 else [])
+            options += ["Calm"] if "Calm" in self.states else []
             return options[int(self.rng.integers(len(options)))]
         f = self._fatigue()
         weights = []
@@ -129,6 +149,59 @@ class _Person:
         mu = p.mask_mu if self.rng.random() < p.mask_p else p.face_mu
         self.episode_face = float(self.rng.normal(mu, self.nz.face_episode_sd))
         self.episode_hidden = float(self.rng.uniform(0.4, 0.7)) if p.face_hidden_extra > 0 else None
+        if self.frng is not None:
+            self._enter_cues(state)
+
+    def _enter_cues(self, state: str) -> None:
+        """Episode draws for the face cues and the episode's true valence/arousal (anchor + offset)."""
+        c, cn, r = FACE_CUES[state], self.cn, self.frng
+        dv, da = r.normal(0.0, cn.va_sd, 2)
+        av, aa = AFFECT_ANCHORS[state]
+        self.true_v = float(np.clip(av + dv, -1.0, 1.0))
+        self.true_a = float(np.clip(aa + da, -1.0, 1.0))
+        jit = r.normal(0.0, cn.episode_sd, 4)
+        self.cue_target = np.array([
+            c.brow + jit[0],
+            c.eye + jit[1] + cn.eye_from_arousal * da,
+            c.frown + jit[2] - cn.frown_from_valence * dv,
+            c.smile + jit[3] + cn.smile_from_valence * dv,
+            c.blink_per_min * max(0.2, 1.0 + cn.blink_from_arousal * da),
+            c.away_p, c.pitch, c.away_pitch,
+        ])
+
+    def face_cues(self, face_ok: bool, face: float, face_vis: float, lux: float) -> dict[str, float]:
+        """One tick of the emotion-map face cues (call once per tick while present, after ``behave``)."""
+        r, cn = self.frng, self.cn
+        tgt = self.cue_target
+        self.cue_lag = tgt.copy() if self.cue_lag is None else self.cue_lag + self.alpha * (tgt - self.cue_lag)
+        brow, eye, frown, smile, blink_rate, away_p, pitch, away_pitch = self.cue_lag
+        self.away_on = _two_state(r, self.away_on, away_p, switch=cn.away_switch)
+        if not face_ok:
+            return {**{k: math.nan for k in FACE_CUE_FIELDS}, "blink_count": 0}
+        noise = 1.0 + 3.0 * max(0.0, (self.nz.low_light_lux - lux) / self.nz.low_light_lux) * 0.35
+        sd = cn.tick_sd * self.ns * noise
+        psd = cn.pitch_tick_sd * self.ns * noise
+        f_pos, f_neg = max(face, 0.0), max(-face, 0.0)
+        out = {
+            "brow_down": brow + self.neutral[0] + r.normal(0.0, sd),
+            "eye_open": eye + self.neutral[1] + r.normal(0.0, sd),
+            "mouth_frown": frown + cn.frown_from_face * f_neg + self.neutral[2] + r.normal(0.0, 0.75 * sd),
+            "smile": smile + cn.smile_from_face * f_pos + self.neutral[3] + r.normal(0.0, sd),
+        }
+        out = {k: float(np.clip(v, -1.0, 1.0)) for k, v in out.items()}
+        if self.away_on:
+            away = r.uniform(0.5, 1.0)
+            yaw = r.uniform(*cn.away_yaw) * (1.0 if r.random() < 0.5 else -1.0)
+            pitch_t = pitch + away_pitch + r.normal(0.0, 2.0 * psd)
+        else:
+            away = r.uniform(0.0, 0.12) if r.random() < 0.3 else 0.0
+            yaw = r.normal(0.0, 4.0 * self.ns)
+            pitch_t = pitch + r.normal(0.0, psd)
+        out["head_yaw"] = float(abs(yaw + self.neutral_deg[0]))
+        out["head_pitch"] = float(np.clip(pitch_t + self.neutral_deg[1], -90.0, 90.0))
+        out["head_away"] = float(away)
+        out["blink_count"] = int(r.poisson(blink_rate * self.blink_mult / 60.0 * TICK_S * face_vis))
+        return out
 
     def step_markov(self) -> None:
         """Advance the semi-Markov process by one tick (training corpus)."""
@@ -182,7 +255,7 @@ def simulate_session(
     nuisance: Nuisance = NUISANCE,
     script: Script | None = None,
 ) -> pd.DataFrame:
-    states = STATE_SETS[state_set]
+    states = SIM_STATE_SETS[state_set]
     nz = nuisance
     ns = noise_scale
     if script is not None:
@@ -214,6 +287,9 @@ def simulate_session(
     base_lux = lux_base * (1.0 - 0.15 * night0) * float(np.exp(vrng.normal(0.0, nz.baseline_lux_noise * ns)))
 
     people = [_Person(rng, states, n_people, h0s[i % len(h0s)], nz, ns) for i in range(n_people)]
+    frng = np.random.default_rng(zlib.crc32(f"{session_id}/face-cues".encode()))
+    for person in people:
+        person.setup_cues(frng, FACE_CUE_NUISANCE)
 
     # Scripted state timeline: (tick -> per-person (state, overrides, segment_start))
     timeline: list[tuple[list[str | None], dict[str, Any], bool]] = []
@@ -332,6 +408,7 @@ def simulate_session(
                 face, face_vis = math.nan, 0.0
             if not video_ok:
                 fists, slump, hih, motion = 0, math.nan, math.nan, math.nan
+            cues = person.face_cues(face_ok, face, face_vis, lux)
             pid = people.index(person) + 1
             person_rows.append({
                 **base,
@@ -340,6 +417,7 @@ def simulate_session(
                 "social_withdrawal_flag": withdrawal_flag(slump, motion), "motion_energy": motion,
                 "face_valence": face, "face_visible": face_vis, "hours_since_break": person.hours,
                 "true_state": person.state, "episode_age_s": person.episode_age * TICK_S,
+                **cues, "true_valence": person.true_v, "true_arousal": person.true_a,
             })
 
         # 4) room row: aggregates of present people (used by the room slot and room-only mode)
@@ -359,11 +437,13 @@ def simulate_session(
             "face_visible": agg("face_visible", np.mean) if person_rows else 0.0,
             "hours_since_break": agg("hours_since_break", np.mean),
             "true_state": room_state, "episode_age_s": math.nan,
+            **{k: math.nan for k in FACE_CUE_FIELDS}, "blink_count": 0, "true_valence": math.nan,
+            "true_arousal": math.nan,
         })
         rows.extend(person_rows)
 
     df = pd.DataFrame(rows)
-    return df[list(TICK_FIELDS) + ["true_state", "episode_age_s"]]
+    return df[list(TICK_FIELDS) + HIDDEN_COLUMNS]
 
 
 def simulate_corpus(n_sessions: int, seed: int, *, state_set: str = "core", noise_scale: float = 1.0) -> pd.DataFrame:

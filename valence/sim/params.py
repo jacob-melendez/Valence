@@ -71,9 +71,90 @@ FP = {
 }
 
 
+# Emotion-map states (state set "emotion", docs/EMOTION_FEATURES.md): the existing channels for the four new states.
+# Kept out of STATE_PARAMS so nothing that iterates the original six changes.
+EXTRA_STATE_PARAMS: dict[str, StateParams] = {
+    "Bored": StateParams(
+        face_mu=-0.06, db_target=47, lux_mult=0.95, fist_rate=0.0, laugh_rate=0.03, compl_rate=0.01,
+        slump_p=0.45, hih_p=0.30, motion=0.025, dwell_min=6.0, fatigue_affinity=0.3, group_affinity=0.8,
+        solo_affinity=1.2,
+    ),
+    "Confused": StateParams(
+        face_mu=-0.10, db_target=54, lux_mult=1.0, fist_rate=0.05, laugh_rate=0.03, compl_rate=0.01,
+        slump_p=0.10, hih_p=0.20, motion=0.045, dwell_min=4.0, fatigue_affinity=0.2,
+    ),
+    "Calm": StateParams(
+        face_mu=0.18, db_target=46, lux_mult=1.05, fist_rate=0.0, laugh_rate=0.08, compl_rate=0.05,
+        slump_p=0.08, hih_p=0.05, motion=0.02, dwell_min=7.0, fatigue_affinity=-0.5,
+    ),
+    "Anxious": StateParams(
+        face_mu=-0.18, db_target=50, lux_mult=0.95, fist_rate=0.1, laugh_rate=0.02, compl_rate=0.01,
+        slump_p=0.15, hih_p=0.25, motion=0.085, dwell_min=5.0, fatigue_affinity=0.8, solo_affinity=1.2,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FaceCueParams:
+    """Emotion-map face cues per state (relative to the person's neutral; docs/EMOTION_FEATURES.md).
+
+    Generated from their own random stream, so adding them changed none of the existing channels.
+    """
+
+    brow: float  # episode-mean brow lowering (browDown minus neutral)
+    eye: float  # eye openness minus neutral (< 0: eyes closing / squinting)
+    frown: float  # mouthFrown minus neutral (on top of the face-valence-linked part)
+    smile: float  # mouthSmile minus neutral (on top of the face-valence-linked part)
+    blink_per_min: float  # detected blinks per minute of visible face
+    away_p: float  # long-run share of time looking away (|yaw| or |pitch| > 20 degrees)
+    pitch: float  # head pitch while facing the screen, degrees (+ up)
+    away_pitch: float = 0.0  # extra pitch while looking away (< 0: down at a phone or the desk)
+
+
+FACE_CUES: dict[str, FaceCueParams] = {
+    "Focused": FaceCueParams(brow=0.06, eye=0.02, frown=0.01, smile=0.0, blink_per_min=7, away_p=0.05, pitch=-2),
+    "Frustrated_Masked": FaceCueParams(brow=0.15, eye=-0.02, frown=0.06, smile=0.0, blink_per_min=16, away_p=0.15,
+                                       pitch=-3),
+    "Exhausted": FaceCueParams(brow=0.0, eye=-0.15, frown=0.03, smile=0.0, blink_per_min=24, away_p=0.20, pitch=-10,
+                               away_pitch=-10),
+    "Collaborative_Happy": FaceCueParams(brow=-0.03, eye=-0.05, frown=0.0, smile=0.10, blink_per_min=18, away_p=0.35,
+                                         pitch=2),
+    "Overwhelmed": FaceCueParams(brow=0.12, eye=-0.05, frown=0.10, smile=0.0, blink_per_min=22, away_p=0.25,
+                                 pitch=-12, away_pitch=-10),
+    "Tense": FaceCueParams(brow=0.20, eye=0.03, frown=0.14, smile=0.0, blink_per_min=20, away_p=0.20, pitch=0),
+    "Bored": FaceCueParams(brow=0.0, eye=-0.06, frown=0.04, smile=0.0, blink_per_min=16, away_p=0.55, pitch=-8,
+                           away_pitch=-18),
+    "Confused": FaceCueParams(brow=0.22, eye=-0.03, frown=0.03, smile=0.0, blink_per_min=11, away_p=0.15, pitch=1),
+    "Calm": FaceCueParams(brow=-0.02, eye=-0.03, frown=0.0, smile=0.06, blink_per_min=13, away_p=0.25, pitch=2),
+    "Anxious": FaceCueParams(brow=0.05, eye=0.05, frown=0.07, smile=0.0, blink_per_min=26, away_p=0.35, pitch=-2),
+}
+
+
+@dataclass(frozen=True)
+class FaceCueNuisance:
+    episode_sd: float = 0.04  # between-episode spread of brow/eye/frown/smile means
+    tick_sd: float = 0.04  # per-tick noise of the blendshape cues (frown: 0.75x)
+    pitch_tick_sd: float = 3.0  # degrees
+    neutral_sd: float = 0.03  # per-person error of the 20 s neutral baseline (blendshape cues)
+    neutral_deg_sd: float = 3.0  # same for yaw and pitch, degrees
+    blink_mult: tuple[float, float] = (0.7, 1.4)  # people's resting blink rates differ
+    away_switch: float = 0.3
+    away_yaw: tuple[float, float] = (18.0, 45.0)  # |yaw| while looking away, degrees
+    va_sd: float = 0.10  # per-episode offset of true valence and arousal from the state's anchor
+    smile_from_face: float = 0.35  # smile follows positive face valence
+    frown_from_face: float = 0.25  # frown follows negative face valence
+    smile_from_valence: float = 0.25  # the episode's valence offset shows in smile and frown
+    frown_from_valence: float = 0.15
+    eye_from_arousal: float = 0.10  # the episode's arousal offset shows in eye openness and blink rate
+    blink_from_arousal: float = 1.0
+
+
+FACE_CUE_NUISANCE = FaceCueNuisance()
+
+
 def params_for(state: str, state_set: tuple[str, ...]) -> StateParams:
     """With Tense available, Frustrated_Masked is mask-only (forced smile >= 90%)."""
-    p = STATE_PARAMS[state]
+    p = STATE_PARAMS[state] if state in STATE_PARAMS else EXTRA_STATE_PARAMS[state]
     if state == "Frustrated_Masked" and "Tense" in state_set:
         return replace(p, mask_p=0.92)
     return p
