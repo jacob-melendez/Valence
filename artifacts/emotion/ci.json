@@ -1,68 +1,68 @@
 {
- "model_id": "emotion-v1@378fa16c",
+ "model_id": "emotion-v1@006a8d7d",
  "test_sessions": 90,
  "n_boot": 1000,
  "full_macro_f1": {
-  "point": 0.6881,
+  "point": 0.6815,
   "ci95": [
-   0.6732,
-   0.7025
+   0.6667,
+   0.695
   ]
  },
  "full_valence_mae": {
-  "point": 0.1755,
+  "point": 0.1741,
   "ci95": [
-   0.1674,
-   0.1833
+   0.1666,
+   0.1815
   ]
  },
  "full_arousal_mae": {
-  "point": 0.2382,
+  "point": 0.2363,
   "ci95": [
-   0.2294,
-   0.2472
+   0.228,
+   0.2452
   ]
  },
  "face_only_macro_f1": {
-  "point": 0.6208,
+  "point": 0.6155,
   "ci95": [
-   0.6044,
-   0.6363
+   0.5995,
+   0.6291
   ]
  },
  "face_only_valence_mae": {
-  "point": 0.2047,
+  "point": 0.2052,
   "ci95": [
-   0.1953,
-   0.2145
+   0.197,
+   0.2138
   ]
  },
  "face_only_arousal_mae": {
-  "point": 0.2754,
+  "point": 0.2719,
   "ci95": [
-   0.2645,
-   0.2871
+   0.2612,
+   0.2832
   ]
  },
  "full_minus_face_macro_f1": {
-  "point": 0.0673,
+  "point": 0.066,
   "ci95": [
-   0.0582,
-   0.0777
+   0.0586,
+   0.0739
   ]
  },
  "full_minus_face_valence_mae": {
-  "point": -0.0293,
+  "point": -0.0312,
   "ci95": [
-   -0.035,
-   -0.0241
+   -0.0359,
+   -0.0266
   ]
  },
  "full_minus_face_arousal_mae": {
-  "point": -0.0372,
+  "point": -0.0356,
   "ci95": [
-   -0.0426,
-   -0.0322
+   -0.0411,
+   -0.0301
   ]
  }
 }

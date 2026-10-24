@@ -155,6 +155,13 @@ def test_self_report_eval_on_a_synthetic_fixture(tmp_path, predictor):
     from valence.eval.self_report import _block
     flat = _block(np.array([-0.5, 0.0, 0.5]), np.zeros(3), np.array([-0.4, 0.1, 0.4]), np.zeros(3))
     assert flat["valence_ccc"] is not None and flat["arousal_ccc"] is None
+    assert flat["quadrant_n"] == 0 and flat["quadrant_agreement"] is None  # all taps on the arousal axis
+    # Non-object lines and repeated downloads (the console writes every tap so far each time)
+    path3 = tmp_path / "dup.jsonl"
+    path3.write_text("null\n[1, 2]\n" + "".join(json.dumps(d) + "\n" for d in lines[:3] + lines[:3]))
+    taps3, _, problems3 = load_taps([path3], predictor.cols)
+    assert len(taps3) == 3 and sum("not a JSON object" in p for p in problems3) == 2
+    assert sum("duplicate" in p for p in problems3) == 3
     np.testing.assert_array_equal(np.isnan(X[0]), np.isnan(X[-1]))
     report = evaluate(taps, X, predictor)
     o = report["overall"]["map_position"]

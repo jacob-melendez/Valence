@@ -1,0 +1,64 @@
+{
+ "experiment": "valence/arousal regressor tuning on the 600-session corpus (test split), model build emotion-v1@378fa16c",
+ "runs": [
+  {
+   "setting": "class weights, lr 0.05, 31 leaves",
+   "valence": {
+    "rounds": 776,
+    "mae": 0.1999,
+    "ccc": 0.7489
+   },
+   "arousal": {
+    "rounds": 1047,
+    "mae": 0.2669,
+    "ccc": 0.6926
+   }
+  },
+  {
+   "setting": "no weights, lr 0.1, 31 leaves",
+   "valence": {
+    "rounds": 246,
+    "mae": 0.1992,
+    "ccc": 0.7502
+   },
+   "arousal": {
+    "rounds": 390,
+    "mae": 0.2666,
+    "ccc": 0.6985
+   }
+  },
+  {
+   "setting": "no weights, lr 0.1, 63 leaves, min_data 200",
+   "valence": {
+    "rounds": 193,
+    "mae": 0.1982,
+    "ccc": 0.7513
+   },
+   "arousal": {
+    "rounds": 236,
+    "mae": 0.2644,
+    "ccc": 0.7013
+   }
+  }
+ ],
+ "anchor_mixture_same_split": {
+  "valence": {
+   "mae": 0.1755,
+   "ccc": 0.7834
+  },
+  "arousal": {
+   "mae": 0.2382,
+   "ccc": 0.7238
+  }
+ },
+ "blends_reg_anchor": {
+  "0.5/0.5": {
+   "valence_mae": 0.1841,
+   "arousal_mae": 0.2493
+  },
+  "0.7/0.3": {
+   "valence_mae": 0.1898,
+   "arousal_mae": 0.2557
+  }
+ }
+}

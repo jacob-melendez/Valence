@@ -1,40 +1,46 @@
 {
- "model_id": "emotion-v1@378fa16c",
+ "model_id": "emotion-v1@006a8d7d",
  "noise_1.0": {
-  "macro_f1": 0.6812,
-  "ece": 0.0119,
-  "valence_mae": 0.1709,
-  "arousal_mae": 0.2425
+  "macro_f1": 0.6909,
+  "ece": 0.0141,
+  "valence_mae": 0.1717,
+  "arousal_mae": 0.2443
  },
  "noise_0.5": {
-  "macro_f1": 0.7528,
-  "ece": 0.029,
-  "valence_mae": 0.1492,
-  "arousal_mae": 0.2041
+  "macro_f1": 0.7554,
+  "ece": 0.032,
+  "valence_mae": 0.1504,
+  "arousal_mae": 0.1993
  },
  "noise_1.5": {
-  "macro_f1": 0.5795,
-  "ece": 0.0478,
-  "valence_mae": 0.1972,
-  "arousal_mae": 0.2914
+  "macro_f1": 0.5888,
+  "ece": 0.028,
+  "valence_mae": 0.1983,
+  "arousal_mae": 0.2877
  },
- "face_cues_x2_noise": {
-  "macro_f1": 0.6097,
-  "ece": 0.0506,
-  "valence_mae": 0.1943,
-  "arousal_mae": 0.266
+ "face_cues_all_spreads_x2": {
+  "macro_f1": 0.5536,
+  "ece": 0.0762,
+  "valence_mae": 0.2077,
+  "arousal_mae": 0.2856
+ },
+ "face_cues_between_person_x1.5": {
+  "macro_f1": 0.649,
+  "ece": 0.0146,
+  "valence_mae": 0.1842,
+  "arousal_mae": 0.2512
  },
  "blinks_halved": {
-  "macro_f1": 0.672,
-  "ece": 0.0137,
-  "valence_mae": 0.1745,
-  "arousal_mae": 0.2491
+  "macro_f1": 0.6812,
+  "ece": 0.0153,
+  "valence_mae": 0.1758,
+  "arousal_mae": 0.2505
  },
  "pitch_sign_flipped": {
-  "macro_f1": 0.5987,
-  "ece": 0.0369,
-  "valence_mae": 0.1976,
-  "arousal_mae": 0.2699
+  "macro_f1": 0.604,
+  "ece": 0.0201,
+  "valence_mae": 0.1959,
+  "arousal_mae": 0.2748
  },
  "_note": "60 fresh sessions (seed 2027), simulated; not real data"
 }

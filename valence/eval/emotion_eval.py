@@ -222,8 +222,12 @@ def scenario_check(predictor, grace_s: float = 120.0) -> dict:
 def robustness(predictor, sessions: int = 60, seed: int = 2027) -> dict:
     """The exported models on fresh test corpora under deployment-like shifts (simulated):
 
-    * ``noise_scale`` 0.5 / 1.0 / 1.5 (every noise term of the simulator, face cues included);
-    * face cues twice as noisy (episode, tick and neutral-baseline spread x2) than in training;
+    * simulator ``noise_scale`` 0.5 / 1.5: it scales the per-tick noise of every channel, the session baselines and
+      the behavior/room lags, but **not** the episode- and person-level spreads (face cues included);
+    * face cues, every spread x2: episode, tick, frame and neutral-baseline spreads of all cues (blendshapes, pose,
+      blink rate, looking away) and the spread of resting blink rates;
+    * face cues, between-person spreads x1.5: only the per-person and per-episode terms (neutral-baseline error,
+      resting blink rate, episode means), the realistic risk when real people differ more than simulated ones;
     * blink rates halved (browser face tracking below ~15 fps misses blinks);
     * pitch sign flipped (a transposed matrix read in perception).
     """
@@ -257,10 +261,22 @@ def robustness(predictor, sessions: int = 60, seed: int = 2027) -> dict:
     out["noise_1.0"] = metrics(base_X, base_meta)
     for ns in (0.5, 1.5):
         out[f"noise_{ns}"] = metrics(*run(ns))
-    noisy = replace(FACE_CUE_NUISANCE, episode_sd=2 * FACE_CUE_NUISANCE.episode_sd,
-                    tick_sd=2 * FACE_CUE_NUISANCE.tick_sd, neutral_sd=2 * FACE_CUE_NUISANCE.neutral_sd,
-                    neutral_deg_sd=2 * FACE_CUE_NUISANCE.neutral_deg_sd)
-    out["face_cues_x2_noise"] = metrics(*run(1.0, noisy))
+    c = FACE_CUE_NUISANCE
+
+    def widen(lo_hi: tuple[float, float], k: float) -> tuple[float, float]:
+        return (max(0.05, 1 - k * (1 - lo_hi[0])), 1 + k * (lo_hi[1] - 1))
+
+    every = replace(c, episode_sd=2 * c.episode_sd, tick_sd=2 * c.tick_sd, pitch_tick_sd=2 * c.pitch_tick_sd,
+                    pitch_episode_sd=2 * c.pitch_episode_sd, pitch_frame_sd=2 * c.pitch_frame_sd,
+                    yaw_frame_sd=2 * c.yaw_frame_sd, neutral_sd=2 * c.neutral_sd, neutral_deg_sd=2 * c.neutral_deg_sd,
+                    blink_episode_sd=2 * c.blink_episode_sd, away_episode_sd=2 * c.away_episode_sd,
+                    blink_mult=widen(c.blink_mult, 2.0))
+    out["face_cues_all_spreads_x2"] = metrics(*run(1.0, every))
+    people = replace(c, episode_sd=1.5 * c.episode_sd, pitch_episode_sd=1.5 * c.pitch_episode_sd,
+                     neutral_sd=1.5 * c.neutral_sd, neutral_deg_sd=1.5 * c.neutral_deg_sd,
+                     blink_episode_sd=1.5 * c.blink_episode_sd, away_episode_sd=1.5 * c.away_episode_sd,
+                     blink_mult=widen(c.blink_mult, 1.5))
+    out["face_cues_between_person_x1.5"] = metrics(*run(1.0, people))
     Xb = base_X.copy()
     for c in ("blink_rate_1m", "blink_rate_5m", "blink_rate_15m"):
         Xb[c] = Xb[c] * 0.5

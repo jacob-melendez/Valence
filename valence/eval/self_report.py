@@ -8,7 +8,9 @@ vector at that moment in ``features`` (an object keyed by feature name, null = N
 ``input_features`` order), optionally ``session_id`` and a picked state ``label``. Lines never carry media or text.
 
 Reported (overall, per person, and for taps with >= 1 min of window): valence/arousal MAE and CCC of the served map
-position (probability-weighted anchors), of the regressors and of a constant (0, 0) guess, quadrant agreement, and
+position (probability-weighted anchors), of the regressors, of a constant (0, 0) guess and of the leave-one-out mean
+of the taps in the same group (a constant that knows the average mood), quadrant agreement (on taps at least 0.05
+from both axes; ``quadrant_n`` counts them), and
 agreement between the state nearest the tap and the state nearest the map position (and the classifier's label).
 CCC needs >= 3 taps that vary on that axis. Lines with another feature_version, non-numeric or out-of-range taps
 are skipped and listed under ``problems``; absent input features are read as missing and listed too.
@@ -27,17 +29,21 @@ from valence.eval.emotion_eval import ccc, nearest_anchor
 
 KEYS = ("valence", "arousal")
 WARM_FILL = 12 / 180  # fill_ratio of a 1-minute window
+DEADBAND = 0.05  # taps this close to an axis have no quadrant on it (the console rounds taps to 0.001)
 
 
 def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict], np.ndarray, list[str]]:
     taps, rows, problems = [], [], []
     index = {n: i for i, n in enumerate(input_features)}
+    seen: set[tuple] = set()
     for path in paths:
         for ln, line in enumerate(Path(path).read_text().splitlines(), 1):
             if not line.strip():
                 continue
             try:
                 d = json.loads(line)
+                if not isinstance(d, dict):
+                    raise ValueError("line is not a JSON object")
                 if d.get("feature_version") not in (None, "emotion-v1"):
                     raise ValueError(f"feature_version {d.get('feature_version')!r} is not emotion-v1")
                 if any(isinstance(d[k], bool) or not isinstance(d[k], (int, float)) for k in KEYS):
@@ -65,6 +71,11 @@ def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict],
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
                 problems.append(f"{path}:{ln}: skipped ({e})")
                 continue
+            key = (d.get("session_id"), d.get("person_id"), d.get("t"))
+            if d.get("t") is not None and key in seen:  # the console's Download writes every tap so far: re-downloads repeat
+                problems.append(f"{path}:{ln}: duplicate tap skipped (session, person, t already seen)")
+                continue
+            seen.add(key)
             taps.append({"t": d.get("t"), "person": f"{d.get('session_id', Path(path).stem)}/{d.get('person_id', 1)}",
                          "valence": v, "arousal": a, "label": d.get("label")})
             rows.append(x)
@@ -73,14 +84,26 @@ def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict],
 
 
 def _block(tv, ta, pv, pa) -> dict:
+    """MAE and CCC per axis; quadrant agreement on the taps outside the deadband on both axes."""
+    q = (np.abs(tv) >= DEADBAND) & (np.abs(ta) >= DEADBAND)
+    agree = (np.sign(pv) == np.sign(tv)) & (np.sign(pa) == np.sign(ta))
     out = {"n": int(len(tv)),
            "valence_mae": round(float(np.abs(pv - tv).mean()), 4),
            "arousal_mae": round(float(np.abs(pa - ta).mean()), 4),
-           "quadrant_agreement": round(float(((np.sign(pv) == np.sign(tv)) & (np.sign(pa) == np.sign(ta))).mean()), 4)}
+           "quadrant_agreement": round(float(agree[q].mean()), 4) if q.any() else None,
+           "quadrant_n": int(q.sum())}
     # CCC per axis, only with >= 3 taps that vary on that axis
     out["valence_ccc"] = round(ccc(pv, tv), 4) if len(tv) >= 3 and tv.std() > 1e-6 else None
     out["arousal_ccc"] = round(ccc(pa, ta), 4) if len(ta) >= 3 and ta.std() > 1e-6 else None
     return out
+
+
+def _loo_mean(tv: np.ndarray, ta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A constant guess that knows the person's average mood: the mean of the *other* taps (leave-one-out)."""
+    n = len(tv)
+    if n < 2:
+        return np.zeros(n), np.zeros(n)
+    return (tv.sum() - tv) / (n - 1), (ta.sum() - ta) / (n - 1)
 
 
 def evaluate(taps: list[dict], X: np.ndarray, predictor) -> dict:
@@ -99,6 +122,7 @@ def evaluate(taps: list[dict], X: np.ndarray, predictor) -> dict:
         out = {"map_position": _block(tv[m], ta[m], anchor[m, 0], anchor[m, 1]),
                "regressors": _block(tv[m], ta[m], pv[m], pa[m]),
                "constant_zero": _block(tv[m], ta[m], np.zeros(m.sum()), np.zeros(m.sum())),
+               "constant_mean_tap_loo": _block(tv[m], ta[m], *_loo_mean(tv[m], ta[m])),
                "nearest_anchor_agreement": round(float(
                    (nearest_anchor(anchor[m, 0], anchor[m, 1]) == tap_state[m]).mean()), 4),
                "nearest_anchor_agreement_regressors": round(float(
