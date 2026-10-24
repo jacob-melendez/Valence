@@ -7,7 +7,7 @@ runs. The predictor is a stub whose outputs are keyed by "tick:person_id" (missi
 purge gate is a stub; the audit / aggregator / engine clocks follow the spec; np.random.normal draws from the
 spec's "draws"; the narrator records its calls.
 
-    .venv/bin/python -B scripts/golden_runtime/edge_cases.py                # every spec of specs.py: a summary line each
+    .venv/bin/python -B scripts/golden_runtime/edge_cases.py                # every spec of specs.py, a line each
     .venv/bin/python -B scripts/golden_runtime/edge_cases.py --out DIR      # also DIR/<name>.json: ticks, audit, state
     .venv/bin/python -B scripts/golden_runtime/edge_cases.py SPEC.json ...  # specs from files (specs.py --out DIR)
 

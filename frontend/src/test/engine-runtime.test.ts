@@ -12,10 +12,11 @@
  *   drops, the SIMULATED overlays, eviction, and a sequence of operator actions (seed, mode, break, reset,
  *   baseline reset/capture, use_scenario). Python ran the same sequence; each run's messages are reduced to a
  *   canonical text (numbers as repr(float(x)), strings as json.dumps, keys in emission order) whose sha256 is
- *   pasted below together with the audit chain head. The expected values come from gen_runtime_extra.py
- *   (not in the repo yet; suggested home scripts/export_web_golden_runtime.py), which drives the Python Runtime
- *   through exactly the steps of EXTRA_RUNS, on the WALL0/MONO0 clocks of runtime.json.gz, with a purge-gate
- *   stub and np.random.normal patched to the draws of fixedDraws(). Rerun it whenever valence/ changes.
+ *   pasted below together with the audit chain head. The expected values come from
+ *   scripts/golden_runtime/extra_runs.py (README.md there; check.py compares every generator with this file),
+ *   which drives the Python Runtime through exactly the steps of EXTRA_RUNS, on the WALL0/MONO0 clocks of
+ *   runtime.json.gz, with a purge-gate stub and np.random.normal patched to the draws of fixedDraws(). Rerun it
+ *   whenever valence/ changes.
  * - Behaviour without a Python counterpart (null records, onMessage, record copies, refused audit payloads,
  *   the tracks throttle) and a 3-person timing.
  */
@@ -323,7 +324,7 @@ describe("runtime against the golden Python runs", () => {
 
 // ---------- Extra runs (expectations from the Python Runtime) ----------
 
-/** One extra run as Python produced it (gen_runtime_extra.py). */
+/** One extra run as Python produced it (scripts/golden_runtime/extra_runs.py). */
 interface ExtraExpect {
   ticks: number;
   messages: number;
@@ -725,8 +726,8 @@ describe("runtime behaviour", () => {
  * (outputs keyed by "tick:person_id", none = predict() returns None), a stub purge gate, the audit / aggregator /
  * engine clocks patched to `clock` and np.random.normal patched to `draws`. The specs are built below exactly as
  * the generator built them; Python's results (canonical text digest as in the extra runs, audit chain head, end
- * state) are pasted as literals. Generator: rt_edge.py + gen_specs.py (session scratchpad, runtime_review/; suggested home
- * scripts/export_web_golden_runtime_edges.py). Rerun it whenever valence/runtime/engine.py changes.
+ * state) are pasted as literals. Generator: scripts/golden_runtime/edge_cases.py, which runs the specs of
+ * scripts/golden_runtime/specs.py. Rerun it whenever valence/runtime/engine.py changes.
  */
 type SpecRecord = Record<string, number | string | null | string[]>;
 type SpecAction =
@@ -1088,7 +1089,7 @@ const SPECS: Record<string, () => Spec> = {
   ),
 };
 
-/** Python's results for each spec (rt_edge.py). */
+/** Python's results for each spec (scripts/golden_runtime/edge_cases.py). */
 const SPEC_EXPECT: Record<
   string,
   { digest: string; auditN: number; auditLast: string; state: unknown }
@@ -1208,7 +1209,7 @@ interface SpecRun {
   narrated: (string | number)[][];
 }
 
-/** Drive a Runtime through a spec the way rt_edge.py drives Python's. */
+/** Drive a Runtime through a spec the way scripts/golden_runtime/edge_cases.py drives Python's. */
 function runSpec(spec: Spec): SpecRun {
   const outs = new Map<string, SpecOut>();
   for (const st of spec.steps)
@@ -1436,8 +1437,9 @@ describe("runtime against Python on inputs the golden runs never produce", () =>
 
 describe("runtime pieces against Python (push_obs, ScenarioSource, hello)", () => {
   it("publishes tracks and measures fps exactly as push_obs does", () => {
-    // tracks.py: Runtime built at monotonic 10.0, one VideoObs per row (frame_seq = frames_decoded = i,
-    // mirrored = i odd, wall = WALL0 + mono * 1.001), then an AudioObs; Python's Tracks and fps after each
+    // scripts/golden_runtime/tracks.py: Runtime built at monotonic 10.0, one VideoObs per row
+    // (frame_seq = frames_decoded = i, mirrored = i odd, wall = WALL0 + mono * 1.001), then an AudioObs;
+    // the expected values are Python's Tracks and fps after each push, then its fps, mic and camera
     const clock = { mono: 10.0 };
     const rt = new Runtime(makeSettings(), SERVED.core, {
       sessionId: "session-golden",
@@ -1584,9 +1586,9 @@ describe("runtime pieces against Python (push_obs, ScenarioSource, hello)", () =
  * and shifted values, odd counts and people numbers, extra SIMULATED tags), with person 1 leaving for 20 ticks
  * and a second person (person 1's row as id 3) coming and going, stepped through Python's Runtime with the served
  * predictor and through this one. Python's canonical-text digest and audit head are pasted below; the generator
- * is rt_perturb.py (session scratchpad, runtime_review/; suggested home scripts/export_web_golden_runtime_edges.py), which uses
- * exactly the constants and draw order of perturbRecord(). Exploratory runs of the same kind over all 9
- * scenarios (6480 ticks, both state sets) matched Python on every tick.
+ * is scripts/golden_runtime/perturb.py, which uses exactly the constants and draw order of perturbRecord().
+ * Exploratory runs of the same kind over all 9 scenarios (6480 ticks, both state sets) matched Python on every
+ * tick.
  */
 const PERTURB = {
   floats: [
@@ -1619,7 +1621,7 @@ const PERTURB = {
   tags: ["low_light", "room_history", "été"],
 };
 
-/** xorshift32 (13, 17, 5), as rt_perturb.py's XorShift32: draws x / 2**32. */
+/** xorshift32 (13, 17, 5), as scripts/golden_runtime/perturb.py's XorShift32: draws x / 2**32. */
 class XorShift32 {
   constructor(private x: number) {}
   next(): number {

@@ -77,6 +77,7 @@ From the repo root, with the project's Python:
 .venv/bin/python -B scripts/export_web_golden_smoother.py # smoother (reads the runtime and models fixtures)
 .venv/bin/python -B scripts/export_web_golden_lgbm.py     # the m0 dump_model fixture
 .venv/bin/python -B scripts/export_web_golden_emotion.py  # emotion-v1 windows, inputs and outputs
+.venv/bin/python -B scripts/golden_runtime/check.py       # the runtime test's pasted literals (extra runs, edge cases, tracks)
 cd frontend && npx vitest run
 ```
 

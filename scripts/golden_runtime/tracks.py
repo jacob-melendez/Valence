@@ -5,7 +5,7 @@ frontend/src/test/engine-runtime.test.ts: a Runtime built at monotonic 10.0 (wal
 VideoObs per row of SEQ (frame_seq = frames_decoded = i, mirrored = i odd, wall = WALL0 + mono * 1.001), then an
 AudioObs at monotonic 15.0. The predictor is never asked.
 
-    .venv/bin/python -B scripts/golden_runtime/tracks.py   # JSON on stdout: {fps, tracks} per push, then {fps, mic, camera}
+    .venv/bin/python -B scripts/golden_runtime/tracks.py   # JSON: {fps, tracks} per push, then {fps, mic, camera}
 
 The test pastes, per push, [fps, null or [tracks.t, tracks.capture_ts_ms, tracks.mirrored, person ids]], then
 [fps, mic, camera].
