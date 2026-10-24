@@ -2,7 +2,7 @@
 
 _Times in America/New_York. Newest last._
 
-### 13:10 ET — Spec published (emotion-v1)
+### 12:58 ET — Spec published (emotion-v1)
 
 Done:
 - `docs/EMOTION_FEATURES.md`: per-frame face cues from MediaPipe (brow lowering, eye openness, blinks, head
@@ -22,7 +22,7 @@ Next: 10-state classifier + valence/arousal regressors, evaluation, JSON export 
 
 Blockers: none.
 
-### 15:05 ET — 10-state model trained and exported (emotion-v1@378fa16c)
+### 13:05 ET — 10-state model trained and exported (emotion-v1@378fa16c)
 
 Done:
 - `artifacts/emotion/`: `classifier.json.gz` (2.78 MB), `valence.json.gz` (0.45 MB), `arousal.json.gz` (0.71 MB)
