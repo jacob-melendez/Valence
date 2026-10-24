@@ -406,8 +406,11 @@ def render() -> str:
         f"  As a negative control, quiet typing reads a negative, high-arousal state on {stress:.0%} of ticks (gate ≤ 20%), but",
         "  this is in-sample for the simulator's refit and says nothing about the four new states or the cues themselves.",
     ] + browser_block() + [
-        "- **Public dataset** (stretch): **not attempted.** DAiSEE releases its clips only after a request form, its host is",
-        "  not reachable from the event's cloud sessions, and it is raw video, which this track does not write to disk.",
+        "- **Public dataset** (stretch): **none evaluated.** DAiSEE releases its clips only after a request form (and its host",
+        "  is not reachable from the event's cloud sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,",
+        "  CC BY-NC-SA 4.0, no form) would test the direction of the face cues per emotion, but its hosts (zenodo.org,",
+        "  huggingface.co) are denied by the cloud environment's network policy. Either would need in-memory processing:",
+        "  this track does not write raw video to disk.",
         "",
     ]
     return "\n".join(out)

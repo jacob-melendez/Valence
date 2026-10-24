@@ -625,5 +625,8 @@ cues are.
   the untested part. The emotion map reads these clips as female: Focused 93%, Collaborative 7%; male: Focused 50%, Calm 50% (after the first minute); no negative state.
   Blinks at this face rate: 22 and 20 in 132 s, about 9–10 per minute (`data/browser/README.md`).
 
-- **Public dataset** (stretch): **not attempted.** DAiSEE releases its clips only after a request form, its host is
-  not reachable from the event's cloud sessions, and it is raw video, which this track does not write to disk.
+- **Public dataset** (stretch): **none evaluated.** DAiSEE releases its clips only after a request form (and its host
+  is not reachable from the event's cloud sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,
+  CC BY-NC-SA 4.0, no form) would test the direction of the face cues per emotion, but its hosts (zenodo.org,
+  huggingface.co) are denied by the cloud environment's network policy. Either would need in-memory processing:
+  this track does not write raw video to disk.
