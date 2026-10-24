@@ -63,6 +63,13 @@ export function headersFile(html) {
     "/assets/*",
     "  Cache-Control: public, max-age=31536000, immutable",
     "",
+    // MediaPipe's WASM (~11 MB, fetched by each vision task) and models are not content-hashed: cache for a day.
+    "/mediapipe/*",
+    "  Cache-Control: public, max-age=86400",
+    "",
+    "/models/*",
+    "  Cache-Control: public, max-age=3600",
+    "",
   ].join("\n");
 }
 
