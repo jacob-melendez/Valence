@@ -46,6 +46,8 @@ export type EmotionField = (typeof EMOTION_FIELDS)[number];
 
 /** Blink rates need at least this much visible face in the window (valence/features/emotion.py:29). */
 export const BLINK_MIN_VISIBLE_S = 10.0;
+/** valence/features/emotion.py BLINK_EPS_S: the 10 s test must not depend on summation order. */
+export const BLINK_EPS_S = 1e-9;
 
 /**
  * The 31 feature names in vector order (valence/features/emotion.py:31-33; also artifacts/emotion/meta.json
@@ -82,14 +84,19 @@ function nanstat(fn: (a: Float64Array) => number, x: Float64Array): number {
 }
 
 /**
- * `_blink_rate(blinks, visible, n)` (valence/features/emotion.py:42): blinks per minute of visible face over
- * the last n ticks, `60 * sum(blinks) / (5 * sum(visible))`, NaN counted as 0 in both sums (np.nan_to_num,
- * then numpy's pairwise sum); NaN when the window holds less than 10 s of visible face.
+ * `_blink_rate(blinks, visible, eye, n)` (valence/features/emotion.py:43): blinks per minute of visible face over
+ * the last n ticks whose cues were produced (`eye_open` finite; a visible face from an older producer is missing,
+ * not "no blinks"): `60 * sum(blinks) / (5 * sum(visible))` over those ticks, NaN counted as 0 in both sums
+ * (np.where + np.nan_to_num, then numpy's pairwise sum); NaN when that holds less than 10 s (minus 1e-9, so the
+ * test does not depend on summation order) of visible face.
  */
-function blinkRate(blinks: Float64Array, visible: Float64Array, n: number): number {
-  const seconds = pairwiseSum(nanToNum(tail(visible, n), { nan: 0.0 })) * TICK_S;
-  if (seconds < BLINK_MIN_VISIBLE_S) return NaN;
-  return (60.0 * pairwiseSum(nanToNum(tail(blinks, n), { nan: 0.0 }))) / seconds;
+function blinkRate(blinks: Float64Array, visible: Float64Array, eye: Float64Array, n: number): number {
+  const cued = tail(eye, n).map((v) => (Number.isNaN(v) ? 0 : 1));
+  const vis = nanToNum(tail(visible, n), { nan: 0.0 }).map((v, i) => (cued[i] ? v : 0.0));
+  const seconds = pairwiseSum(vis) * TICK_S;
+  if (seconds < BLINK_MIN_VISIBLE_S - BLINK_EPS_S) return NaN;
+  const bl = nanToNum(tail(blinks, n), { nan: 0.0 }).map((v, i) => (cued[i] ? v : 0.0));
+  return (60.0 * pairwiseSum(bl)) / seconds;
 }
 
 /**
@@ -143,7 +150,7 @@ export function emotionFromChannels(person: EmotionChannels): Float64Array {
   out[i++] = nanstat(nanmean, tail(p.head_away, WIN["1m"]));
   out[i++] = nanstat(nanmean, tail(p.head_away, WIN["5m"]));
   for (const w of ["1m", "5m", "15m"] as const)
-    out[i++] = blinkRate(p.blink_count, p.face_visible, WIN[w]);
+    out[i++] = blinkRate(p.blink_count, p.face_visible, p.eye_open, WIN[w]);
   return out;
 }
 

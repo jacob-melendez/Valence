@@ -800,12 +800,13 @@ describe("emotion-v1 window features: adversarial cases (valence/features/emotio
     expect([...f.slice(28)]).toEqual([18.0, 18.0, 18.0]); // Python: 60 * 3 / 10.0
   });
 
-  it("an old producer (face visible, no cue fields): 28 NaN cue features, blink rates 0.0", () => {
+  it("an old producer (face visible, no cue fields): every feature NaN, blink rates included (cue-less ticks are missing)", () => {
     // makeTickRecord defaults: the seven cues NaN, blink_count 0 (valence/contracts.py:274-281)
     const recs = Array.from({ length: 15 }, (_, i) => ({ ...bareRecord(i), face_visible: 1 }));
     const f = computeEmotion(recs);
     expect(f.slice(0, 28).every(Number.isNaN)).toBe(true);
-    expect([...f.slice(28)]).toEqual([0, 0, 0]);
+    // valence/features/emotion.py since 140d7e5: blink rates count only ticks with a finite eye_open
+    expect([...f.slice(28)].every(Number.isNaN)).toBe(true);
   });
 
   it("head_yaw: signed values are averaged as they are (no abs in compute_emotion)", () => {
