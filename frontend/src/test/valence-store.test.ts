@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  fmt, getState, handleMessage, provenanceBadges, shownExplanation,
+  fmt, fmtSigned, getState, handleMessage, provenanceBadges, shownExplanation,
   type PredictionMsg, type StateVectorMsg, type ValenceState,
 } from "@/lib/valence";
 
@@ -33,6 +33,10 @@ describe("fmt", () => {
     expect(fmt(null)).toBe("—");
     expect(fmt(undefined)).toBe("—");
     expect(fmt(Number.NaN, 1, "n/a")).toBe("n/a");
+  });
+  it("never prints a negative zero; fmtSigned puts \"+\" on zero and above", () => {
+    expect([fmt(-0.004, 2), fmt(-0.04), fmt(-0.4, 0), fmt(-0.006, 2)]).toEqual(["0.00", "0.0", "0", "-0.01"]);
+    expect([fmtSigned(-0.004), fmtSigned(0.18), fmtSigned(-0.37), fmtSigned(null)]).toEqual(["+0.00", "+0.18", "-0.37", "—"]);
   });
 });
 

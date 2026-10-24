@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { evalSummaryOf } from "@/engine/browser-engine";
+import type { EmotionModel } from "@/engine/emotion-model";
 import {
-  BrowserSource, NO_MEDIA_API, cspSealed, getBrowserStream, mediaErrorText, sealsConnect,
+  BrowserSource, NO_MEDIA_API, cspSealed, getBrowserStream, mediaErrorText, plainEval, sealsConnect,
   type BrowserEngine, type BrowserSourceDeps, type BrowserStatus, type ObsLike, type PerceptionLike,
 } from "@/lib/browser-source";
-import type { RoomBaseline, ServerMessage } from "@/lib/valence";
+import type { EvalMetricRow, RoomBaseline, ServerMessage } from "@/lib/valence";
 
 const BASELINE: RoomBaseline = { mode: "auto", complete: false, target_samples: 90, db_samples: 0, lux_samples: 0, db_median: null, db_iqr: null, lux_median: null };
 
@@ -465,6 +467,73 @@ describe("in-browser source", () => {
     expect(await cspSealed(head("default-src 'self'; connect-src 'self'"))).toBe(true);
     expect(await cspSealed(head(null))).toBe(false);
     expect(await cspSealed((async () => { throw new TypeError("offline"); }) as typeof fetch)).toBe(false);
+  });
+
+  it("live, the break clock reads as time on camera until a break is logged (the engine's text stays Python's); the tour is untouched", async () => {
+    vi.useFakeTimers();
+    const LINE = "Person #1 reads as Focused. Main evidence: 0.0 hours since the last break and room light 336 lux.";
+    const pred = { type: "prediction", event_id: "p1-1", t: 1, person_id: 1, label: "Focused", label_display: "Focused", confidence: 0.9,
+      probabilities: { Focused: 0.9 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up: false,
+      layers: [{ name: "Time Dynamics", contribution: 1, drivers: [{ feature: "hours_since_break", display: "0.0 hours since the last break", value: 0, unit: "h", shap: 1 }] }],
+      data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: LINE, source: "template" },
+      source: "live", simulated_fields: [] } satisfies ServerMessage;
+    const engine = () => ({ ...fakeEngine([]), tick: (): ServerMessage[] => [structuredClone(pred)] });
+    const said = (out: ServerMessage[]) => out.filter((m) => m.type === "prediction").map((m) => [m.explanation.text, m.layers[0]?.drivers[0]?.display]);
+    const live = source({ needsMedia: false, createEngine: async () => engine() });
+    await live.src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    live.src.command({ kind: "break" });
+    await vi.advanceTimersByTimeAsync(5000);
+    live.src.command({ kind: "demo_reset" }); // fresh clocks: time on camera again
+    await vi.advanceTimersByTimeAsync(5000);
+    const arrival = "0.0 hours since you appeared on camera (no break logged)";
+    expect(said(live.out)).toEqual([
+      [LINE.replace("0.0 hours since the last break", arrival), arrival],
+      [LINE, "0.0 hours since the last break"],
+      [LINE.replace("0.0 hours since the last break", arrival), arrival],
+    ]);
+    live.src.stop();
+    const tour = source({ mode: "tour", tourSpeed: 1, createEngine: async () => engine() });
+    await tour.src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(said(tour.out)).toEqual([[LINE, "0.0 hours since the last break"]]);
+    tour.src.stop();
+  });
+
+  it("a value just under zero reads +0.00 in the explanation and drivers, not Python's -0.00; real negatives stay", async () => {
+    vi.useFakeTimers();
+    const LINE = "Person #1 reads as Focused. Main evidence: neutral expression (valence -0.00), motion changing (-0.000) and light changing (-0.4 lux/min).";
+    const pred = { type: "prediction", event_id: "p1-000079", t: 1, person_id: 1, label: "Focused", label_display: "Focused", confidence: 0.9,
+      probabilities: { Focused: 0.9 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up: false,
+      layers: [{ name: "Facial Surface", contribution: 1, drivers: [{ feature: "face_now", display: "neutral expression (valence -0.00)", value: -0.001, unit: "", shap: 1 }] }],
+      data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: LINE, source: "template" },
+      source: "replay", simulated_fields: [] } satisfies ServerMessage;
+    const { src, out } = source({ mode: "tour", tourSpeed: 1, createEngine: async () => ({ ...fakeEngine([]), tick: (): ServerMessage[] => [structuredClone(pred)] }) });
+    await src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    const p = out.find((m) => m.type === "prediction");
+    expect(p?.type === "prediction" && [p.explanation.text, p.layers[0]?.drivers[0]?.display, p.event_id]).toEqual([
+      "Person #1 reads as Focused. Main evidence: neutral expression (valence +0.00), motion changing (+0.000) and light changing (-0.4 lux/min).",
+      "neutral expression (valence +0.00)", "p1-000079"]);
+    src.stop();
+  });
+
+  it("names the Evaluation rows in plain words (ids kept for the tooltip) and says which measurement the 4-state rows are", () => {
+    const served = { summary: { m2: { test_macro_f1: 0.7911 }, m0: { test_macro_f1: 0.4153 } } };
+    const emotion = { meta: { summary: { full: { macro_f1: 0.6815, accuracy: 0.6964, ece: 0.0074 },
+      face_only: { macro_f1: 0.6155, accuracy: 0.6264, ece: 0.0089 }, context_only: { macro_f1: 0.4248, accuracy: 0.447, ece: 0.0047 } } } } as unknown as EmotionModel;
+    const e = plainEval(evalSummaryOf(served, emotion));
+    const rows = e.metrics as EvalMetricRow[];
+    expect(rows.map((r) => [r.id, r.model])).toEqual([
+      ["m2", "Context model · context + face, 4 states"],
+      ["m0", "Face-only baseline · face snapshot (2 features), 4 states"],
+      ["emotion-v1 full", "Emotion map · context + face, 10 states"],
+      ["emotion-v1 face_only", "Emotion map · face only (38 face features)"],
+      ["emotion-v1 context_only", "Emotion map · context only"],
+    ]);
+    expect(rows.map((r) => r.macro_f1)).toEqual([0.7911, 0.4153, 0.6815, 0.6155, 0.4248]);
+    expect(e.disclosure).toMatch(/^Held-out test scores on simulated sessions/);
+    expect(e.disclosure).toMatch(/context \+ face scores 0\.79 macro-F1 against 0\.42 for the face snapshot alone\. Those two rows are the trainer's test score over mixed history lengths/);
   });
 
   it("latestInputs gives nothing while paused or stopped", async () => {

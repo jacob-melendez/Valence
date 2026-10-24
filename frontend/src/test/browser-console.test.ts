@@ -37,6 +37,8 @@ describe("boot and the camera preview", () => {
     await wait(50);
     expect([v.getState().source, v.getBrowserMode()]).toEqual(["browser", "tour"]);
     expect(calls).toEqual([]);
+    // No empty camera frame: the Room view says the tour has no camera.
+    expect(screen.getByTestId("room-view-tour").textContent).toMatch(/^Tour: scripted, simulated people; no camera\./);
     v.setSource("mock");
   });
 
@@ -84,18 +86,26 @@ describe("console state around the in-browser source", () => {
     v.startBrowserSource("live");
     const asked: number[] = [];
     v.setFeatureProvider((pid) => { asked.push(pid); return { feature_version: "emotion-v1", features: { a: 1 } }; });
-    const pred = (pid: number) => ({ type: "prediction" as const, event_id: `p${pid}`, t: 1, person_id: pid, label: "Focused", label_display: "Focused",
-      confidence: 0.8, probabilities: { Focused: 0.8 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up: false,
+    const pred = (pid: number, warming_up = false) => ({ type: "prediction" as const, event_id: `p${pid}`, t: 1, person_id: pid, label: "Focused", label_display: "Focused",
+      confidence: 0.8, probabilities: { Focused: 0.8 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up,
       layers: [], data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: "", source: "template" as const },
       source: "live", simulated_fields: [] });
     act(() => {
       v.handleMessage(pred(1)); // #1 left: their last card stays on screen
-      v.handleMessage(pred(2));
+      v.handleMessage(pred(2, true));
       v.handleMessage({ type: "tracks", t: 2, capture_ts_ms: 2000, frame_w: 1280, frame_h: 720, mirrored: false,
         persons: [{ id: 2, label: "Person #2", bbox: [0.1, 0.1, 0.4, 0.9], fist_active: false, slump: false }] });
     });
     render(h(panels.SelfReport));
     expect(screen.queryByRole("button", { name: "#1" })).toBeNull();
+    // Warm-up: no prompt and no tap (docs/EMOTION_FEATURES.md section 6), so warm-up inputs never reach the file.
+    expect(screen.getByText("available after warm-up")).toBeInTheDocument();
+    expect(screen.getByTestId("self-report").className).not.toMatch(/ring-2/);
+    fireEvent.click(screen.getByRole("img", { name: /Tap your valence/ }), { clientX: 10, clientY: 10 });
+    expect(asked).toEqual([]);
+    expect(screen.getByText(/Warming up: taps open after the first minute/)).toBeInTheDocument();
+    act(() => { v.handleMessage(pred(2)); });
+    expect(screen.getByText("tap now")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("img", { name: /Tap your valence/ }), { clientX: 10, clientY: 10 });
     expect(asked).toEqual([2]);
     await act(async () => { await v.sendCommand({ kind: "control", action: "pause" }); });
@@ -104,6 +114,7 @@ describe("console state around the in-browser source", () => {
     expect(screen.getByText(/paused or stopped: press Start/)).toBeInTheDocument();
     await act(async () => { await v.sendCommand({ kind: "control", action: "start" }); });
     act(() => { v.handleMessage({ type: "hello", contract_version: "1.0.0", mode: "live", room_only: true, states: [], feature_version: "", frame_w: 0, frame_h: 0, mirrored: false }); });
+    act(() => { v.handleMessage(pred(0)); }); // the room's card, past its warm-up
     fireEvent.click(screen.getByRole("img", { name: /Tap your valence/ }), { clientX: 10, clientY: 10 });
     expect(asked).toEqual([2, 0]);
     v.clearSelfReports();
@@ -131,6 +142,8 @@ describe("console state around the in-browser source", () => {
       await wait(20);
       render(h("div", null, h(panels.SourceControls), h(panels.Welcome)));
       expect(screen.getByTestId("edge-errors").textContent).toMatch(/Camera and microphone blocked: allow them/);
+      // The Welcome card carries the error itself: on phones the Source panel is at the end of the page.
+      expect(screen.getByTestId("welcome-now").textContent).toMatch(/^Not running\. Camera and microphone blocked: allow them .* then press Start\.$/);
       await act(async () => { await v.sendCommand({ kind: "control", action: "start" }); });
       await wait(20);
       expect(calls).toHaveLength(2);
@@ -176,6 +189,94 @@ describe("what the in-browser panels claim", () => {
     render(h("div", null, h(panels.SystemStatus), h(panels.Welcome)));
     expect(screen.getByText("SEALED · connect-src 'self'")).toBeInTheDocument();
     expect(screen.getByTestId("welcome").textContent).not.toMatch(/This host serves no CSP/);
+    v.setSource("mock");
+  });
+
+  it("the tour's status reads TOUR with no FPS row; on a local host the header keeps the backend controls", async () => {
+    const { v, panels } = await fresh();
+    v.startBrowserSource("tour");
+    act(() => { v.handleMessage(status({ mode: "replay", camera: false, mic: false, fps: 0 })); });
+    render(h("div", null, h(panels.Header), h(panels.SystemStatus)));
+    expect(screen.getByText("TOUR (SIMULATED)")).toBeInTheDocument();
+    expect(screen.queryByText("FPS")).toBeNull();
+    expect(screen.getByTestId("source-live")).toBeInTheDocument();
+    expect(screen.getByLabelText("Backend URL")).toBeInTheDocument();
+    v.setSource("mock");
+  });
+
+  it("the purge line shows only on ticks that purged something; no transcripts tile or compliment count live", async () => {
+    const { v, panels } = await fresh();
+    if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {}; // jsdom: the log scrolls to its end
+    const LINE = "[GOVERNANCE] Raw biometric frame purged successfully. Appended state vector to timeline.";
+    const gov = (tick: number, n: number) => ({ type: "governance" as const, t: tick * 5, tick, message: LINE, frames_decoded: n,
+      frames_purged: n, audio_blocks_purged: 0, transcripts_purged: 0, violations: 0, live_raw_buffers: 0, audit_hash: null, retention_s: 0, purge_gap: 0 });
+    v.startBrowserSource("tour");
+    act(() => { v.handleMessage(gov(1, 0)); v.handleMessage(gov(2, 0)); });
+    const { unmount } = render(h(panels.Governance));
+    expect(screen.queryByText(LINE)).toBeNull();
+    expect(screen.getAllByText(/Simulated tour: no camera or mic, so nothing to purge/)).toHaveLength(2);
+    expect(screen.queryByText("Transcripts purged")).toBeNull();
+    expect(screen.getByTestId("governance-note").textContent).toMatch(/^Tour: no camera or mic/);
+    unmount();
+    v.startBrowserSource("live");
+    act(() => { v.handleMessage(gov(1, 0)); v.handleMessage(gov(2, 50)); v.handleMessage(gov(3, 50)); });
+    act(() => { v.handleMessage({ type: "state_vector", t: 15, person_id: 0, ambient_db: 50, light_lux: 300, hours_since_break: 0,
+      time_of_day: "afternoon", clenched_fists_5m: 0, compliments_15m: 0, laughter_15m: 0, posture_slump: 0, head_in_hands: 0,
+      social_withdrawal: 0, face_visible: true, facial_valence: 0, window_fill_min: 1, source: "live", simulated_fields: [] }); });
+    render(h("div", null, h(panels.Governance), h(panels.StateVectors)));
+    expect(screen.getAllByText(LINE)).toHaveLength(1); // tick 2 only
+    expect(screen.getAllByText(/No camera frame or audio block this tick, so nothing to purge/)).toHaveLength(2);
+    expect(screen.getByTestId("governance-note").textContent).toMatch(/decoded = purged by construction/);
+    expect(screen.getByText("n/a (no speech)")).toBeInTheDocument();
+    v.setSource("mock");
+  });
+
+  it("the person card names its model, holds warm-up labels as provisional and points to the emotion map's own model", async () => {
+    const { v, panels } = await fresh();
+    v.startBrowserSource("live");
+    act(() => {
+      v.handleMessage(status({}));
+      v.handleMessage({ type: "hello", contract_version: "1.0.0", mode: "live", room_only: false, states: v.CORE_STATES, feature_version: "x",
+        frame_w: 0, frame_h: 0, mirrored: false, affect_states: [{ id: "Focused", display: "Focused", valence: 0.3, arousal: 0.2 }, { id: "Calm", display: "Calm", valence: 0.4, arousal: -0.4 }] });
+    });
+    const pred = (warming_up: boolean) => ({ type: "prediction" as const, event_id: "p1-000005", t: 1, person_id: 1, label: "Focused", label_display: "Focused",
+      confidence: 0.96, probabilities: { Focused: 0.96 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up,
+      layers: [], data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: "", source: "template" as const },
+      source: "live", simulated_fields: [],
+      affect: { valence: 0.3, arousal: 0.2, label: "Focused", label_display: "Focused", confidence: 0.84, probabilities: { Focused: 0.84 }, model: "emotion-v1@test" } });
+    act(() => { v.handleMessage(pred(true)); });
+    const Card = () => { const p = v.useValence().predictions[1]; return p ? h(panels.PersonCard, { p }) : null; };
+    render(h("div", null, h(Card), h(panels.AffectMap), h(panels.Welcome)));
+    expect(screen.getByText("4-state context model")).toHaveAttribute("title", "event p1-000005");
+    expect(screen.getByText("Context model · 4 states")).toBeInTheDocument();
+    expect(screen.getByText("2-state emotion model · emotion-v1@test")).toBeInTheDocument();
+    // Alone on the emotion map, the person gets no "#1" tag over the anchor names (the card beside it names them).
+    expect([...screen.getByTestId("affect-map").querySelectorAll("svg text")].map((t) => t.textContent)).not.toContain("#1");
+    expect(screen.getByTestId("model-note").textContent).toBe(
+      "This card is the 4-state context model. The emotion map below reads 2 states with its own model (now Focused 84%), so the two can differ.");
+    // Warm-up: a provisional label, and the 20 s face baseline asked for on the card and in the Welcome line.
+    expect(screen.getByTestId("warmup-badge").textContent).toBe("warming up · provisional for the first minute");
+    expect(screen.getByText(/Keep a relaxed, neutral face: its first 20 s on camera/)).toBeInTheDocument();
+    expect(screen.getByTestId("welcome-now").textContent).toMatch(/^Now running on your camera and microphone\. Keep a relaxed, neutral face for the first 20 s.*simulated sessions only/);
+    act(() => { v.handleMessage(pred(false)); });
+    expect(screen.queryByTestId("warmup-badge")).toBeNull();
+    expect(screen.queryByText(/Keep a relaxed, neutral face: its first 20 s/)).toBeNull();
+    expect(screen.getByTestId("simulated-cue").textContent).toBe("a signal · model trained on simulated data only");
+    v.setSource("mock");
+  });
+
+  it("Evaluation: no chart legend over a table-only summary; rows in plain words with the model id as tooltip", async () => {
+    const { v, panels } = await fresh();
+    const { plainEval } = await import("@/lib/browser-source");
+    const { evalSummaryOf } = await import("@/engine/browser-engine");
+    v.startBrowserSource("tour");
+    // The source hands this over once the engine is up (onEval); set directly here.
+    Object.assign(v.getState(), { evalSummary: plainEval(evalSummaryOf({ summary: { m2: { test_macro_f1: 0.7911 }, m0: { test_macro_f1: 0.4153 } } }, null)) });
+    render(h(panels.Evaluation));
+    expect(screen.queryByText("Context model")).toBeNull();
+    expect(screen.queryByText("Face-only baseline")).toBeNull();
+    expect(screen.getByText("Face-only baseline · face snapshot (2 features), 4 states")).toHaveAttribute("title", "m0");
+    expect(screen.getByText(/ECE = calibration error, lower is better · — = not recorded/)).toBeInTheDocument();
     v.setSource("mock");
   });
 

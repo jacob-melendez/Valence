@@ -26,9 +26,16 @@ export const stateName = (id: string | null | undefined): string =>
   id ? (state.states.find((x) => x.id === id)?.display
     ?? (STATE_DISPLAY as Record<string, string | undefined>)[id] ?? id.replace(/_/g, " ")) : "—";
 
-/** Null-safe number formatting: the backend sends `null` when a sensor had no reading. */
+/** Null-safe number formatting: the backend sends `null` when a sensor had no reading. Never "-0.00". */
 export function fmt(v: number | null | undefined, digits = 1, fallback = "—"): string {
-  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : fallback;
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const s = v.toFixed(digits);
+  return /^-0(\.0*)?$/.test(s) ? s.slice(1) : s;
+}
+/** fmt with a "+" on anything that rounds to zero or above ("+0.00", never "-0.00"). */
+export function fmtSigned(v: number | null | undefined, digits = 2, fallback = "—"): string {
+  const s = fmt(v, digits, fallback);
+  return s === fallback || s.startsWith("-") ? s : `+${s}`;
 }
 
 export interface TrackPerson { id: number; label: string; bbox: [number, number, number, number]; fist_active: boolean; slump: boolean }
@@ -99,8 +106,8 @@ export interface HistoryPoint {
   ambient_db?: number | null; light_lux?: number | null; hours_since_break?: number | null;
   posture_slump?: number | null; facial_valence?: number | null; window_fill_min?: number;
 }
-/** Mock-only placeholder row. */
-export interface EvalMetricRow { model: string; accuracy: number; macro_f1: number; ece: number }
+/** A metrics table row (the mock's placeholders, the in-browser source's held-out scores); `id` is the model id, shown as the row's tooltip. */
+export interface EvalMetricRow { model: string; accuracy: number; macro_f1: number; ece: number; id?: string }
 /** reports/metrics.json as served in GET /api/eval/summary `metrics` (keys defined by valence/eval/evaluate.py). */
 export interface EvalReport {
   states?: string[];
@@ -362,10 +369,11 @@ export function baselineProgress(b: RoomBaseline | null): number {
   return Math.max(0, Math.min(1, n / b.target_samples));
 }
 
-/** Live sensors without a captured venue baseline: the operator should capture one before judging. */
+/** Desktop live sensors without a captured venue baseline: the operator should capture one before judging. */
 export function baselineWarning(s: Pick<ValenceState, "source" | "conn" | "status" | "baseline">): boolean {
-  // The in-browser tour replays a scripted session that carries its own baseline: no warning there.
-  const sensing = (s.source === "browser" && browserMode === "live") || (s.source === "live" && s.conn === "open" && s.status?.mode === "live");
+  // The in-browser engine (tour or camera) runs on the automatic baseline by design, which never turns "captured"
+  // on its own: the Room baseline card shows it filling instead of a warning that would never clear.
+  const sensing = s.source === "live" && s.conn === "open" && s.status?.mode === "live";
   return sensing && s.baseline?.mode !== "captured";
 }
 
@@ -375,7 +383,7 @@ export function provenanceBadges(s: ValenceState): { label: string; tone: "mock"
   if (s.source === "browser") {
     const sim = [...new Set([...Object.values(s.predictions), ...Object.values(s.vectors)].flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
     if (browserMode === "tour") return [{ label: "IN-BROWSER · TOUR (SIMULATED)", tone: "warn", title: "A scripted, simulated walk through the 10 states, replayed through the engine in this page (no camera)" }];
-    return [{ label: "IN-BROWSER", tone: "live", title: "Camera and mic processed in this page; nothing is recorded or sent" },
+    return [{ label: "IN-BROWSER · ON-DEVICE", tone: "live", title: "Camera and mic processed in this page; nothing is recorded or sent" },
       ...(sim.length ? [{ label: `SIMULATED: ${sim.join(", ")}`, tone: "warn" as const, title: "Simulated or operator-set data in the 15-minute window" }] : [])];
   }
   if (s.conn !== "open") return [];
@@ -508,7 +516,7 @@ const mock = {
       ]),
       L("Facial Surface", [
         faceLabel !== null && val !== null
-          ? { feature: "face_last", display: `${val > 0.3 ? "smiling" : val < -0.1 ? "drooping" : "neutral"} expression (valence ${val >= 0 ? "+" : ""}${fmt(val, 2)})`, value: val, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
+          ? { feature: "face_last", display: `${val > 0.3 ? "smiling" : val < -0.1 ? "drooping" : "neutral"} expression (valence ${fmtSigned(val)})`, value: val, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
           : { feature: "face_visible", display: "face not visible — facial layer ignored", value: 0, unit: "", shap: 0 },
       ]),
     ];
@@ -634,8 +642,9 @@ const MOCK_RETENTION = {
 const BROWSER_RETENTION = {
   raw_media_stored: 0,
   held: [
-    { what: "rolling state vector (numeric TickRecords)", where: "this tab's memory", how_long: "15 minutes" },
+    { what: "rolling state vector (numbers only: noise, light, posture, face valence…)", where: "this tab's memory", how_long: "15 minutes" },
     { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "this tab's memory (hash-chained)", how_long: "until the tab closes" },
+    { what: "self-report taps (camera mode, only if you tap): each tap and the model's numeric inputs at that moment", where: "this tab's memory", how_long: "until Clear in the Self-report panel or the tab closes (Download keeps them)" },
   ],
   never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (nothing is uploaded; the deployed CSP allows connect-src 'self' only)"],
 };
@@ -846,7 +855,8 @@ export function downloadAuditLog(): boolean {
 
 // ---------- Self-report capture (real-data evaluation of the emotion map) ----------
 // docs/EMOTION_FEATURES.md section 6: one JSON line per tap with the tapped valence/arousal and the emotion model's
-// input vector at that moment. Kept in this tab's memory until downloaded; never media, never a transcript.
+// input vector at that moment. Kept in this tab's memory until Clear or the tab closes (Download keeps them); never
+// media, never a transcript. Listed in BROWSER_RETENTION.
 export interface SelfReportTap {
   t: number; session_id: string; person_id: number; valence: number; arousal: number; feature_version: string;
   features: Record<string, number | null>; label?: string;
@@ -915,17 +925,25 @@ export function hasBrowserParam(): boolean {
 }
 /** The console's own URL parameters: only these opt a hosted visit out of the tour (utm_*, fbclid, ref do not). */
 const CONSOLE_PARAMS = ["source", "demo", "api", "perception"];
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/;
+/**
+ * Served from this machine or the LAN, the only place the desktop backend (the header's MOCK / LIVE / Connect) can
+ * run; false on the hosted site whatever its query (its CSP is connect-src 'self').
+ */
+export function isLocalHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return !h || LOCAL_HOST.test(h);
+}
 /**
  * The hosted Valence Web site (any origin other than localhost / 127.0.0.1 / a LAN address): a first-time visitor
  * without the console's own parameters gets the camera-free tour instead of the operator's mock stream.
  */
 export function isHostedSite(): boolean {
   if (typeof window === "undefined") return false;
-  const h = window.location.hostname;
   let own = false;
   try { const q = new URLSearchParams(window.location.search); own = CONSOLE_PARAMS.some((k) => q.has(k)); } catch { /* ignore */ }
-  return !!h && !/^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(h)
-    && !own;
+  return !isLocalHost() && !own;
 }
 /**
  * Mock by default; `?source=browser` runs the engine in this page; `?demo=tour` replays the scripted tour through

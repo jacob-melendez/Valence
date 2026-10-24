@@ -161,6 +161,49 @@ function fetchedBytes(prefix: string): number {
   } catch { return 0; }
 }
 
+// ---------- Explanation wording (describe.ts stays identical to Python; only the shown text changes) ----------
+// The engine's break clock starts when a person is first seen (aggregator.ts seen), so live, before "Log a break",
+// its "hours since the last break" is time on camera.
+const SINCE_BREAK = / hours since the last break/g;
+const SINCE_ARRIVAL = " hours since you appeared on camera (no break logged)";
+// Signed values are formatted like Python's "+.2f", which prints a value just under zero as "-0.00" (a neutral face
+// in the tour, for one): shown as "+0.00".
+const NEG_ZERO = /(^|[^\d.])-(0\.0+)(?!\d)/g;
+function relabelText(m: ServerMessage, re: (s: string) => string): ServerMessage {
+  if (m.type !== "prediction") return m;
+  return { ...m, explanation: { ...m.explanation, text: re(m.explanation.text) },
+    layers: m.layers.map((l) => ({ ...l, drivers: l.drivers.map((d) => ({ ...d, display: re(d.display) })) })) };
+}
+
+// ---------- Evaluation rows in plain words ----------
+// evalSummaryOf (engine/browser-engine.ts) names its rows by model id; the panel shows what each model is, with the
+// id as the row's tooltip.
+const EVAL_ROWS: Record<string, readonly [id: string, label: string]> = {
+  "m2 · served, 4 states (context + face)": ["m2", "Context model · context + face, 4 states"],
+  "m0 · face only, 4 states": ["m0", "Face-only baseline · face snapshot (2 features), 4 states"],
+  "emotion-v1 · 10 states (context + face)": ["emotion-v1 full", "Emotion map · context + face, 10 states"],
+  "emotion-v1 · face only": ["emotion-v1 face_only", "Emotion map · face only (38 face features)"],
+  "emotion-v1 · context only": ["emotion-v1 context_only", "Emotion map · context only"],
+};
+/** The engine's evaluation summary with plain row names, the 4-state headline, and which measurement those rows are. */
+export function plainEval(e: EvalSummary): EvalSummary {
+  if (!Array.isArray(e.metrics)) return e;
+  const metrics = e.metrics.map((r) => {
+    const known = EVAL_ROWS[r.model];
+    return known ? { ...r, id: known[0], model: known[1] } : r;
+  });
+  const f1 = (id: string) => metrics.find((r) => r.id === id)?.macro_f1;
+  const m2 = f1("m2"), m0 = f1("m0");
+  // model_meta.json's summary is the trainer's own test split (mixed history lengths); MODEL_CARD section 5's ladder
+  // table measures windows with up to 15 min of history, so its figures differ slightly.
+  const note = typeof m2 === "number" && typeof m0 === "number" && Number.isFinite(m2) && Number.isFinite(m0)
+    ? ` On the 4 states, context + face scores ${m2.toFixed(2)} macro-F1 against ${m0.toFixed(2)} for the face snapshot alone.`
+      + " Those two rows are the trainer's test score over mixed history lengths (model_meta.json); MODEL_CARD section 5's"
+      + " ladder table measures windows with up to 15 min of history and reads 0.797 and 0.422."
+    : "";
+  return { ...e, metrics, ...(note ? { disclosure: `${e.disclosure ?? ""}${note}`.trim() } : {}) };
+}
+
 // ---------- The source ----------
 const TICK_MS = 5000;
 const MODELS = "/mediapipe/";
@@ -178,6 +221,8 @@ export class BrowserSource {
   private lastAudioAt = 0;
   private loopLatency = 0;
   private tourTicks = 0;
+  /** "Log a break" pressed since the people were last reset: the break clock then means what it says. */
+  private breakLogged = false;
   // Operator toggles, kept so a toggle pressed while the engine loads still reaches it.
   private roomOnly = false;
   private readonly overlays = { face_occlusion: false, low_light: false };
@@ -219,7 +264,7 @@ export class BrowserSource {
     if (gen !== this.generation) return;
     this.engine = engine;
     this.engineLoading = false;
-    if (engine.evalSummary) this.deps.onEval?.(engine.evalSummary());
+    if (engine.evalSummary) this.deps.onEval?.(plainEval(engine.evalSummary()));
     // Toggles pressed while it loaded (the console already shows them as set).
     if (this.roomOnly) engine.setRoomOnly(true);
     for (const w of ["face_occlusion", "low_light"] as const) if (this.overlays[w]) engine.setOverlay(w, true);
@@ -340,6 +385,11 @@ export class BrowserSource {
     this.tourTicks += 1;
     try { msgs = this.engine.tick(wall, mono, counters); } catch (e) { this.deps.onError("engine", String(e)); }
     this.loopLatency = this.mono() - t0;
+    const sinceArrival = !this.tour && !this.breakLogged;
+    msgs = msgs.map((m) => relabelText(m, (t) => {
+      const u = t.replace(NEG_ZERO, "$1+$2");
+      return sinceArrival ? u.replace(SINCE_BREAK, SINCE_ARRIVAL) : u;
+    }));
     msgs.forEach((m) => this.deps.emit(m));
     this.deps.onBaseline(this.engine.baseline());
   }
@@ -402,13 +452,13 @@ export class BrowserSource {
           // switch also forgets everyone, room history included (reset_people(keep_room=False)).
           this.running = c.action === "pause" ? "paused" : "stopped";
           this.closeSensors();
-          if (c.action === "stop") e?.resetPeople(false);
+          if (c.action === "stop") { e?.resetPeople(false); this.breakLogged = false; }
         }
         e?.audit?.(`control_${c.action}`);
         this.emitStatus();
         return { ok: true, text: `control ${c.action} (in-browser)` };
       }
-      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); return { ok: true, text: "break logged (in-browser)" };
+      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); this.breakLogged = true; return { ok: true, text: "break logged (in-browser)" };
       // Only the cards go (runtime.setRoomOnly clears `latest`); windows and break clocks stay, as in app.py set_mode.
       case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); return { ok: true, text: `room-only ${c.room_only}` };
       case "sim": this.overlays[c.which] = c.enabled; e?.setOverlay(c.which, c.enabled); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
@@ -420,7 +470,8 @@ export class BrowserSource {
         if (c.kind === "baseline") e.startBaseline(c.seconds, "capturing"); else e.startBaseline(null, "auto");
         this.deps.onBaseline(e.baseline());
         return { ok: true, text: c.kind === "baseline" ? `baseline ${c.seconds} s (in-browser)` : "baseline reset (in-browser)" };
-      case "demo_reset": if (!e) return loading; e.resetPeople(); return { ok: true, text: "people reset (in-browser)" };
+      // Forgotten people get fresh break clocks (aggregator resetPeople): time on camera again.
+      case "demo_reset": if (!e) return loading; e.resetPeople(); this.breakLogged = false; return { ok: true, text: "people reset (in-browser)" };
       case "live": return { ok: true, text: "already live (in-browser)" };
       case "replay":
       case "replay_recording":

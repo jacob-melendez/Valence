@@ -1,9 +1,9 @@
 // @vitest-environment-options {"url": "https://valence-web.example/?utm_source=devpost"}
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { createElement as h } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { boot, getBrowserMode, getState, isHostedSite, setSource } from "@/lib/valence";
+import { boot, getBrowserMode, getState, isHostedSite, isLocalHost, setSource } from "@/lib/valence";
 import { Route } from "@/routes/index";
 
 // The hosted site (any non-local hostname): a shared link with tracking parameters still lands on the tour, and only
@@ -17,6 +17,8 @@ describe("hosted Valence Web", () => {
     for (const q of ["", "?utm_source=devpost", "?fbclid=IwAR123", "?ref=x", "?delegate=GPU"]) expect([q, at(q)]).toEqual([q, true]);
     for (const q of ["?source=browser", "?demo=tour", "?api=http://127.0.0.1:8000", "?perception=mock", "?demo=x&utm_source=y"])
       expect([q, at(q)]).toEqual([q, false]);
+    // The header's backend controls follow the hostname alone: no query brings them back on the hosted site.
+    for (const q of ["", "?source=browser", "?demo=tour"]) { at(q); expect([q, isLocalHost()]).toEqual([q, false]); }
     window.history.replaceState(null, "", "/?utm_source=devpost");
   });
 
@@ -31,6 +33,10 @@ describe("hosted Valence Web", () => {
     boot(); // once only: the page's boot already ran
     expect([getState().source, getBrowserMode()]).toEqual(["browser", "tour"]);
     expect(calls).toEqual([]);
+    // No MOCK / LIVE / Connect to a backend the hosted CSP blocks, and one IN-BROWSER label, not two.
+    expect(screen.queryByTestId("source-live")).toBeNull();
+    expect(screen.queryByLabelText("Backend URL")).toBeNull();
+    expect(screen.getAllByText(/IN-BROWSER/).map((e) => e.textContent)).toEqual(["IN-BROWSER · TOUR (SIMULATED)"]);
     setSource("mock");
   });
 });

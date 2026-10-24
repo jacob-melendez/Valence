@@ -79,11 +79,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Valence Console" },
-      { name: "description", content: "Privacy-preserving emotional state console." },
+      // The page's only title, description and social preview (the index route sets none): they are prerendered
+      // into dist/client/index.html, so link unfurls show them. Keep to the pitch's wording: signals, simulated data.
+      { title: "Valence Web — emotion signals, entirely in your browser" },
+      {
+        name: "description",
+        content:
+          "Valence Web reads emotion signals from room context, body behavior and the face over a 15-minute window, entirely in your browser: nothing is uploaded. It opens on a scripted, simulated tour; models are trained and scored on simulated data.",
+      },
+      { property: "og:title", content: "Valence Web" },
+      {
+        property: "og:description",
+        content:
+          "Emotion signals from the room, the body and the face, computed entirely in your browser. Opens on a scripted, simulated tour; models trained on simulated data.",
+      },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:card", content: "summary" },
     ],
     links: [
       {
