@@ -135,3 +135,27 @@ Next: self-report taps (the capture works now; it needs a person). A labeled rea
 acted session per state from the user. Any fixes the coordinator reports.
 
 Blockers: none.
+
+### 18:53 ET — Waiting on real taps; public data blocked; card ready for results
+
+Done:
+- **Model card** shows real self-report results as soon as `artifacts/emotion/self_report.json` exists
+  (`aee859e`). The table compares the map position, the regressors, the constant (0, 0) guess and the
+  leave-one-out mean tap, giving MAE, CCC and quadrant agreement for each. It was tested on a simulated fixture and
+  then removed, so the card says "no real taps yet".
+- **Public-dataset stretch, second try:** RAVDESS (acted calm, happy, sad, angry and fearful clips; CC BY-NC-SA 4.0;
+  no form) would test the direction of each face cue per emotion. It is unreachable: the cloud environment's
+  network policy denies **zenodo.org** and **huggingface.co** (403 at the proxy). DAiSEE still needs a request
+  form. Recorded in model card §9.6 (`ff485b0`). The stretch stayed within its 30-minute cap.
+- **Cross-checked Cloud A's new in-browser Evaluation panel** (`a889852`). It reads `meta.json` → `summary`
+  (`full`, `face_only`, `context_only`, `va_from_probabilities`). Those fields exist, and its test pins them to the
+  artifact values.
+
+No new data in the repo (no taps, no new browser recordings). Numbers are unchanged: `emotion-v1@006a8d7d`.
+
+Next:
+- Evaluate taps if a self-report session happens.
+- Otherwise, docs and fixes only, until the 08:00 freeze.
+
+Blockers:
+- Real labeled data needs a person, or allowed hosts for a public dataset.
