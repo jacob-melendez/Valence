@@ -85,6 +85,44 @@ Cloud A's code survey, read-only, found:
   by row counts.
 - **The display strings use Python's rounding,** which rounds ties to even.
 
+### 12:45 — First pushes from all three sessions
+
+**Cloud A (web):**
+- **Static Cloudflare deploy** (`f6b8879`). The console builds as a static site with a prerendered shell. The
+  headers file applies a strict CSP: `connect-src 'self'`, and scripts only from the site plus SHA-256 hashes of the
+  shell's inline scripts.
+  - One bug found on the way: TanStack's hydration script contains a NUL byte. Browsers parse it as U+FFFD before
+    hashing, so the hash has to be computed on the replaced text.
+  - The fonts are now self-hosted.
+  - `scripts/check-static.mjs` serves the build with the real headers in headless Chromium. Result: 0 off-origin
+    requests, 0 CSP violations, 0 page errors.
+  - One-time Cloudflare setup: `docs/DEPLOY_WEB.md`.
+- **In-browser source** (`9249fd1`), a third source next to MOCK and LIVE:
+  - one camera and mic stream, shared with the preview;
+  - messages in the backend's shapes and cadence;
+  - operator commands handled locally.
+  - Tested with a fake camera at `/?source=browser`.
+- **Emotion map panel and self-report capture** (`b163c46`), built against Cloud B's contract:
+  - a valence–arousal plane with the anchors and a trail per person;
+  - a tap grid every 2 minutes that exports the taps as JSONL.
+- **Model files** (`e356acf`) are served at `/models/` from `artifacts/`, with no copies in git.
+- **The engine port** runs as a multi-agent workflow in the background: numeric helpers, golden exporter,
+  modules, served predictor, runtime and review.
+
+**Cloud B (emotion):** published the `emotion-v1` spec (`d012452`):
+- per-frame face cues from MediaPipe, a per-person neutral baseline and a blink rule;
+- 8 per-tick fields and 31 window features;
+- 10 states with valence–arousal anchors.
+
+The changes are additive. Existing corpora are hash-identical to the pre-event simulator, and the full suite passes
+(687 tests).
+
+**Cloud C (perception):**
+- The interface (`22edbbc`): observation types mirroring `contracts.py`, a deterministic mock perception and a
+  media helper with AEC/NS/AGC off.
+- B's face cues in `PersonObs` (`edee3b6`) and the debouncer port (`c834be6`).
+- MediaPipe Tasks Web is pinned to 0.10.35. Every 1.x release bundles a usage logger that posts to Google.
+
 ## Generated from git
 
 <!-- hacklog:start -->
