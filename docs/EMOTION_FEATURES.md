@@ -179,7 +179,9 @@ every feature (blink rates included). Nothing is imputed and nothing is clipped.
 
 **How the trees read NaN** (LightGBM, per split; `valence/models/emotion_json.py`): first, any input with
 `|x| <= 1e-35f` (1.0000000180025095e-35) is read as exactly 0; then a split with `missing_type` `NaN` sends NaN the
-`default_left` way, `Zero` reads NaN as 0 and sends 0 the default way, and `None` reads NaN as 0 and compares. All 31
+`default_left` way, `Zero` reads NaN as 0 and sends 0 the default way, and `None` reads NaN as 0 and compares.
+A dump threshold of `±1e300` stands for `±inf` (JSON has no infinity; the text models keep `inf`), so `x = +inf` or
+`x > 1e300` goes left at such a split (11 splits, on `blink_rate_1m` and `db_rel_15m`). All 31
 emotion features only meet `NaN` splits; 30 of the M2 inputs (e.g. `lux_room_now`, `hours_since_break`,
 `face_visible_now`, `fill_ratio`) only meet `None` splits, so for them NaN behaves like 0.
 

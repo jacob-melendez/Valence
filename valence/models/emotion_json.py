@@ -7,7 +7,10 @@ Numerical splits only (the emotion models have no categorical features), LightGB
 * ``missing_type == "NaN"``: a NaN input goes to ``default_left ? left : right``;
 * ``missing_type == "Zero"``: NaN is read as 0, and a value with ``|x| <= kZeroThreshold`` goes the default way;
 * ``missing_type == "None"``: NaN is read as 0, then compared;
-* otherwise ``x <= threshold`` goes left.
+* otherwise ``x <= threshold`` goes left;
+* a threshold written as ``±1e300`` is ``±inf``: JSON cannot hold infinity, so ``dump_model`` writes LightGBM's
+  infinite thresholds through ``AvoidInf`` (the text model keeps ``inf``). With ``inf``, ``x = +inf`` or any
+  ``x > 1e300`` goes left, as in LightGBM.
 
 Multiclass dumps hold ``num_class`` trees per round in class order (tree ``i`` adds to class ``i % num_class``); the raw
 score is the plain sum of leaf values (the regressors' first tree already carries the average).
@@ -24,6 +27,7 @@ from typing import Any
 import numpy as np
 
 K_ZERO = float(np.float32(1e-35))  # LightGBM kZeroThreshold = 1e-35f
+INF_THRESHOLD = 1e300  # Common::AvoidInf's stand-in for infinity in the JSON dump
 
 
 def load_dump(path: Path) -> dict[str, Any]:
@@ -41,7 +45,9 @@ def _leaf(node: dict[str, Any], x: np.ndarray) -> float:
         else:
             if node.get("decision_type", "<=") != "<=":
                 raise ValueError(f"unsupported decision_type {node['decision_type']!r}")
-            go_left = v <= float(node["threshold"])
+            t = float(node["threshold"])
+            t = math.inf if t >= INF_THRESHOLD else (-math.inf if t <= -INF_THRESHOLD else t)
+            go_left = v <= t
         node = node["left_child"] if go_left else node["right_child"]
     return float(node["leaf_value"])
 

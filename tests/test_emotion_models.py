@@ -96,7 +96,8 @@ def test_golden_windows_and_frames(golden):
 
 
 def test_json_evaluator_zeroes_tiny_inputs_like_lightgbm():
-    """LightGBM reads |x| <= 1e-35f as 0 before any split; the dumps split at exactly +-1e-35f."""
+    """LightGBM reads |x| <= 1e-35f as 0 before any split (the dumps split at exactly +-1e-35f), and the dump's
+    1e300 thresholds are infinite ones."""
     if not (ART / "meta.json").exists():
         pytest.skip("no trained emotion artifacts")
     pred = EmotionPredictor(ART)
@@ -106,8 +107,17 @@ def test_json_evaluator_zeroes_tiny_inputs_like_lightgbm():
     for _ in range(100):
         x = x0.copy()
         j = rng.choice(len(x), 12, replace=False)
-        x[j] = rng.choice([0.0, -1.0000000180025095e-35, 1.0000000180025095e-35, 5e-36, -3e-40, np.nan, 1e-30], 12)
+        x[j] = rng.choice([0.0, -1.0000000180025095e-35, 1.0000000180025095e-35, 5e-36, -3e-40, np.nan, 1e-30,
+                           np.inf, -np.inf, 1e301, 1e300], 12)
         np.testing.assert_allclose(raw_scores(dump, x), pred.raw(x)[0], rtol=0, atol=1e-12)
+    j = pred.cols.index("blink_rate_1m")
+    for name in ("classifier", "valence", "arousal"):
+        d = load_dump(ART / f"{name}.json.gz")
+        for v in (np.inf, 1e301, -np.inf):
+            x = x0.copy()
+            x[j] = x[pred.cols.index("db_rel_15m")] = v
+            want = pred.raw(x)[0] if name == "classifier" else pred.models[name].predict(x[None, :], raw_score=True)
+            np.testing.assert_allclose(raw_scores(d, x), np.ravel(want), rtol=0, atol=1e-12)
 
 
 def test_face_dropout_keeps_targets_aligned():
