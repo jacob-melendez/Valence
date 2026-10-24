@@ -149,3 +149,39 @@ def test_tour_replays_through_the_python_pipeline(predictor):
         r = predictor.predict(model_input(compute({f: person[f] for f in PERSON_FIELDS}, room), xe))
         np.testing.assert_allclose(r["proba"][0], doc["ticks"][i]["probabilities"], atol=1e-9)
         assert r["valence_mix"][0] == pytest.approx(doc["ticks"][i]["valence"], abs=1e-9)
+
+
+@needs_artifacts
+def test_capture_replay_reads_cues_from_observations(tmp_path, predictor):
+    """A features-only recording with emotion-v1 cues goes through the aggregator, features and models."""
+    from valence.contracts import PersonObs, VideoObs, obs_to_dict
+    from valence.eval.capture_stats import capture_ticks
+    from valence.eval.emotion_capture import read_capture
+    from valence.models.emotion import affect_for_window
+    from valence.runtime.aggregator import Aggregator
+    from valence.config import Settings
+
+    rng = np.random.default_rng(0)
+    lines = []
+    for i in range(10 * 90):  # 90 s at 10 fps
+        p = PersonObs(track_id=1, bbox=(0.2, 0.1, 0.8, 0.95), motion=0.02, face_visible=True, face_valence=0.02,
+                      brow_down=0.25 + rng.normal(0, 0.02), eye_open=0.0, mouth_frown=0.02, smile=0.0,
+                      head_yaw=rng.normal(0, 3), head_pitch=rng.normal(0, 3), blink_onsets=int(i % 50 == 0))
+        lines.append(obs_to_dict(VideoObs(t=i / 10, wall=1000 + i / 10, frame_seq=i, frames_decoded=i + 1,
+                                          persons=(p,))))
+    path = tmp_path / "rec.jsonl"
+    path.write_text("".join(json.dumps(d) + "\n" for d in lines))
+    df = capture_ticks(path)
+    person = df[df["person_id"] == 1]
+    assert len(person) >= 17 and person["brow_down"].median() == pytest.approx(0.25, abs=0.02)
+    assert person["blink_count"].sum() >= 16
+    read = read_capture(df, predictor)
+    assert read["ticks"] == len(person) and set(read["labels"]) <= set(EMOTION_STATES)
+    agg = Aggregator(Settings(), "live")
+    from valence.contracts import obs_from_dict
+
+    for d in lines[:60]:
+        agg.push(obs_from_dict(d))
+    recs = agg.flush(1006.0, 6.0, 12.0)
+    a = affect_for_window(predictor, [recs[1]], [recs[0]])
+    assert a.label in EMOTION_STATES and -1 <= a.valence <= 1 and abs(sum(a.probabilities.values()) - 1) < 1e-9

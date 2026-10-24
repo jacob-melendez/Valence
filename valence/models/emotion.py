@@ -208,6 +208,23 @@ def clean_json(v):
     return v
 
 
+def affect_for_window(predictor: EmotionPredictor, person: list, room: list):
+    """Live path: RollingWindow snapshots (TickRecords) -> ``contracts.Affect`` for the person's latest tick."""
+    from valence.contracts import EMOTION_DISPLAY, Affect
+    from valence.features.compute import features_from_window
+    from valence.features.emotion import emotion_from_window, model_input
+
+    if not person:
+        return None
+    x = model_input(features_from_window(person, room or person), emotion_from_window(person))
+    r = predictor.predict(x)
+    p = r["proba"][0]
+    k = int(np.argmax(p))
+    return Affect(valence=float(r["valence_mix"][0]), arousal=float(r["arousal_mix"][0]), label=predictor.states[k],
+                  label_display=EMOTION_DISPLAY[predictor.states[k]], confidence=float(p[k]),
+                  probabilities=dict(zip(predictor.states, map(float, p))), model=predictor.model_id)
+
+
 def layers_of(cols: list[str]) -> dict[str, str]:
     from valence.features.spec import layer_of
 

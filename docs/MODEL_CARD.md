@@ -545,4 +545,20 @@ decreases pitch" check in EMOTION_FEATURES.md §1.1 before the map is trusted.
   and quadrant agreement for the map position, the regressors and a constant (0, 0) guess, per person.
   **Status: no real taps yet**; the evaluator has only run on a synthetic simulator fixture
   (`tests/test_emotion_models.py`), whose numbers say nothing about people.
-- **Public dataset** (stretch): see the status file for whether one could be obtained without a request form.
+- **Existing real captures** (one person, one desk, recorded before the event, so **without the new face cues**: the
+  31 cue features are NaN and the model runs on context + face valence; `python -m valence.eval.emotion_capture`,
+  `artifacts/emotion/real_captures.json`, first minute skipped). Unlabeled except for the acted Focused ones:
+
+  | Capture | Scored ticks | Emotion map reads | Map position (V, A) |
+  |---|---|---|---|
+  | Quiet typing (acted Focused) | 23 | Focused 91%, Calm 9% | (+0.15, +0.20) |
+  | Keyboard gaze (acted Focused) | 23 | Focused 100% | (+0.12, +0.26) |
+  | Baseline (acted Focused) | 4 | Focused 100% | (+0.15, +0.17) |
+  | Cued slumps | 24 | Focused 96%, Calm 4% | (+0.14, +0.16) |
+  | Cued fists | 24 | Focused 96%, Collaborative 4% | (+0.16, +0.21) |
+  | Laughter and compliments | 9 | Focused 89%, Collaborative 11% | (+0.18, +0.19) |
+
+  As a negative control this passes (no negative, high-arousal state on quiet typing), but it is in-sample for the
+  simulator's refit and it says nothing about the four new states or the cues themselves.
+- **Public dataset** (stretch): **not attempted.** DAiSEE releases its clips only after a request form, its host is
+  not reachable from the event's cloud sessions, and it is raw video, which this track does not write to disk.
