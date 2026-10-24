@@ -164,6 +164,52 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   (`8cc9899`/`9837d71`).
 - Slump detection with BlazePose stays an open item for the real-camera check.
 
+### 15:50 — Valence Web runs end to end; engine port gate passed
+
+**Cloud A (web):**
+- **Engine glue** (`01ca763`). `/?source=browser` now runs, all in the page:
+  1. perception;
+  2. the aggregator;
+  3. the served M2 + M0 models with TreeSHAP layers;
+  4. the template explanation;
+  5. the audit chain;
+  6. the emotion map.
+
+  On the production build in headless Chromium, with a fake camera and the strict CSP, every panel fills in. There
+  are 0 off-origin requests, 0 CSP violations and 0 page errors. Self-report taps now record the emotion model's
+  132 inputs.
+- **Camera-free demo** (`424729c`). `/?demo=tour` replays Cloud B's scripted 50-minute walk through the 10 states.
+  It runs through the same engine at 10× speed on a virtual clock, and the emotion map draws the scripted state as
+  a dashed ring.
+  - End-to-end parity on the tour: all 600 ticks are within 1e-9 of Python, and the labels are identical on
+    600/600.
+  - The label matches the scripted state on 449/600 ticks.
+- **Engine-port integration gate passed.** The workflow ran 17 agents.
+  - Frontend: 860 tests in 26 files, `tsc` clean. Python: 41 tests.
+  - Exact matches: LightGBM scores, TreeSHAP, explanations (12,644 strings), audit hashes, and all 2,964 runtime
+    messages over 996 ticks.
+  - Features and probabilities are within 1–2 ulp: V8 vs glibc math.
+  - Speed: a 3-person tick takes 26 ms (p95 43 ms) against a 5 s budget.
+  - Write-up: `docs/WEB_ENGINE.md`.
+- **Status panel** (`7b6674d`). In browser mode it shows the face rate (blink numbers depend on it) and the video
+  backend. The network line reads "sealed (`connect-src 'self'`)" instead of a red "online".
+
+**Cloud B (emotion):**
+- **Retrained** after two reviews (`emotion-v1@006a8d7d`): the simulator's head pose is now computed per frame.
+- **Results on simulated data:** macro-F1 0.681 (CI 0.667–0.695) against 0.616 for face only, a context gain of
+  +0.066. ECE 0.007.
+- **Robustness:** doubling every face-cue spread drops macro-F1 to 0.554. This is the main risk until real cue
+  spreads are measured.
+
+**Cloud C (perception):**
+- **Audio:** browser YAMNet is bit-identical to the edge on the same windows. Laughter onsets fall in the same
+  blocks.
+- **Faces:** browser and edge agree to p95 1.3e-4 on blendshapes and 0.004° on head pose, on identical frames.
+  Faces now run in IMAGE mode, as on the edge.
+- **Head-crop fix:** a crop's pose was in the crop's own camera; crop hits now report yaw and pitch as missing.
+- **Web Worker:** moving MediaPipe to a worker cut main-thread long tasks from 158 to 1.
+- **Next:** the whole console running on real perception with fake media files.
+
 ## Generated from git
 
 <!-- hacklog:start -->
