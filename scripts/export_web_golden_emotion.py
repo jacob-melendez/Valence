@@ -348,13 +348,40 @@ def export() -> dict[str, Any]:
                     feats = compute_emotion({f: np.asarray(v, dtype=float) for f, v in ch.items()})
                 edges.append({"name": name, "channels": ch, "features": feats})
             affect_windows = affect_window_cases(pred, recs[pid], room)
+    probes = model_probes(pred)
     return {
         "version": 1, "generator": "scripts/export_web_golden_emotion.py", "feature_version": FEATURE_VERSION,
         "model_id": pred.model_id, "temperature": pred.t, "states": pred.states,
         "emotion_feature_names": EMOTION_FEATURE_NAMES, "input_features": pred.cols,
         "emotion_fields": list(EMOTION_FIELDS), "sessions": sessions, "checkpoints": checkpoints,
-        "edge_windows": edges, "model_cases": models, "affect_windows": affect_windows,
+        "edge_windows": edges, "model_cases": models, "affect_windows": affect_windows, "probes": probes,
     }
+
+
+def model_probes(pred: EmotionPredictor) -> dict[str, Any]:
+    """Model-dependent expectations for the TS tests, so a retrain only needs a re-export (no literals in tests):
+    golden vector 0 with every third input missing, golden vector 1 with blink_rate_1m = +inf and 1e301 (dump
+    thresholds printed as 1e300 by LightGBM's AvoidInf), and the classifier's tree count."""
+    golden = json.loads((ROOT / "artifacts" / "emotion" / "golden.json").read_text())
+    vec = lambda i: np.array([math.nan if v is None else v for v in golden["vectors"][i]["x"]], dtype=float)
+
+    def run(x: np.ndarray) -> dict[str, Any]:
+        o = pred.predict(x.reshape(1, -1))
+        k = int(np.argmax(o["proba"][0]))
+        return {"raw": [float(v) for v in o["raw"][0]], "label": pred.states[k],
+                "valence_reg": float(o["valence"][0]), "arousal_reg": float(o["arousal"][0]),
+                "valence_mix": float(o["valence_mix"][0]), "arousal_mix": float(o["arousal_mix"][0])}
+
+    nulls = vec(0)
+    nulls[::3] = math.nan
+    f = pred.cols.index("blink_rate_1m")
+    inf = {}
+    for name, v in (("inf", math.inf), ("1e301", 1e301)):
+        x = vec(1)
+        x[f] = v
+        inf[name] = run(x)
+    return {"null_every_third": run(nulls), "blink_rate_1m_huge": inf,
+            "classifier_trees": int(pred.models["classifier"].num_trees())}
 
 
 def check(path: Path) -> None:

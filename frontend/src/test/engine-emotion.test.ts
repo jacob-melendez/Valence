@@ -111,8 +111,13 @@ interface ModelCaseJson {
   affect: AffectJson;
 }
 
+interface ProbeOut {
+  raw: number[]; label: string; valence_reg: number; arousal_reg: number; valence_mix: number; arousal_mix: number;
+}
 interface EmotionFixture {
   version: number;
+  /** Model-dependent expectations (scripts/export_web_golden_emotion.py model_probes). */
+  probes: { null_every_third: ProbeOut; blink_rate_1m_huge: { inf: ProbeOut; "1e301": ProbeOut }; classifier_trees: number };
   feature_version: string;
   model_id: string;
   temperature: number;
@@ -549,26 +554,18 @@ describe("emotion models (emotion-model.ts)", () => {
   // Python literals below: .venv/bin/python -B with valence.models.emotion.EmotionPredictor(artifacts/emotion).
 
   it("null inputs are missing values, as np.asarray(x, dtype=float) reads None", () => {
-    // golden.json vector 0 with every third value null: Python predicts Collaborative_Happy (Calm without
-    // the nulls); a null stored as 0 instead of NaN reads as Focused.
+    // golden.json vector 0 with every third value null (expected values from EmotionPredictor in the exporter);
+    // a null stored as 0 instead of NaN changes the raw scores.
+    const want = fx.probes.null_every_third;
     const x = (golden.vectors[0]?.x as Num[]).map((v, j) => (j % 3 === 0 ? null : v));
     for (const model of [txt, json]) {
       const r = predictEmotion(model, x);
-      expect(
-        bitEqual(
-          r.raw,
-          [
-            -1.8529446928943965, -5.480007054392827, -8.13052744212107, -0.5699124882379649,
-            -7.588152795419807, -7.071893911977153, -6.246246243839615, -5.63838010879279,
-            -1.1054130901993928, -6.412385136832736,
-          ],
-        ),
-      ).toBe(true);
-      expect(r.label).toBe("Collaborative_Happy");
-      expect([r.valenceReg, r.arousalReg]).toEqual([0.4711485653986967, 0.34890303780807363]);
-      expect(
-        maxErr([r.valence, r.arousal], [0.5131636693114864, 0.19293648793990295]),
-      ).toBeLessThanOrEqual(1e-15);
+      expect(bitEqual(r.raw, want.raw)).toBe(true);
+      expect(r.label).toBe(want.label);
+      expect([r.valenceReg, r.arousalReg]).toEqual([want.valence_reg, want.arousal_reg]);
+      expect(maxErr([r.valence, r.arousal], [want.valence_mix, want.arousal_mix])).toBeLessThanOrEqual(1e-15);
+      const zeros = predictEmotion(model, x.map((v) => v ?? 0));
+      expect(bitEqual(zeros.raw, want.raw)).toBe(false);
     }
     const row = emotionInput(
       new Array<null>(N_FEATURES).fill(null),
@@ -588,19 +585,15 @@ describe("emotion models (emotion-model.ts)", () => {
     // blink_rate_1m has dump thresholds printed as 1e300 (Common::AvoidInf); LightGBM sends +inf and 1e301
     // left there. valence/models/emotion_json.py raw_scores reads 1e300 literally and gives -4.240549872195816
     // for class 4 instead; the served Python path (EmotionPredictor, LightGBM) is the reference.
-    const want = [
-      -4.912850835712999, 1.6677329084260717, -4.898543823628142, -4.528140477128561,
-      -4.363780206572808, -5.365849990152937, -4.632673134523343, -4.762989341181959,
-      -3.317202148384535, -4.3794788074941975,
-    ];
+    const probes = fx.probes.blink_rate_1m_huge;
     const f = txt.meta.input_features.indexOf("blink_rate_1m");
-    for (const v of [Infinity, 1e301]) {
+    for (const [v, want] of [[Infinity, probes.inf], [1e301, probes["1e301"]]] as const) {
       const x = nn(golden.vectors[1]?.x as Num[]);
       x[f] = v;
       for (const model of [txt, json]) {
         const r = predictEmotion(model, x);
-        expect(bitEqual(r.raw, want), `${v}`).toBe(true);
-        expect(r.label).toBe("Frustrated_Masked");
+        expect(bitEqual(r.raw, want.raw), `${v}`).toBe(true);
+        expect(r.label).toBe(want.label);
       }
     }
   });
@@ -702,7 +695,7 @@ describe("loadEmotionModel without the emotion map", () => {
         ? { ok: true, status: 200, arrayBuffer: async () => html.slice().buffer as ArrayBuffer }
         : base(url),
     );
-    expect(m?.classifier.trees.length).toBe(2790);
+    expect(m?.classifier.trees.length).toBe(fx.probes.classifier_trees);
     expect(m?.valence).toBeUndefined();
     expect(log).toContain("/models/emotion/classifier.json.gz");
   });
