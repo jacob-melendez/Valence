@@ -97,3 +97,47 @@ server, 4-core container without a GPU (CPU delegate, chosen automatically on Sw
   LSA solver ported, numpy-exact distances, CPython float modulo, Python min/max with NaN, `math.degrees`); hands/ids
   exact (CPython `math.hypot` ported).
 - Face hold scales with the device: 0.45 s = 2.25 face passes at 10 Hz; slower devices hold 2.25 measured passes.
+
+### 14:00 — YOLO vs BlazePose side by side; motion fixed; glue reviewed
+
+**Side by side on identical frames.** YOLO26n-pose and BlazePose lite were each run through the real Python
+`PostureTracker`, YOLO with ultralytics 8.4.171 as `video.py` calls it, BlazePose through MediaPipe 0.10.35 in
+Python with the `coco.ts` mapping. The sequences:
+- synthetic 1280x720, 10 fps, sensor noise σ 3: still, drift, slump 35% and 50%, known-speed motion, fidget;
+- two CC BY 4.0 clips of real people framed head and shoulders (intel-iot-devkit sample videos).
+
+Python reproduces the browser's numbers, so the gap is the model, not the browser runtime.
+
+| motion p50 (sw/s) | still | drift | 0.3 sw/s | 0.1 sw/s | real F | real M |
+|---|---|---|---|---|---|---|
+| YOLO | 0.026 | 0.072 | 0.366 | 0.173 | 0.036 | 0.022 |
+| BlazePose, raw | 0.464 | 0.613 | 1.090 | 0.872 | 0.120 | 0.059 |
+| BlazePose + One Euro + shoulders only (**shipped**) | 0.054 | 0.148 | 0.557 | 0.264 | 0.033 | 0.013 |
+
+- **Cause.** BlazePose jitter is white noise: lag-1 autocorrelation ≈ 0, and VIDEO mode returns the same
+  landmarks as IMAGE mode. Head and shoulders move 0.11–0.22 sw/s on a still frame, elbows and wrists 0.5–1.0;
+  YOLO's points move 0.004–0.02.
+- **Fix.** Of ~1000 variants, the best was a per-keypoint One Euro filter (0.2 Hz, β 8 per sw/s, d 0.5 Hz) with
+  motion on the shoulders only. Still and drift read 1.3× YOLO and real motion 0.93×. The TS filter matches the
+  evaluated Python one within 1e-6 on 2346 recorded frames. In the e2e test, motion on the drifting portrait went
+  from 0.46 to 0.13.
+- **Slump, open.** On the spacesuit portrait BlazePose places the shoulders on the neck ring, and they slide down
+  with a pasted-lower head, so both synthetic slumps were missed (YOLO caught them).
+- **Keyboard gaze, open.** On real head pitch-down, BlazePose's ears drop to 0.74× baseline against YOLO's 0.92×,
+  so the 0.93 ear rule that keeps keyboard gaze from counting as a slump protects less: one 3.8 s false slump in
+  one clip. Both are on the real-camera checklist; the thresholds stay Python's until a real check says otherwise.
+
+**Glue review** (two independent reviewers, every finding proven by a failing test first). One fidelity fix: a
+missed face pass inside the hold no longer resets the blink detector or stalls the cue baseline. Nine
+privacy/robustness fixes:
+- the worker's start timeout no longer kills a slow first download;
+- a suspended AudioContext no longer hangs `start()`, and every gesture retries it, touch included;
+- an ended mic stops producing AudioObs from silence;
+- stop/start races are closed: per-run counters and generation checks after each open;
+- failed opens release their models at once;
+- worklet chunks still queued on close are zero-filled;
+- a hidden tab is not mistaken for a slow device;
+- `stop()` clears the DevTools handle.
+
+**Tests now.** 720 frontend tests pass, 300+ of them perception, with parity fixtures for every ported module.
+`e2e/run-all.mjs` passes in all four scenarios at 5.8–8.4 fps on this CPU-only container.

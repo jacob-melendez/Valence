@@ -31,10 +31,15 @@ scalars only.
 
 1. Sit upright for 20 s (posture calibration), then slump down in the chair for > 3 s: **slump** turns on; sit up:
    it turns off.
-2. Head in both hands for > 2 s: **head in hands**.
-3. Raise a clenched fist to chest height (not over the keyboard) for ~1 s: one **fist onset**. Typing on the
+2. Look down at the keyboard and type for 15 s, sitting upright: slump must **stay off**. (On identical frames
+   BlazePose's ears drop more than YOLO's when the head pitches down, so the keyboard-gaze rule protects less in the
+   browser; note if it fires.)
+3. Sit still for 30 s: `motion` should read below ~0.1 (the desktop edge reads ~0.03 still, ~0.1 slumped); wave or
+   shift in the chair: it rises.
+4. Head in both hands for > 2 s: **head in hands**.
+5. Raise a clenched fist to chest height (not over the keyboard) for ~1 s: one **fist onset**. Typing on the
    keyboard must not count fists.
-4. A second person sits next to you: **Person #2** appears (up to 3 people).
+6. A second person sits next to you: **Person #2** appears (up to 3 people).
 
 ## 4. Room
 
