@@ -51,6 +51,6 @@ npm run build && node scripts/check-static.mjs --path "/?source=browser" --fake-
   --fake-audio e2e/.media/speech.wav --wait 45000 --expect "Person #1" --full --screenshot out.png
 ```
 
-`console-in-browser.jpg` is that run (14:55 ET, Oct 24): the portrait tracked as Person #1, a prediction with its
+`console-in-browser.jpg` is that run (15:14 ET, Oct 24): the portrait tracked as Person #1, a prediction with its
 layers and template text, the emotion map, and the governance panel with frames decoded 236 / purged 235 (one in
 flight), 428 audio blocks purged, 0 violations; 0 off-origin requests and 0 CSP violations.
