@@ -78,6 +78,9 @@ export async function loadVisionModels(
     try {
       const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(fileset, {
         baseOptions: base(MODEL.pose), runningMode: "VIDEO", numPoses: opts.maxPeople ?? 3,
+        // The Python edge's YOLO person threshold (conf=0.4). MediaPipe's default 0.5 found only one of the two
+        // people in the e2e two-person scene; 0.4 finds both.
+        minPoseDetectionConfidence: 0.4, minPosePresenceConfidence: 0.4,
       });
       created.push(pose);
       const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(fileset, {

@@ -3,14 +3,21 @@
  * assignment and head-box code expects from YOLO-pose, in pixels, with a confidence per keypoint.
  *
  * Confidence is BlazePose's `visibility` (the likelihood that the landmark is visible in the image), which plays the
- * role of YOLO's keypoint confidence for the 0.3 / 0.5 / 0.6 thresholds. A landmark outside the frame gets
- * confidence 0: YOLO never places a confident keypoint outside the image, while BlazePose extrapolates the whole
- * body (hips and knees below a desk-height frame).
+ * role of YOLO's keypoint confidence for the 0.3 / 0.5 / 0.6 thresholds. Two exceptions, because BlazePose always
+ * predicts a whole body:
+ * - a landmark outside the frame gets confidence 0 (YOLO never places a confident keypoint outside the image);
+ * - the hips, knees and ankles (COCO 11-16) get confidence 0. On an upper-body view BlazePose squeezes the lower body
+ *   into the frame with visibility ~1.0 (the e2e portrait, cut at the waist: hips at 72% of the frame height,
+ *   visibility 1.00), while at a desk YOLO gives hidden hips a low confidence. Of the Python rules only motion reads
+ *   them (COCO 5-12), so motion is measured on the shoulders, elbows and wrists.
+ * Measured on the e2e scenes: head and shoulders 1.0; elbows 0.6-0.8 and wrists 0.45-0.8 when partly visible.
  */
 
 /** COCO index i <- BlazePose landmark BLAZEPOSE_TO_COCO[i]. */
 export const BLAZEPOSE_TO_COCO = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28] as const;
 export const N_KPTS = 17;
+/** COCO 11-16 (hips, knees, ankles) are reported with confidence 0 (see above). */
+export const FIRST_LOWER_BODY = 11;
 
 export interface Landmark {
   x: number;
@@ -40,7 +47,7 @@ export function blazeposeToCoco(landmarks: ArrayLike<Landmark>, frameW: number, 
     xy[2 * i] = lm.x * frameW;
     xy[2 * i + 1] = lm.y * frameH;
     const vis = Number.isFinite(lm.visibility) ? lm.visibility! : 0;
-    conf[i] = inFrame(lm.x) && inFrame(lm.y) ? Math.min(1, Math.max(0, vis)) : 0;
+    conf[i] = i < FIRST_LOWER_BODY && inFrame(lm.x) && inFrame(lm.y) ? Math.min(1, Math.max(0, vis)) : 0;
   });
   return { xy, conf };
 }
