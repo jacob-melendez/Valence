@@ -25,6 +25,8 @@ const PAGE = opt("--path", "/");
 const WAIT_MS = Number(opt("--wait", "6000"));
 const SHOT = opt("--screenshot", null);
 const FAKE = args.includes("--fake-media");
+// --expect "a|b": each text must be on the page at the end (e.g. a person card once predictions flow).
+const EXPECT = (opt("--expect", "") ?? "").split("|").filter(Boolean);
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -104,7 +106,10 @@ await page.waitForTimeout(WAIT_MS);
 violations.push(...(await page.evaluate(() => window.__csp)));
 const csp = resp?.headers()["content-security-policy"] ?? "";
 const title = await page.title();
-if (SHOT) await page.screenshot({ path: SHOT, fullPage: false });
+const bodyText = await page.evaluate(() => document.body.innerText);
+// innerText applies CSS text-transform (panel titles are uppercase): compare case-insensitively.
+const missing = EXPECT.filter((t) => !bodyText.toLowerCase().includes(t.toLowerCase()));
+if (SHOT) await page.screenshot({ path: SHOT, fullPage: args.includes("--full") });
 await browser.close();
 server.close();
 
@@ -115,8 +120,10 @@ const report = {
   off_origin_requests: offOrigin,
   csp_violations: violations,
   page_errors: errors,
+  missing_text: missing,
 };
 console.log(JSON.stringify(report, null, 2));
-const ok = report.csp_applied && !offOrigin.length && !violations.length && !errors.length;
+const ok =
+  report.csp_applied && !offOrigin.length && !violations.length && !errors.length && !missing.length;
 console.log(ok ? "check-static: OK" : "check-static: FAILED");
 process.exit(ok ? 0 : 1);

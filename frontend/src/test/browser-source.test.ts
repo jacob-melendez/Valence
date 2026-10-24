@@ -10,7 +10,15 @@ function fakeEngine(log: string[]): BrowserEngine {
   return {
     states: [{ id: "Focused", display: "Focused", tier: "P0" }],
     featureVersion: "m2_lgbm@test",
-    push: (o) => { log.push("persons" in o ? "video" : "audio"); },
+    push: (o) => {
+      log.push("persons" in o ? "video" : "audio");
+      if (!("persons" in o)) return null;
+      // the engine's push_obs: participants' boxes (>= 0.55x the tallest)
+      const tallest = Math.max(...o.persons.map((p) => p.bbox[3] - p.bbox[1]));
+      return { type: "tracks", t: o.wall, capture_ts_ms: Math.round(o.wall * 1000), frame_w: o.frame_w, frame_h: o.frame_h,
+        mirrored: o.mirrored, persons: o.persons.filter((p) => p.bbox[3] - p.bbox[1] >= 0.55 * tallest)
+          .map((p) => ({ id: p.track_id, label: `Person #${p.track_id}`, bbox: [...p.bbox] as [number, number, number, number], fist_active: false, slump: !!p.slump })) };
+    },
     tick: (wall) => {
       ticks += 1;
       return [{ type: "governance", t: wall, tick: ticks, message: "", frames_decoded: 0, frames_purged: 0, audio_blocks_purged: 0,
@@ -53,7 +61,6 @@ describe("in-browser source", () => {
     await src.start();
     expect(out[0]?.type).toBe("hello");
     expect(errors).toContain("camera"); // jsdom has no getUserMedia: reported, perception still starts
-    expect(log).toContain("baseline null auto"); // a new session starts a new automatic venue baseline
 
     perception.emit(video(Date.now() / 1000, [0.6, 0.2])); // the 0.2-tall box is background (< 0.55 x tallest)
     perception.emit({ t: 1, wall: 1, db_spl: 50 });

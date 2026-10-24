@@ -780,9 +780,11 @@ function startBrowser() {
       if (what === "mic") set({ micError: detail }); else set({ edgeError: `${what}: ${detail}` });
     },
   });
+  // Self-report taps record the emotion model's current input for the tapped person.
+  setFeatureProvider((pid) => browser?.latestInputs(pid) ?? null);
   void browser.start();
 }
-function stopBrowser() { browser?.stop(); browser = null; }
+function stopBrowser() { browser?.stop(); browser = null; setFeatureProvider(null); }
 
 // ---------- Self-report capture (real-data evaluation of the emotion map) ----------
 // docs/EMOTION_FEATURES.md section 6: one JSON line per tap with the tapped valence/arousal and the emotion model's

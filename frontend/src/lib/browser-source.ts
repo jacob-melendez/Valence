@@ -5,7 +5,7 @@
  * dropped. Nothing is recorded or sent anywhere (the deployed CSP has connect-src 'self').
  * It emits the same messages the backend WebSocket does (docs/API.md section 3), so every panel works unchanged.
  */
-import type { Command, HelloMsg, RoomBaseline, ServerMessage, StatusMsg, TrackPerson } from "./valence";
+import type { AffectStateInfo, Command, HelloMsg, RoomBaseline, ServerMessage, StatusMsg } from "./valence";
 
 // ---------- Seams (implemented by frontend/src/engine and frontend/src/perception) ----------
 /** A person in a video observation (valence/contracts.py PersonObs; only the fields this module reads). */
@@ -17,20 +17,29 @@ export interface AudioObsLike { t: number; wall: number; db_spl: number }
 export type ObsLike = VideoObsLike | AudioObsLike;
 export const isVideo = (o: ObsLike): o is VideoObsLike => "persons" in o;
 
-export interface PerceptionCounters { frames_decoded: number; frames_purged: number; audio_blocks_purged: number; fps?: number }
+export interface PerceptionCounters {
+  frames_decoded: number; frames_purged: number; audio_blocks_purged: number;
+  transcripts_purged?: number; violations?: number; live_raw_buffers?: number; fps?: number;
+}
+/** The parts of perception's status() this module shows (frontend/src/perception/types.ts PerceptionStatus). */
+export interface PerceptionStatusLike { fps?: number; face_hz?: number; degraded?: string[]; video_backend?: string | null }
 /** frontend/src/perception's createPerception() / createMockPerception() result. */
 export interface PerceptionLike {
   start(stream: MediaStream | null): void | Promise<void>;
   stop(): void;
   onObservation(cb: (o: ObsLike) => void): void | (() => void);
   counters(): PerceptionCounters;
+  status?(): PerceptionStatusLike;
 }
 
 /** The engine side: the aggregator + runtime of valence/runtime, ported (frontend/src/engine). */
 export interface BrowserEngine {
   states: { id: string; display: string; tier: string }[];
   featureVersion: string;
-  push(obs: ObsLike): void;
+  /** Emotion-map states with their anchors (empty without the emotion models). */
+  affectStates?: AffectStateInfo[];
+  /** Feed one observation; a video frame may return the participants' `tracks` message (<= 10 Hz). */
+  push(obs: ObsLike): ServerMessage | null | void;
   /** One 5 s tick: flush the aggregator and run the runtime step (governance, state_vector, prediction). */
   tick(wall: number, mono: number, counters: PerceptionCounters): ServerMessage[];
   setRoomOnly(roomOnly: boolean): void;
@@ -39,6 +48,8 @@ export interface BrowserEngine {
   startBaseline(seconds: number | null, mode: "capturing" | "auto"): void;
   baseline(): RoomBaseline;
   resetPeople(): void;
+  /** The emotion model's current input for a person (self-report capture), when the emotion map is loaded. */
+  latestInputs?(personId: number): { feature_version: string; features: Record<string, number | null> } | null;
 }
 
 export interface BrowserSourceDeps {
@@ -77,8 +88,6 @@ async function openMedia(onError: BrowserSourceDeps["onError"]): Promise<MediaSt
 
 // ---------- The source ----------
 const TICK_MS = 5000;
-const TRACKS_MIN_MS = 100; // tracks at most 10 Hz, like the backend
-const PARTICIPANT_REL_HEIGHT = 0.55; // valence/config.py participant_rel_height: boxes shown in `tracks`
 
 export class BrowserSource {
   private engine: BrowserEngine | null = null;
@@ -89,7 +98,6 @@ export class BrowserSource {
   private startedAt = 0;
   private lastVideoAt = 0;
   private lastAudioAt = 0;
-  private lastTracksAt = 0;
   private loopLatency = 0;
   private roomOnly = false;
   private generation = 0;
@@ -124,8 +132,6 @@ export class BrowserSource {
       this.perception.onObservation((o) => this.onObs(o));
       await this.perception.start(media);
     } catch (e) { this.deps.onError("camera", `perception failed: ${String(e)}`); }
-    // A new live session starts a new automatic venue baseline (valence/runtime/engine.py go_live).
-    this.engine?.startBaseline(null, "auto");
   }
 
   private closeSensors() {
@@ -147,21 +153,15 @@ export class BrowserSource {
 
   private onObs(o: ObsLike) {
     if (this.running !== "running" || !this.engine) return;
-    this.engine.push(o);
-    const t = this.now();
-    if (!isVideo(o)) { this.lastAudioAt = t; return; }
-    this.lastVideoAt = t;
-    if (t - this.lastTracksAt < TRACKS_MIN_MS) return;
-    this.lastTracksAt = t;
-    // Same rule as valence/runtime/engine.py push_obs: show boxes at least 0.55x the tallest one.
-    const tallest = Math.max(0, ...o.persons.map((p) => p.bbox[3] - p.bbox[1]));
-    const persons: TrackPerson[] = o.persons
-      .filter((p) => p.bbox[3] - p.bbox[1] >= PARTICIPANT_REL_HEIGHT * tallest)
-      .map((p) => ({ id: p.track_id, label: `Person #${p.track_id}`, bbox: [...p.bbox] as TrackPerson["bbox"],
-        fist_active: !!p.fist_active, slump: !!p.slump }));
-    this.deps.emit({ type: "tracks", t: o.wall, capture_ts_ms: Math.round(o.wall * 1000), frame_w: o.frame_w,
-      frame_h: o.frame_h, mirrored: o.mirrored, persons });
+    // The engine's push_obs publishes the participants' boxes (valence/runtime/engine.py: >= 0.55x the tallest,
+    // at most every 0.1 s).
+    const tracks = this.engine.push(o);
+    if (tracks) this.deps.emit(tracks);
+    if (isVideo(o)) this.lastVideoAt = this.now(); else this.lastAudioAt = this.now();
   }
+
+  /** The emotion model's current input for a person (for the self-report capture). */
+  latestInputs(personId: number) { return this.engine?.latestInputs?.(personId) ?? null; }
 
   private tick() {
     if (this.running !== "running" || !this.engine) return;
@@ -175,16 +175,21 @@ export class BrowserSource {
   }
 
   hello(): HelloMsg {
+    const affect = this.engine?.affectStates ?? [];
     return { type: "hello", contract_version: "1.0.0", mode: "live", room_only: this.roomOnly,
-      states: this.engine?.states ?? [], feature_version: this.engine?.featureVersion ?? "", frame_w: 0, frame_h: 0, mirrored: false };
+      states: this.engine?.states ?? [], feature_version: this.engine?.featureVersion ?? "", frame_w: 0, frame_h: 0, mirrored: false,
+      ...(affect.length ? { affect_states: affect } : {}) };
   }
 
-  status(): StatusMsg {
-    const t = this.now(), c = this.perception?.counters();
+  status(): StatusMsg & { face_hz?: number; video_backend?: string | null } {
+    const t = this.now(), c = this.perception?.counters(), ps = this.perception?.status?.();
     const camera = this.running === "running" && t - this.lastVideoAt < 3000;
     const mic = this.running === "running" && t - this.lastAudioAt < 3000;
-    const degraded = [...(camera ? [] : ["camera"]), ...(mic ? [] : ["mic"])];
-    return { type: "status", mode: "live", camera, mic, fps: Math.round((c?.fps ?? 0) * 10) / 10,
+    const degraded = [...(camera ? [] : ["camera"]), ...(mic ? [] : ["mic"]), ...(ps?.degraded ?? [])];
+    const r1 = (v: number | undefined) => Math.round((v ?? 0) * 10) / 10;
+    return { type: "status", mode: "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
+      // Face passes per second: blink numbers are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3).
+      face_hz: r1(ps?.face_hz ?? ps?.fps ?? c?.fps), video_backend: ps?.video_backend ?? null,
       loop_latency_ms: Math.round(this.loopLatency * 10) / 10,
       // The LLM narrator is desktop-only; the browser always uses the template explanation.
       narrator: "template", offline: false, uptime_s: Math.round((t - this.startedAt) / 1000),
