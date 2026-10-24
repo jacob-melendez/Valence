@@ -12,6 +12,7 @@ It also records fps, model load time and download size in `.out/report-<scenario
 
 ```
 cd frontend
+node e2e/run-all.mjs                      # every scenario + cross checks (roll sign, two people) -> .out/summary.json
 node e2e/run.mjs                          # one person, 25 s, CSP from the brief
 node e2e/run.mjs --scenario two           # two people side by side
 node e2e/run.mjs --scenario roll_cw       # portrait rotated 15 degrees clockwise (head roll sign check)

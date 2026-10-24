@@ -67,3 +67,33 @@ pose from the matrix), and the mock fills them. The raw extras follow B's sign c
   decisions above.
 - Running: the `hands.py` + `ids.py`, `lux.py` + `regions.py` + BGR2GRAY ports and the face parity agent; the
   audio and posture adversarial reviews.
+
+### 13:30 — Real perception runs end to end in headless Chromium
+
+`node frontend/e2e/run-all.mjs`: the real `createPerception()` on Chromium's fake camera and microphone (the scenes
+from `make_media.py`), served with the brief's CSP. Every check passes in every scenario: faces with 52 blendshapes,
+observations flowing, speech heard, frames decoded = purged, **0 off-origin requests, 0 CSP violations, 0 page
+errors**.
+
+| Scenario | Load | fps | ms/frame | Backend | People | Notes |
+|---|---|---|---|---|---|---|
+| one (portrait, drifting) | 1.5 s | 8.5 | 110 | worker/CPU | 1 | speech 0.99, lux 239 (q 0.35), face valence 0 (its own baseline) |
+| two (side by side) | 1.7 s | 5.8 | 153 | worker/CPU | 2 | each face assigned to its own person |
+| roll_cw / roll_ccw (±15°) | 1.5 / 1.6 s | 8.0 / 8.6 | 117 / 112 | worker/CPU | 1 | roll +17.9 / −10.7 vs +3.0 upright: **sign confirmed** (clockwise > 0) |
+
+Audio: 22-35 ms per 1 s block (48 kHz -> 16 kHz resample + YAMNet). Load = `start()` to the first observation, local
+server, 4-core container without a GPU (CPU delegate, chosen automatically on SwiftShader).
+
+- Download per first visit (simd variants, one copy each): vision WASM 11.2 MB + loader 0.3 MB, audio WASM 6.3 MB,
+  models 21.3 MB (face 3.8, pose 5.8, gestures 8.4, YAMNet 4.1); the e2e server sends `no-store`, so it re-serves
+  the vision WASM per task (4x).
+- Fixed on the way: in a module worker MediaPipe's loader is an ES module, imported once per URL, so the second
+  task found no `ModuleFactory` and the worker fell back to the main thread; each task now gets its own loader URL.
+- **Motion differs from YOLO**, as the plan feared: on the near-still portrait (true drift ~0.06 sw/s) BlazePose
+  head/shoulder points jitter 0.10-0.21 sw/s and elbows/wrists 0.3-0.8, so PostureTracker's motion reads ~0.45 sw/s
+  (the Python edge read 0.033 upright, live). An agent is running YOLO26n-pose and BlazePose side by side on
+  identical synthetic frames (still, drift, slump, known-speed motion) to pick a fix (smoothing or keypoint gating).
+- Reviews done: audio no differences; posture two fixed (numpy's fused norm, null as NaN); face five fixed (scipy's
+  LSA solver ported, numpy-exact distances, CPython float modulo, Python min/max with NaN, `math.degrees`); hands/ids
+  exact (CPython `math.hypot` ported).
+- Face hold scales with the device: 0.45 s = 2.25 face passes at 10 Hz; slower devices hold 2.25 measured passes.

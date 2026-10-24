@@ -1,0 +1,286 @@
+import { describe, expect, it, vi } from "vitest";
+import { AudioPipeline, YAMNET_WINDOW } from "@/perception/audio";
+import { BLAZEPOSE_TO_COCO, blazeposeToCoco, poseBoxPx, type Landmark } from "@/perception/coco";
+import { IouTracker, iou } from "@/perception/tracker";
+import { BLENDSHAPE_NAMES, type VideoObs } from "@/perception/types";
+import { FACE_HOLD_S, VisionPipeline, type FrameInput, type PixelSource } from "@/perception/video";
+
+// ---------- synthetic MediaPipe outputs ----------
+
+/** A seated person facing the camera (BlazePose's 33 landmarks, normalized); `dx` shifts them sideways. */
+function seated(opts: { dx?: number; scale?: number; wristY?: number; vis?: number } = {}): Landmark[] {
+  const { dx = 0, scale = 1, wristY = 0.88, vis = 0.98 } = opts;
+  const at = (x: number, y: number, v = vis): Landmark => ({ x: 0.5 + (x - 0.5) * scale + dx, y: 0.1 + (y - 0.1) * scale, z: 0, visibility: v });
+  const lm: Landmark[] = Array.from({ length: 33 }, () => at(0.5, 0.5, 0.1));
+  lm[0] = at(0.5, 0.3); // nose
+  lm[1] = at(0.51, 0.28); lm[2] = at(0.52, 0.28); lm[3] = at(0.53, 0.28); // left eye (image right)
+  lm[4] = at(0.49, 0.28); lm[5] = at(0.48, 0.28); lm[6] = at(0.47, 0.28); // right eye
+  lm[7] = at(0.55, 0.29); lm[8] = at(0.45, 0.29); // ears
+  lm[9] = at(0.51, 0.33); lm[10] = at(0.49, 0.33); // mouth
+  lm[11] = at(0.6, 0.5); lm[12] = at(0.4, 0.5); // shoulders
+  lm[13] = at(0.66, 0.7); lm[14] = at(0.34, 0.7); // elbows
+  lm[15] = at(0.62, wristY); lm[16] = at(0.38, wristY); // wrists
+  for (const i of [17, 19, 21]) lm[i] = at(0.62, wristY + 0.02);
+  for (const i of [18, 20, 22]) lm[i] = at(0.38, wristY + 0.02);
+  lm[23] = at(0.58, 1.05, 0.2); lm[24] = at(0.42, 1.05, 0.2); // hips below the frame
+  for (const i of [25, 27, 29, 31]) lm[i] = at(0.58, 1.4, 0.05);
+  for (const i of [26, 28, 30, 32]) lm[i] = at(0.42, 1.4, 0.05);
+  return lm;
+}
+
+function blendshapes(smile: number) {
+  return {
+    categories: BLENDSHAPE_NAMES.map((name, index) => ({
+      index, categoryName: name, displayName: "", score: name.startsWith("mouthSmile") ? smile : 0.02,
+    })),
+    headIndex: 0, headName: "",
+  };
+}
+
+/** Column-major 4x4 with the face 50 cm in front of the camera, facing it. */
+const MATRIX = { rows: 4, columns: 4, data: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -50, 1] };
+
+interface Scene {
+  poses: Landmark[][];
+  faces: { nose: [number, number]; smile: number }[];
+  hands: { wrist: [number, number]; fist: number }[];
+  cropFace?: number | null;
+}
+
+function fakeModels(scene: () => Scene) {
+  const calls = { pose: [] as number[], faces: [] as number[], gestures: [] as number[], crop: 0 };
+  const models = {
+    pose: (_img: unknown, ts: number) => {
+      calls.pose.push(ts);
+      return { landmarks: scene().poses, worldLandmarks: [], close() {} };
+    },
+    faces: (_img: unknown, ts: number) => {
+      calls.faces.push(ts);
+      const s = scene();
+      return {
+        faceLandmarks: s.faces.map((f) => Array.from({ length: 478 }, () => ({ x: f.nose[0], y: f.nose[1], z: 0, visibility: 0 }))),
+        faceBlendshapes: s.faces.map((f) => blendshapes(f.smile)),
+        facialTransformationMatrixes: s.faces.map(() => MATRIX),
+      };
+    },
+    faceCrop: () => {
+      calls.crop += 1;
+      const smile = scene().cropFace;
+      return smile == null
+        ? { faceLandmarks: [], faceBlendshapes: [], facialTransformationMatrixes: [] }
+        : { faceLandmarks: [[]], faceBlendshapes: [blendshapes(smile)], facialTransformationMatrixes: [MATRIX] };
+    },
+    gestures: (_img: unknown, ts: number) => {
+      calls.gestures.push(ts);
+      const s = scene();
+      return {
+        landmarks: s.hands.map((hd) => Array.from({ length: 21 }, () => ({ x: hd.wrist[0], y: hd.wrist[1], z: 0, visibility: 0 }))),
+        worldLandmarks: [], handedness: [], handednesses: [],
+        gestures: s.hands.map((hd) => [{ index: 1, categoryName: "Closed_Fist", displayName: "", score: hd.fist }]),
+      };
+    },
+  };
+  return { models: models as unknown as ConstructorParameters<typeof VisionPipeline>[0], calls };
+}
+
+function fakePixels() {
+  const calls = { luma: 0, crop: 0, wipe: 0 };
+  const pixels: PixelSource = {
+    lumaStrided: (_f, w, h, stride, toGray) => {
+      calls.luma += 1;
+      const gw = Math.ceil(w / stride), gh = Math.ceil(h / stride);
+      const gray = new Uint8Array(gw * gh);
+      for (let i = 0; i < gray.length; i++) gray[i] = toGray(120, 120, 120) + ((i * 7919) % 5);
+      return { gray, w: gw, h: gh };
+    },
+    cropTo: () => {
+      calls.crop += 1;
+      return {} as never;
+    },
+    wipeCrop: () => {
+      calls.wipe += 1;
+    },
+  };
+  return { pixels, calls };
+}
+
+const FRAME: FrameInput = { image: {} as never, width: 1280, height: 720 };
+
+function run(pipeline: VisionPipeline, frames: number, t0 = 100, dt = 0.1): VideoObs[] {
+  return Array.from({ length: frames }, (_, i) => pipeline.process(FRAME, t0 + i * dt, 1.7e9 + i * dt, i, i + 1));
+}
+
+// ---------- tests ----------
+
+describe("BlazePose -> COCO-17", () => {
+  it("maps landmarks 0,2,5,7,8,11-16,23-28 to COCO 0-16, in pixels", () => {
+    expect([...BLAZEPOSE_TO_COCO]).toEqual([0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
+    const lm = seated();
+    const { xy, conf } = blazeposeToCoco(lm, 1280, 720);
+    expect(xy[0]).toBeCloseTo(0.5 * 1280);
+    expect(xy[1]).toBeCloseTo(0.3 * 720 * 1 + 0, 6);
+    expect(xy[2 * 5]).toBeCloseTo(lm[11]!.x * 1280); // COCO left shoulder <- BlazePose 11
+    expect(xy[2 * 9 + 1]).toBeCloseTo(lm[15]!.y * 720); // COCO left wrist <- BlazePose 15
+    expect(conf[0]).toBeCloseTo(0.98);
+    expect(conf[10]).toBeCloseTo(0.98); // right wrist
+    expect([...conf.slice(11)]).toEqual([0, 0, 0, 0, 0, 0]); // hips and legs: never confident (BlazePose extrapolates)
+    const offFrame = blazeposeToCoco(lm.map((l, i) => (i === 0 ? { ...l, x: -0.1 } : l)), 1280, 720);
+    expect(offFrame.conf[0]).toBe(0);
+  });
+
+  it("boxes the person to the frame edge and raises the top above the eyes", () => {
+    const box = poseBoxPx(seated(), 1280, 720)!;
+    expect(box[3]).toBe(720);
+    expect(box[1]).toBeLessThan(0.28 * 720);
+    expect(box[0]).toBeGreaterThan(0);
+  });
+});
+
+describe("IouTracker", () => {
+  it("keeps ids while boxes overlap, revives lost tracks, and expires them after maxLostS", () => {
+    const tr = new IouTracker(0.2, 6);
+    const a = [100, 100, 300, 500] as const, b = [700, 100, 900, 500] as const;
+    expect(tr.update([a, b], 0)).toEqual([1, 2]);
+    expect(tr.update([[110, 100, 310, 500], b], 0.1)).toEqual([1, 2]);
+    expect(tr.update([b], 0.2)).toEqual([2]); // 1 lost
+    expect(tr.update([b, a], 3)).toEqual([2, 1]); // revived
+    expect(tr.update([b], 3.1)).toEqual([2]);
+    expect(tr.update([b], 6)).toEqual([2]);
+    expect(tr.update([b, a], 9.2)).toEqual([2, 3]); // 1 unseen for 6.2 s > 6 s: expired, new id
+    expect(iou(a, a)).toBe(1);
+    expect(iou(a, b)).toBe(0);
+  });
+});
+
+describe("VisionPipeline (mocked MediaPipe)", () => {
+  it("one seated person: tracked, posture, face valence after the first odd frame, extras, lux at 1 Hz", () => {
+    const { models, calls } = fakeModels(() => ({ poses: [seated()], faces: [{ nose: [0.5, 0.3], smile: 0.3 }], hands: [] }));
+    const { pixels, calls: px } = fakePixels();
+    const obs = run(new VisionPipeline(models, pixels), 30);
+    expect(obs.every((o) => o.persons.length === 1 && o.persons[0]!.track_id === 1)).toBe(true);
+    expect(obs[0]!.persons[0]!.face_visible).toBe(false); // faces run on odd iterations
+    const p = obs[1]!.persons[0]!;
+    expect(p.face_visible).toBe(true);
+    expect(p.face_valence).toBe(0); // first sample is its own baseline
+    expect(Object.keys(p.raw!.blendshapes)).toHaveLength(52);
+    expect(p.raw!.head_yaw_deg).toBeCloseTo(0);
+    expect(Number.isFinite(p.brow_down)).toBe(true);
+    expect(obs.every((o) => o.persons[0]!.face_visible === (o.frame_seq > 0))).toBe(true); // held between face passes
+    expect(px.luma).toBe(3); // t = 100.0, 101.0, 102.0
+    expect(Number.isFinite(obs[0]!.lux)).toBe(true);
+    expect(obs[0]!.lux_quality).toBeGreaterThan(0);
+    expect(calls.pose).toHaveLength(30);
+    expect(calls.faces).toHaveLength(15);
+    expect(calls.gestures).toHaveLength(15);
+    expect(calls.crop).toBe(0);
+    expect(obs.at(-1)!.frames_decoded).toBe(30);
+    expect(obs[5]!.persons[0]!.bbox.every((v) => v >= 0 && v <= 1)).toBe(true);
+  });
+
+  it("drops the face after FACE_HOLD_S without a face pass, and tries a head crop when unmatched", () => {
+    let face = true;
+    const { models, calls } = fakeModels(() => ({
+      poses: [seated()], faces: face ? [{ nose: [0.5, 0.3], smile: 0.2 }] : [], hands: [], cropFace: null,
+    }));
+    const { pixels, calls: px } = fakePixels();
+    const pipe = new VisionPipeline(models, pixels);
+    run(pipe, 4);
+    face = false;
+    const later = run(pipe, 10, 100.4);
+    expect(later.some((o) => o.persons[0]!.face_visible)).toBe(true); // held right after
+    expect(later.at(-1)!.persons[0]!.face_visible).toBe(false);
+    expect(later.at(-1)!.persons[0]!.face_valence).toBeNaN();
+    expect(later.at(-1)!.persons[0]!.raw).toBeNull();
+    expect(calls.crop).toBeGreaterThan(0);
+    expect(px.wipe).toBe(px.crop); // every crop wiped
+    expect(FACE_HOLD_S).toBe(0.45);
+  });
+
+  it("stretches the face hold on slow devices (4 fps) but matches Python at 10 Hz", () => {
+    const { models } = fakeModels(() => ({ poses: [seated()], faces: [{ nose: [0.5, 0.3], smile: 0.2 }], hands: [] }));
+    const fast = new VisionPipeline(models, fakePixels().pixels);
+    run(fast, 20, 100, 0.1);
+    expect(fast.faceHoldS).toBeCloseTo(0.45, 9);
+    const slow = new VisionPipeline(fakeModels(() => ({ poses: [seated()], faces: [{ nose: [0.5, 0.3], smile: 0.2 }], hands: [] })).models, fakePixels().pixels);
+    const obs = run(slow, 20, 100, 0.25);
+    expect(slow.faceHoldS).toBeCloseTo(1.125, 6);
+    expect(obs.slice(2).every((o) => o.persons[0]!.face_visible)).toBe(true); // no flicker between passes
+  });
+
+  it("uses the head-crop face when the full-frame pass misses it", () => {
+    const { models } = fakeModels(() => ({ poses: [seated()], faces: [], hands: [], cropFace: 0.4 }));
+    const obs = run(new VisionPipeline(models, fakePixels().pixels), 4);
+    expect(obs[1]!.persons[0]!.face_visible).toBe(true);
+    expect(obs[1]!.persons[0]!.raw!.blendshapes["mouthSmileLeft"]).toBe(0.4);
+  });
+
+  it("counts a debounced fist for a raised hand, ignores hands in the keyboard zone", () => {
+    const scene = { wrist: 0.6, fist: 0.95 };
+    const { models } = fakeModels(() => ({
+      poses: [seated({ wristY: scene.wrist })], faces: [], hands: [{ wrist: [0.62, scene.wrist], fist: scene.fist }],
+    }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    const raised = run(pipe, 20);
+    expect(raised.reduce((n, o) => n + o.persons[0]!.fist_onsets, 0)).toBe(1);
+    expect(raised.at(-1)!.persons[0]!.fist_active).toBe(true);
+
+    scene.wrist = 0.86; // keyboard zone
+    const { models: m2 } = fakeModels(() => ({
+      poses: [seated({ wristY: 0.86 })], faces: [], hands: [{ wrist: [0.62, 0.86], fist: 0.99 }],
+    }));
+    const typing = run(new VisionPipeline(m2, fakePixels().pixels), 20);
+    expect(typing.reduce((n, o) => n + o.persons[0]!.fist_onsets, 0)).toBe(0);
+  });
+
+  it("two people: ids by position, each face goes to its own person, small people ignored", () => {
+    const { models } = fakeModels(() => ({
+      poses: [seated({ dx: 0.25, scale: 0.8 }), seated({ dx: -0.25, scale: 0.8 }), seated({ dx: 0, scale: 0.15 })],
+      faces: [{ nose: [0.75, 0.26], smile: 0.6 }, { nose: [0.25, 0.26], smile: 0.0 }],
+      hands: [],
+    }));
+    const obs = run(new VisionPipeline(models, fakePixels().pixels), 6);
+    const last = obs.at(-1)!;
+    expect(last.persons.map((p) => p.track_id)).toEqual([1, 2]);
+    const right = last.persons.find((p) => p.bbox[0] > 0.5)!;
+    const left = last.persons.find((p) => p.bbox[0] < 0.5)!;
+    expect(right.raw!.blendshapes["mouthSmileLeft"]).toBe(0.6);
+    expect(left.raw!.blendshapes["mouthSmileLeft"]).toBe(0.0);
+  });
+
+  it("sends strictly increasing timestamps to each VIDEO-mode task even if t repeats", () => {
+    const { models, calls } = fakeModels(() => ({ poses: [], faces: [], hands: [] }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    for (let i = 0; i < 6; i++) pipe.process(FRAME, 5.0, 0, i);
+    for (const ts of [calls.pose, calls.faces, calls.gestures]) {
+      for (let i = 1; i < ts.length; i++) expect(ts[i]!).toBeGreaterThan(ts[i - 1]!);
+    }
+  });
+});
+
+describe("AudioPipeline (mocked YAMNet)", () => {
+  it("Leq in dB SPL, YAMNet on the last 0.975 s, debounced laughter, speech passthrough", () => {
+    const seen: number[] = [];
+    const laugh = [0, 0.3, 0.4, 0, 0, 0, 0, 0, 0.5];
+    let i = 0;
+    const classify = vi.fn((samples: Float32Array) => {
+      seen.push(samples.length);
+      const l = laugh[i++] ?? 0;
+      return [{
+        timestampMs: 0,
+        classifications: [{ headIndex: 0, headName: "", categories: [
+          { index: 0, categoryName: "Speech", displayName: "", score: 0.8 },
+          { index: 13, categoryName: "Laughter", displayName: "", score: l },
+        ] }],
+      }];
+    });
+    const pipe = new AudioPipeline({ classify });
+    const block = new Float32Array(16000).fill(0.1);
+    const out = laugh.map((_, k) => pipe.process(block, 10 + k, 1.7e9 + k, k));
+    expect(seen.every((n) => n === YAMNET_WINDOW)).toBe(true);
+    expect(out[0]!.db_spl).toBeCloseTo(10 * Math.log10(0.01) + 94, 4);
+    expect(out[0]!.rms_power).toBeCloseTo(0.01, 6);
+    expect(out[0]!.speech_prob).toBeCloseTo(0.8);
+    expect(out.map((o) => o.laughter_onsets)).toEqual([0, 1, 0, 0, 0, 0, 0, 0, 1]);
+    expect(out.every((o) => o.compliment_hits === 0)).toBe(true);
+  });
+});

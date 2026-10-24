@@ -67,6 +67,12 @@ export async function loadVisionModels(
   const mp = await import("@mediapipe/tasks-vision");
   // useModule: the ES-module WASM loader, for module workers (no importScripts there).
   const fileset = await mp.FilesetResolver.forVisionTasks(join(assetBase, "wasm"), opts.useModule ?? false);
+  // Every task instantiates its own WASM module through a global ModuleFactory that the loader script defines and
+  // the task then clears. importScripts / <script> re-run the loader each time, but an ES-module import runs only
+  // once per URL, so in a module worker the second task found no factory: give each task its own loader URL.
+  let nTask = 0;
+  const filesetFor = () =>
+    opts.useModule ? { ...fileset, wasmLoaderPath: `${fileset.wasmLoaderPath}?task=${nTask++}` } : fileset;
   // Fetch each model once (the face model serves two landmarkers) and hand MediaPipe the bytes.
   const [faceBuf, poseBuf, gestureBuf] = await Promise.all(
     [MODEL.face, MODEL.pose, MODEL.gesture].map((file) => fetchModel(join(assetBase, file))),
@@ -76,24 +82,24 @@ export async function loadVisionModels(
     const base = (file: string) => ({ modelAssetBuffer: buffers[file]!, delegate });
     const created: { close(): void }[] = [];
     try {
-      const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(fileset, {
+      const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(filesetFor(), {
         baseOptions: base(MODEL.pose), runningMode: "VIDEO", numPoses: opts.maxPeople ?? 3,
         // The Python edge's YOLO person threshold (conf=0.4). MediaPipe's default 0.5 found only one of the two
         // people in the e2e two-person scene; 0.4 finds both.
         minPoseDetectionConfidence: 0.4, minPosePresenceConfidence: 0.4,
       });
       created.push(pose);
-      const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(fileset, {
+      const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
         baseOptions: base(MODEL.face), runningMode: "VIDEO", numFaces: 3, outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
       created.push(faces);
-      const faceCrop: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(fileset, {
+      const faceCrop: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
         baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 1, outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
       created.push(faceCrop);
-      const gestures: GestureRecognizer = await mp.GestureRecognizer.createFromOptions(fileset, {
+      const gestures: GestureRecognizer = await mp.GestureRecognizer.createFromOptions(filesetFor(), {
         baseOptions: base(MODEL.gesture), runningMode: "VIDEO", numHands: 8,
         cannedGesturesClassifierOptions: { maxResults: 8 },
       });
