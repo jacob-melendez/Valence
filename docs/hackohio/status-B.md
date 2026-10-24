@@ -107,3 +107,31 @@ Next: real self-report taps once Cloud A's browser-engine glue registers the fea
 `valence.eval.emotion_capture` on browser recordings to measure real cue spreads against the simulator.
 
 Blockers: none (self-report capture depends on Cloud A's glue, in progress).
+
+### 16:38 ET — Docs re-verified; first real browser cues
+
+Done:
+- **Second verification pass** (24 agents) of `EMOTION_FEATURES.md` against the code and model card §9 against
+  the artifacts: 6 confirmed and 3 split findings, all wording or number fixes (`4da1b42`, `b2f138a`). The card now
+  states:
+  - the web port's parity exactly: bit-identical raw scores and regressors, p within 3 ulp, the map position
+    within 4e-16, and the 600-tick tour within 1e-9 with identical labels;
+  - that the shared negative region is told apart mostly by face cues: face-only F1 0.50–0.72 against 0.40–0.48
+    for context only.
+- **Real browser cues** (`ab05fa5`): Cloud C's two CC BY 4.0 clips, run through the real in-browser perception
+  (`data/browser/*.jsonl`), replayed with `valence.eval.emotion_capture --ref Focused`. The results are in
+  `artifacts/emotion/browser_captures.json` and model card §9.6.
+  - On neutral faces, the per-tick cues are much steadier than simulated. Smile and frown sit at about 0; brow
+    lowering stays near 0 for one person and reaches 0.16 at p90 for the other; every tick-to-tick step is smaller
+    than simulated. So the simulator's within-state noise is pessimistic.
+  - Between-state differences are still unmeasured. The per-state cue means are the untested part.
+  - The map reads Focused 93%, and Focused/Calm 50/50, with no negative state.
+  - Blinks: about 9–10/min at 6.9 face fps.
+
+Numbers unchanged: `emotion-v1@006a8d7d`, macro-F1 0.681 (CI 0.667–0.695), face only 0.616, ECE 0.007. The pitch
+draft quotes them correctly.
+
+Next: self-report taps (the capture works now; it needs a person). A labeled real check of the cues, ideally a short
+acted session per state from the user. Any fixes the coordinator reports.
+
+Blockers: none.
