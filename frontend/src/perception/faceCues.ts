@@ -34,7 +34,7 @@ function avg(b: Blendshapes, stem: string): number {
   const vals: number[] = [];
   for (const k of [`${stem}Left`, `${stem}Right`]) {
     const v = b[k];
-    if (v !== undefined && v !== null) vals.push(Number(v));
+    if (v !== undefined && v !== null && !Number.isNaN(Number(v))) vals.push(Number(v)); // a NaN side is missing
   }
   return vals.length ? vals.reduce((a, c) => a + c, 0) / vals.length : NaN;
 }
