@@ -74,6 +74,39 @@ def corpus_stats(pred: EmotionPredictor) -> dict:
     return {"pos": pos, "share": share, "top": top, "confused_top": conf}
 
 
+def self_report_block(model_id: str) -> list[str]:
+    """Real self-report taps, if evaluated (artifacts/emotion/self_report.json from valence.eval.self_report --out)."""
+    path = ART / "self_report.json"
+    if not path.exists():
+        return ["  **Status: no real taps yet**; the evaluator has only run on a synthetic simulator fixture",
+                "  (`tests/test_emotion_models.py`), whose numbers say nothing about people."]
+    r = json.loads(path.read_text())
+    if r.get("model") != model_id:
+        return [f"  **Status:** `self_report.json` was scored with `{r.get('model')}`, not this model: re-run the evaluator."]
+    o = r["overall"]
+    people = r["per_person"]
+    lines = [f"  **Real taps: {r['n_taps']} from {len(people)} person-session(s)** ({r.get('n_warm_taps', '?')} with ≥ 1 min of",
+             "  window; `self_report.json`" + (", `figs/self_report.png`" if (ART / "figs" / "self_report.png").exists() else "")
+             + "). Self-reports are one person's own reading of a 2-D grid, not ground truth:", "",
+             "  | Predictor | Valence MAE / CCC | Arousal MAE / CCC | Quadrant (n) |", "  |---|---|---|---|"]
+
+    def row(name: str, b: dict) -> str:
+        def c(v):
+            return "—" if v is None else f"{v:.2f}"
+        q = "—" if b.get("quadrant_agreement") is None else f"{b['quadrant_agreement']:.2f} ({b.get('quadrant_n')})"
+        return (f"  | {name} | {b['valence_mae']:.3f} / {c(b['valence_ccc'])} | {b['arousal_mae']:.3f} / "
+                f"{c(b['arousal_ccc'])} | {q} |")
+
+    lines += [row("**Map position (served)**", o["map_position"]), row("Regressors", o["regressors"]),
+              row("Constant (0, 0)", o["constant_zero"]), row("Mean of the other taps (leave-one-out)",
+                                                              o["constant_mean_tap_loo"])]
+    lines += ["", f"  Nearest-anchor agreement {o['nearest_anchor_agreement']:.2f}; predicted states: "
+              + ", ".join(f"{NICE.get(s, s)} {n}" for s, n in r.get("predicted_states", {}).items()) + "."]
+    if r.get("problems"):
+        lines.append(f"  {len(r['problems'])} line(s) skipped or flagged (see `problems`).")
+    return lines + [""]
+
+
 def browser_block() -> list[str]:
     """Real browser-perception recordings (data/browser), if evaluated: cue spreads vs simulated Focused."""
     path = ART / "browser_captures.json"
@@ -345,8 +378,7 @@ def render() -> str:
         "  the console's capture (format and protocol: EMOTION_FEATURES.md §6; features and taps only, never media): MAE,",
         "  CCC and quadrant agreement for the map position, the regressors, a constant (0, 0) guess and the leave-one-out",
         "  mean tap, per person and for taps with a warm window; duplicate taps from repeated downloads are skipped.",
-        "  **Status: no real taps yet**; the evaluator has only run on a synthetic simulator fixture",
-        "  (`tests/test_emotion_models.py`), whose numbers say nothing about people.",
+    ] + self_report_block(mid) + [
         "- **Existing real captures** (one person, one desk, recorded before the event, so **without the new face cues**:",
         "  the 31 cue features are NaN, blink rates included, and the model runs on context + face valence;",
         f"  `python -m valence.eval.emotion_capture`, `real_captures.json`). Time of day is fixed at 12:00: recordings carry",
