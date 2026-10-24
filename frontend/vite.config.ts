@@ -6,6 +6,8 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 // @ts-expect-error plain .mjs build helper without type declarations
+import { copyModelFiles, modelFilesPlugin } from "./scripts/model-files.mjs";
+// @ts-expect-error plain .mjs build helper without type declarations
 import { writeSecurityHeaders } from "./scripts/security-headers.mjs";
 
 // Valence Web is a static site: the console (and the in-browser engine) run entirely client-side, so there is no
@@ -20,6 +22,8 @@ export default defineConfig({
   },
   vite: {
     plugins: [
+      // The engine's model files come from ../artifacts (served at /models/ in dev, copied into the build).
+      modelFilesPlugin(),
       {
         name: "valence-security-headers",
         apply: "build",
@@ -28,7 +32,10 @@ export default defineConfig({
         buildApp: {
           order: "post",
           async handler() {
-            process.once("exit", () => writeSecurityHeaders("dist/client"));
+            process.once("exit", () => {
+              copyModelFiles("dist/client");
+              writeSecurityHeaders("dist/client");
+            });
           },
         },
       },
