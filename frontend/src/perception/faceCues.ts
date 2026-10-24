@@ -3,7 +3,7 @@
  * reference for parity: raw channels from the blendshapes and the facial transformation matrix, a per-person
  * neutral baseline (first 20 s of visible face) and a blink detector. Only scalars; landmarks are never touched.
  */
-import { median } from "./faceValence";
+import { median, pyMax, pyMin } from "./faceValence";
 
 export const CUE_CALIBRATION_S = 20.0;
 export const MAX_GAP_S = 1.0;
@@ -39,7 +39,8 @@ function avg(b: Blendshapes, stem: string): number {
   return vals.length ? vals.reduce((a, c) => a + c, 0) / vals.length : NaN;
 }
 
-const deg = (rad: number) => (rad * 180) / Math.PI;
+/** math.degrees: one multiplication by 180/pi (CPython's radToDeg), not (rad * 180) / pi, which rounds differently. */
+const deg = (rad: number) => rad * (180.0 / Math.PI);
 
 /** Column-major (MediaPipe's packing) unless the translation sits in the last row. */
 const columnMajor = (d: ArrayLike<number>) => Math.abs(d[14]!) >= Math.abs(d[11]!);
@@ -73,9 +74,20 @@ export function rawCues(blendshapes: Blendshapes, matrix: ArrayLike<number> | nu
   };
 }
 
-const clip = (v: number, lo: number, hi: number) => (Number.isNaN(v) ? v : Math.max(lo, Math.min(hi, v)));
-/** Python's (v + 180) % 360 - 180 (floored modulo). */
-const wrapDeg = (v: number) => (Number.isNaN(v) ? v : ((((v + 180) % 360) + 360) % 360) - 180);
+const clip = (v: number, lo: number, hi: number) => (Number.isNaN(v) ? v : pyMax(lo, pyMin(hi, v)));
+
+/**
+ * Python's float `a % b` as CPython computes it: fmod, then add `b` once if the signs differ (one rounding, so a tiny
+ * negative remainder becomes `b` itself, e.g. -2.8e-14 % 360 == 360.0), and a zero remainder takes the sign of `b`.
+ */
+function pyMod(a: number, b: number): number {
+  const mod = a % b;
+  if (mod !== 0) return b < 0 !== mod < 0 ? mod + b : mod; // signs differ: add b once
+  return b < 0 ? -0 : 0;
+}
+
+/** Python's (v + 180) % 360 - 180. */
+const wrapDeg = (v: number) => (Number.isNaN(v) ? v : pyMod(v + 180.0, 360.0) - 180.0);
 
 const emptySamples = (): Record<RawChannel, number[]> => ({
   brow: [], closure: [], frown: [], smile: [], yaw: [], pitch: [],
@@ -104,7 +116,7 @@ export class FaceCueTracker {
     const visible = raw !== null && !RAW_CHANNELS.every((k) => Number.isNaN(raw[k]));
     const t = tMs / 1000.0;
     if (visible && this.prevVisible && this.prevT !== null) {
-      this.visibleS += Math.min(Math.max(t - this.prevT, 0.0), MAX_GAP_S);
+      this.visibleS += pyMin(pyMax(t - this.prevT, 0.0), MAX_GAP_S);
     }
     this.prevT = t;
     this.prevVisible = visible;

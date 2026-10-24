@@ -65,6 +65,16 @@ export function valenceRaw(bs: Readonly<Record<string, number>>): number {
   return seen ? total : NaN;
 }
 
+/** Python's min(a, b): `a` unless `b < a` (so a NaN first argument wins and a NaN second one loses, unlike Math.min). */
+export function pyMin(a: number, b: number): number {
+  return b < a ? b : a;
+}
+
+/** Python's max(a, b): `a` unless `b > a`. */
+export function pyMax(a: number, b: number): number {
+  return b > a ? b : a;
+}
+
 /** statistics.median: the middle value, or the mean of the two middle values. */
 export function median(values: readonly number[]): number {
   const s = [...values].sort((a, b) => a - b);
@@ -113,7 +123,7 @@ export class FaceValenceCalibrator {
       this.prevT = null;
     } else {
       if (visible && this.prevVisible && this.prevT !== null) {
-        this.visibleS += Math.min(Math.max(t - this.prevT, 0.0), this.maxGapS);
+        this.visibleS += pyMin(pyMax(t - this.prevT, 0.0), this.maxGapS);
       }
       this.prevT = t;
     }
@@ -127,7 +137,7 @@ export class FaceValenceCalibrator {
         this.samples = [];
       }
     }
-    return Math.max(-1.0, Math.min(1.0, Math.tanh(this.gain * (vRaw - this.baseline))));
+    return pyMax(-1.0, pyMin(1.0, Math.tanh(this.gain * (vRaw - this.baseline))));
   }
 }
 
@@ -135,7 +145,8 @@ export class FaceValenceCalibrator {
  * Match each face (nose-tip landmark, px) to a tracked person (pose nose, px): optimal one-to-one assignment on
  * Euclidean distance, gated at `maxDistFrac * frameW`. Gated pairs cost more than any full set of valid pairs, so
  * the solver first maximises the number of valid matches, then minimises distance. Person noses below `minConf`
- * are ignored. Returns a person id or null per face.
+ * are ignored. Returns a person id or null per face. Ties break as in scipy (assign.ts is a port of its solver);
+ * like Python, it throws only in the degenerate case of an infinite gate with no complete matching.
  */
 export function assignFaces(
   facePointsPx: ReadonlyArray<readonly [number, number]>,
@@ -150,10 +161,16 @@ export function assignFaces(
     .map(([pid]) => pid);
   if (!out.length || !pids.length) return out;
   const gate = maxDistFrac * frameW;
-  const dist = facePointsPx.map(([fx, fy]) => pids.map((pid) => {
-    const [nx, ny] = personNosesPx.get(pid)!;
-    return Math.hypot(fx - nx, fy - ny);
-  }));
+  // np.linalg.norm(axis=2) is sqrt(dx*dx + dy*dy), bit for bit; Math.hypot rounds differently (a pair right at the
+  // gate could flip) and returns Infinity rather than NaN for (Infinity, NaN).
+  const dist = facePointsPx.map(([fx, fy]) =>
+    pids.map((pid) => {
+      const [nx, ny] = personNosesPx.get(pid)!;
+      const dx = fx - nx;
+      const dy = fy - ny;
+      return Math.sqrt(dx * dx + dy * dy);
+    }),
+  );
   const valid = dist.map((row) => row.map((d) => Number.isFinite(d) && d <= gate));
   if (!valid.some((row) => row.some(Boolean))) return out;
   const blocked = gate * (Math.min(dist.length, pids.length) + 1) + 1.0;
