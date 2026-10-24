@@ -123,6 +123,47 @@ The changes are additive. Existing corpora are hash-identical to the pre-event s
 - B's face cues in `PersonObs` (`edee3b6`) and the debouncer port (`c834be6`).
 - MediaPipe Tasks Web is pinned to 0.10.35. Every 1.x release bundles a usage logger that posts to Google.
 
+### 14:15 — Engine modules at parity, emotion model trained and ported, real perception running
+
+**Cloud A (web):** the engine port (golden exporter → modules → served predictor → runtime) is past its module and
+review stages. **326 engine tests pass** against fixtures exported from the Python engine. Highlights:
+- **Numerics:** numpy's pairwise sum and nan statistics, plus CPython's `round`, float formatting and `repr`. Both
+  are bit-exact on more than 2000 reference cases.
+- **Features:** the 123 features are bit-identical to Python at the scenario checkpoints.
+- **LightGBM:** raw scores are bit-identical. TreeSHAP weights paths by row counts, as LightGBM does.
+- **Audit:** the audit chain reproduces Python's `json.dumps` and SHA-256 hashes.
+- **The served predictor and smoother** are ported. The runtime stage is running.
+- **The emotion-v1 port** is a second workflow (`8e62e64`, `a045957`):
+  - the 31 window features are bit-identical (1454 checkpoints, plus a fuzz of 2196 windows);
+  - the 10-state model's raw scores are bit-identical to LightGBM through both of Cloud B's model formats;
+  - about 0.6 ms per prediction;
+  - an adversarial review found and fixed 5 divergences, chiefly missing values read as 0 and the Affect
+    rounding.
+- **Deploy:** cache headers for MediaPipe and the models. The full `npm run build` with Cloud C's assets (72 MiB)
+  passes the static check.
+
+**Cloud B (emotion):** the 10-state classifier and the valence/arousal regressors are trained and exported
+(`80ac70e`, `emotion-v1@378fa16c`). Results on simulated data, 90 held-out sessions:
+
+| Model | Macro-F1 | ECE | Valence MAE / CCC | Arousal MAE / CCC |
+|---|---|---|---|---|
+| Full (served) | 0.688 | 0.007 | 0.176 / 0.78 | 0.238 / 0.72 |
+| Face only | 0.621 | — | — | — |
+| Context only | 0.425 | — | — | — |
+
+- The weakest state is Confused (F1 0.48).
+- The map position is the probability-weighted anchors, which beat the regressors on both axes.
+- A spec review (`140d7e5`) changed the blink-rate rule: cue-less ticks are now missing. The rule is ported here.
+
+**Cloud C (perception):** the real MediaPipe pipeline runs end to end in headless Chromium, in a Web Worker
+(`51ab99b`).
+- Faces carry 52 blendshapes, and the observations follow the Python edge's semantics.
+- In every scenario: 0 off-origin requests and 0 CSP violations. Throughput is about 8.5 fps on the CPU.
+- Pose motion was found to differ from YOLO: BlazePose jitter reads about 0.46 sw/s on a still scene. After a
+  side-by-side study, a One Euro filter with shoulder-only motion brings this to about 0.13
+  (`8cc9899`/`9837d71`).
+- Slump detection with BlazePose stays an open item for the real-camera check.
+
 ## Generated from git
 
 <!-- hacklog:start -->
