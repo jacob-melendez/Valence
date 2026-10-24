@@ -24,7 +24,11 @@ const ROOT = path.resolve(opt("--dir", "dist/client"));
 const PAGE = opt("--path", "/");
 const WAIT_MS = Number(opt("--wait", "6000"));
 const SHOT = opt("--screenshot", null);
-const FAKE = args.includes("--fake-media");
+// --fake-video file.y4m / --fake-audio file.wav: feed the fake camera / mic from files (e.g. frontend/e2e/.media from
+// e2e/make_media.py, a real face and speech) instead of Chromium's generated test pattern and beep.
+const FAKE_VIDEO = opt("--fake-video", null);
+const FAKE_AUDIO = opt("--fake-audio", null);
+const FAKE = args.includes("--fake-media") || Boolean(FAKE_VIDEO || FAKE_AUDIO);
 // --expect "a|b": each text must be on the page at the end (e.g. a person card once predictions flow).
 const EXPECT = (opt("--expect", "") ?? "").split("|").filter(Boolean);
 
@@ -78,7 +82,15 @@ await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 const browser = await chromium.launch({
-  args: FAKE ? ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] : [],
+  args: FAKE
+    ? [
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        ...(FAKE_VIDEO ? [`--use-file-for-fake-video-capture=${path.resolve(FAKE_VIDEO)}`] : []),
+        ...(FAKE_AUDIO ? [`--use-file-for-fake-audio-capture=${path.resolve(FAKE_AUDIO)}`] : []),
+        "--autoplay-policy=no-user-gesture-required",
+      ]
+    : [],
 });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 if (FAKE) await context.grantPermissions(["camera", "microphone"], { origin });

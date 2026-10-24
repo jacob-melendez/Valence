@@ -41,3 +41,16 @@ Nobody is recorded. The fake devices play files derived from:
 
 The scenes (`.media/*.y4m`, 1280x720, 10 fps, 3 s loops) place the portrait in a plain room: one person drifting a
 few pixels, two people side by side (the right one mirrored), and the one-person scene rotated 15 degrees either way.
+
+## The whole console on the test media
+
+`scripts/check-static.mjs` (the deploy check) can feed the same files to the production build:
+
+```
+npm run build && node scripts/check-static.mjs --path "/?source=browser" --fake-video e2e/.media/one.y4m \
+  --fake-audio e2e/.media/speech.wav --wait 45000 --expect "Person #1" --full --screenshot out.png
+```
+
+`console-in-browser.jpg` is that run (14:55 ET, Oct 24): the portrait tracked as Person #1, a prediction with its
+layers and template text, the emotion map, and the governance panel with frames decoded 236 / purged 235 (one in
+flight), 428 audio blocks purged, 0 violations; 0 off-origin requests and 0 CSP violations.
