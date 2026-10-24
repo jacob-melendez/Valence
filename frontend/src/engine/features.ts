@@ -228,7 +228,12 @@ export function featureSet(name: string): readonly string[] {
 
 /** `x[[FEATURE_INDEX[n] for n in names]]`: the columns a model reads, in the model's order. */
 export function selectFeatures(x: ArrayLike<number>, names: readonly string[]): Float64Array {
-  return Float64Array.from(names, (n) => x[featureIndex(n)] as number);
+  return Float64Array.from(names, (n) => {
+    const i = featureIndex(n);
+    // numpy raises IndexError; a typed array would read undefined as NaN
+    if (i >= x.length) throw new RangeError(`index ${i} is out of bounds for size ${x.length}`);
+    return x[i] as number;
+  });
 }
 
 // ---------- Channel arrays ----------
@@ -510,7 +515,12 @@ function continuous(x: Float64Array): number[] {
   const out = [now];
   for (const w of WIN_NAMES) {
     const seg = tail(x, WIN[w]);
-    out.push(nanstat(nanmean, seg), nanstat(nanstd, seg), slopePerMin(seg), nanstat(fmaxReduce, seg));
+    out.push(
+      nanstat(nanmean, seg),
+      nanstat(nanstd, seg),
+      slopePerMin(seg),
+      nanstat(fmaxReduce, seg),
+    );
   }
   const m1 = out[1] as number;
   const m15 = out[9] as number;

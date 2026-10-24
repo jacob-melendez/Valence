@@ -3,7 +3,8 @@
  * (valence/explain/explainer.py), plus the confidence band (valence/explain/narrator_client.py:20).
  *
  * Rounding is Python's round() on floats (num.pyRound: exact binary value, ties to even), and every sort is
- * stable like Python's sorted(..., reverse=True), so drivers with equal |shap| keep their input order.
+ * CPython's sorted(..., reverse=True) (pySortedDesc), so drivers with equal |shap| keep their input order and
+ * even NaN keys land where Python puts them.
  */
 import {
   LAYERS,
@@ -37,13 +38,74 @@ function getOf(d: FloatDict, key: string): number | undefined {
   return Object.hasOwn(rec, key) ? rec[key] : undefined;
 }
 
-/** Stable sort by |shap| descending: Python `sorted(xs, key=lambda d: abs(d.shap), reverse=True)`. */
+/** Python `slice[:n]` bound: an int (negative counts from the end), else TypeError like CPython. */
+function sliceBound(n: number, what: string): number {
+  if (!Number.isInteger(n))
+    throw new TypeError(`slice indices must be integers or None (${what}=${n})`);
+  return n;
+}
+
+// ---------- Python sorted(..., reverse=True) ----------
+
+/**
+ * Python `sorted(xs, key=key, reverse=True)` (CPython 3.12 Objects/listobject.c list_sort_impl).
+ *
+ * Why not Array.prototype.sort: on totally ordered keys any stable sort gives Python's answer, but a NaN key
+ * (a NaN SHAP value, or a layer total of inf + -inf) compares false both ways, and the order then depends on
+ * the exact algorithm. CPython reverses the list, sorts ascending using `<` only, and reverses back. Under 64
+ * items the sort is one natural run (count_run) extended by binary insertion (binarysort), ported here step for
+ * step, so it agrees in every JS engine. From 64 items on CPython merges runs with galloping, which is not
+ * ported: there Array.prototype.sort runs on the reversed list with an ascending `<` comparator. V8's sort is
+ * itself a port of CPython's timsort and matched Python on every NaN-laden 64-100 item list tried; other
+ * engines are exact there only for NaN-free keys (served SHAP values and layer totals are always finite).
+ */
+function pySortedDesc<T>(xs: readonly T[], key: (x: T) => number): T[] {
+  const items = [...xs].reverse();
+  const keys = items.map(key);
+  const n = items.length;
+  const k = (i: number): number => keys[i] as number;
+  if (n >= 64) {
+    const order = items.map((_, i) => i);
+    order.sort((a, b) => (k(a) < k(b) ? -1 : k(b) < k(a) ? 1 : 0)); // stable, ascending
+    return order.map((i) => items[i] as T).reverse();
+  }
+  if (n >= 2) {
+    // count_run: the longest prefix that is strictly descending, or else non-descending
+    let run = 2;
+    const descending = k(1) < k(0);
+    if (descending) while (run < n && k(run) < k(run - 1)) run++;
+    else while (run < n && !(k(run) < k(run - 1))) run++;
+    if (descending) {
+      for (let i = 0, j = run - 1; i < j; i++, j--) {
+        [keys[i], keys[j]] = [k(j), k(i)];
+        [items[i], items[j]] = [items[j] as T, items[i] as T];
+      }
+    }
+    // binarysort: insert each later item after every key it is not less than (stable)
+    for (let start = run; start < n; start++) {
+      const pivot = k(start);
+      const item = items[start] as T;
+      let l = 0;
+      let r = start;
+      do {
+        const p = l + ((r - l) >> 1);
+        if (pivot < k(p)) r = p;
+        else l = p + 1;
+      } while (l < r);
+      for (let p = start; p > l; p--) {
+        keys[p] = k(p - 1);
+        items[p] = items[p - 1] as T;
+      }
+      keys[l] = pivot;
+      items[l] = item;
+    }
+  }
+  return items.reverse();
+}
+
+/** Python `sorted(xs, key=lambda d: abs(d.shap), reverse=True)`. */
 function byAbsShapDesc<T extends { shap: number }>(xs: readonly T[]): T[] {
-  return [...xs].sort((a, b) => {
-    const ka = Math.abs(a.shap);
-    const kb = Math.abs(b.shap);
-    return ka > kb ? -1 : ka < kb ? 1 : 0;
-  });
+  return pySortedDesc(xs, (d) => Math.abs(d.shap));
 }
 
 // ---------- Layers ----------
@@ -111,12 +173,11 @@ export function buildLayers(
       const ch = channelOf(drv.feature);
       if (!best.has(ch)) best.set(ch, drv);
     }
-    const drivers = [...best.values()].slice(0, driversPerLayer);
+    // checked here, not up front: Python only evaluates the slice when some layer has drivers
+    const drivers = [...best.values()].slice(0, sliceBound(driversPerLayer, "drivers_per_layer"));
     layers.push({ name, contribution: pyRound(totals.get(name) ?? 0.0, 4), drivers });
   }
-  return [...layers].sort((a, b) =>
-    a.contribution > b.contribution ? -1 : a.contribution < b.contribution ? 1 : 0,
-  );
+  return pySortedDesc(layers, (layer) => layer.contribution);
 }
 
 /** Sensor channel of a feature name, for the one-driver-per-channel rule (valence/explain/explainer.py:58). */
@@ -135,10 +196,11 @@ export function topDrivers(
   k = 5,
   effect: "supports" | "opposes" | null = "supports",
 ): Driver[] {
+  const n = sliceBound(k, "k");
   const drivers = layers.flatMap((layer) =>
     layer.drivers.filter((d) => effect === null || d.effect === effect),
   );
-  return byAbsShapDesc(drivers).slice(0, k);
+  return byAbsShapDesc(drivers).slice(0, n);
 }
 
 // ---------- Fact sheet ----------
@@ -167,10 +229,18 @@ export interface FactSheetArgs {
   ood_features: string[];
 }
 
-/** What the narrator and the template fallback read (valence/explain/explainer.py:71 build_fact_sheet). */
+/**
+ * What the narrator and the template fallback read (valence/explain/explainer.py:71 build_fact_sheet).
+ *
+ * Like the pydantic model it fills: `layers` and `ood_features` are fresh lists holding the caller's items
+ * (pydantic copies a list on validation, so appending to the caller's list later does not reach the sheet),
+ * and a non-integral `n_people` is rejected (pydantic `int` accepts 2.0 but raises on 2.5, NaN and inf).
+ */
 export function buildFactSheet(a: FactSheetArgs): FactSheet {
-  const probabilities: Record<string, number> = {};
-  for (const [k, v] of entriesOf(a.probabilities)) probabilities[k] = pyRound(v, 4);
+  // fromEntries defines own keys, so even a "__proto__" state name stays a plain key, as in the Python dict
+  const probabilities: Record<string, number> = Object.fromEntries(
+    Array.from(entriesOf(a.probabilities), ([k, v]) => [k, pyRound(v, 4)] as const),
+  );
   const faceOnly: FaceOnly = {
     label: a.face_visible ? a.face_only_label : null,
     confidence:
@@ -182,22 +252,25 @@ export function buildFactSheet(a: FactSheetArgs): FactSheet {
   const dataQuality: DataQuality = {
     face_visible_frac: pyRound(a.face_visible_frac, 3),
     lux: a.lux === null ? null : pyRound(a.lux, 1),
-    ood_features: a.ood_features,
+    ood_features: [...a.ood_features],
   };
+  const confidenceDisplay = `${BigInt(pyIntRound(100 * a.confidence))}%`; // f"{round(100 * confidence)}%"
+  if (!Number.isInteger(a.n_people))
+    throw new TypeError(`FactSheet.n_people: input should be a valid integer, got ${a.n_people}`);
   return {
     event_id: a.event_id,
     person: a.person,
     label: a.label,
     label_display: a.label_display,
     confidence: pyRound(a.confidence, 4),
-    confidence_display: `${BigInt(pyIntRound(100 * a.confidence))}%`, // f"{round(100 * confidence)}%"
+    confidence_display: confidenceDisplay,
     probabilities,
     window_fill_min: pyRound(a.window_fill_min, 1),
-    n_people: a.n_people,
+    n_people: a.n_people + 0, // a Python int has no -0
     face_only: faceOnly,
     face_visible: a.face_visible,
     mask_override: a.mask_override,
-    layers: a.layers,
+    layers: [...a.layers],
     data_quality: dataQuality,
   };
 }

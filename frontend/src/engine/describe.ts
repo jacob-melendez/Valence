@@ -46,8 +46,10 @@ export const WINDOWS: Readonly<Record<string, string>> = {
 /**
  * valence/explain/describe.py:17. Same backtracking semantics in JS: the lazy stat grows until the optional
  * window suffix and the end anchor both match (`fist_since_s` -> stat "since_s", `db_mean_15m` -> "mean"/"15m").
+ * Python's `$` (no MULTILINE) also matches just before one trailing "\n", so `db_mean_5m\n` parses as
+ * db/mean/5m there; JS's `$` only matches at the very end, hence the `(?=\n?$)` lookahead.
  */
-const NAME = /^([a-z]+)_([a-z0-9_]+?)(?:_(1m|5m|15m))?$/;
+const NAME = /^([a-z]+)_([a-z0-9_]+?)(?:_(1m|5m|15m))?(?=\n?$)/;
 
 // ---------- Python integer helpers ----------
 

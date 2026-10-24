@@ -420,7 +420,11 @@ describe("inputs beyond the golden fixtures", () => {
     // Python: compute(person, room) with these ambient_db series; '-0' is -0.0
     const cases: [string, number[], number[]][] = [
       ["first zero wins below 8 values", [-0.0, 0.0], [-0, -0, -0, -0]],
-      ["one 8-lane vector replaces the seed", [0.0, ...Array<number>(8).fill(-0.0)], [-0, -0, -0, -0]],
+      [
+        "one 8-lane vector replaces the seed",
+        [0.0, ...Array<number>(8).fill(-0.0)],
+        [-0, -0, -0, -0],
+      ],
       [
         "150 ticks of zeros and NaNs",
         Array.from({ length: 150 }, (_v, i) => (i % 7 === 0 ? NaN : i % 3 === 0 ? 0.0 : -0.0)),
@@ -435,15 +439,23 @@ describe("inputs beyond the golden fixtures", () => {
     for (const [label, db, want] of cases) {
       const x = compute(plainPerson(db.length), plainRoom(db));
       const got = ["db_max_1m", "db_max_5m", "db_max_15m", "db_room_max_5m"].map((n) => at(x, n));
-      got.forEach((g, i) => expect(Object.is(g, want[i]), `${label}: ${g} vs ${want[i]}`).toBe(true));
+      got.forEach((g, i) =>
+        expect(Object.is(g, want[i]), `${label}: ${g} vs ${want[i]}`).toBe(true),
+      );
     }
   });
 
   it("raises where math.sin and math.log2 raise instead of returning NaN or -Infinity", () => {
     // Python: ValueError('math domain error') for each of these
-    expect(() => compute(plainPerson(3, 1e308), plainRoom([50, 50, 50]))).toThrow("math domain error");
-    expect(() => compute(plainPerson(3, -2.9e307), plainRoom([50, 50, 50]))).toThrow("math domain error");
-    expect(() => compute(plainPerson(3, Infinity), plainRoom([50, 50, 50]))).toThrow("math domain error");
+    expect(() => compute(plainPerson(3, 1e308), plainRoom([50, 50, 50]))).toThrow(
+      "math domain error",
+    );
+    expect(() => compute(plainPerson(3, -2.9e307), plainRoom([50, 50, 50]))).toThrow(
+      "math domain error",
+    );
+    expect(() => compute(plainPerson(3, Infinity), plainRoom([50, 50, 50]))).toThrow(
+      "math domain error",
+    );
     for (const [lux, base] of [
       [320.0, Infinity], // 320 / inf == 0
       [5e-324, 2.0], // underflows to 0
@@ -502,7 +514,9 @@ describe("inputs beyond the golden fixtures", () => {
     for (const bad of [-1, 2.5]) {
       const w = new RollingWindow(bad);
       expect(w.people()).toEqual([]);
-      expect(() => w.append(row)).toThrow(bad < 0 ? "maxlen must be non-negative" : "an integer is required");
+      expect(() => w.append(row)).toThrow(
+        bad < 0 ? "maxlen must be non-negative" : "an integer is required",
+      );
     }
     // Python: RollingWindow(0) keeps an empty slot -> people() [4], snapshot(4) [], fill_minutes(4) 0.0
     const w0 = new RollingWindow(0);
@@ -510,6 +524,12 @@ describe("inputs beyond the golden fixtures", () => {
     expect(w0.people()).toEqual([4]);
     expect(w0.snapshot(4)).toEqual([]);
     expect(w0.fillMinutes(4)).toBe(0);
+  });
+
+  it("refuses to select a column past the end of a short vector, like numpy's IndexError", () => {
+    // Python: np.zeros(3)[[FEATURE_INDEX["face_now"]]] raises IndexError
+    expect(() => selectFeatures(new Float64Array(3), ["face_now"])).toThrow("out of bounds");
+    expect([...selectFeatures(new Float64Array(N_FEATURES).fill(2), ["face_now"])]).toEqual([2]);
   });
 
   it("treats Object method names as unknown features and sets, like a Python KeyError", () => {

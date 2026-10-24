@@ -239,6 +239,153 @@ describe("template text", () => {
   });
 });
 
+// ---------- Divergences found in review ----------
+// Inputs the golden fixture does not reach. Every expected value below was computed with the Python reference
+// (.venv/bin/python, valence/explain/*.py) and pasted in as a literal.
+
+describe("parity on inputs outside the fixture", () => {
+  it("parses a feature name with one trailing newline like Python's $ does", () => {
+    // describe("db_mean_5m\n", 61.5, tod_h=15.5)
+    expect(describeFeature("db_mean_5m\n", 61.5, { todH: 15.5 })).toEqual({
+      display: "average noise of 62 dB over the last 5 minutes",
+      unit: "dB",
+      level: "elevated",
+      scope: "room",
+      layer: "Ambient Physics",
+    });
+    expect(describeFeature("fist_cnt_1m\n", 2.0)?.display).toBe(
+      "2 clenched-fist events in the last minute",
+    );
+    expect(describeFeature("db_room_now\n", 4.5)?.display).toBe(
+      "current noise 4 dB above this room's baseline",
+    );
+    // only "\n" is special: "\r" falls through to the raw-name fallback
+    expect(describeFeature("db_mean_1m\r", 61.5)?.display).toBe("db_mean_1m\r = 61.5");
+  });
+
+  it("orders a NaN layer total (inf + -inf) exactly like CPython's sorted", () => {
+    const nan = NaN;
+    const layers = buildLayers(
+      { db_now: -Infinity, hours_since_break: 0.37, motion_now: Infinity, slump_now: -Infinity, face_now: 0.39 },
+      { db_now: 60.0, hours_since_break: 1.0, motion_now: 0.04, face_now: 0.2, slump_now: 0.5 },
+      { todH: 12.0 },
+    );
+    // Python: [('Time Dynamics', 0.37), ('Ambient Physics', -inf), ('Somatic & Social', nan), ('Facial Surface', 0.39)]
+    expect(layers.map((l) => [l.name, l.contribution])).toEqual([
+      ["Time Dynamics", 0.37],
+      ["Ambient Physics", -Infinity],
+      ["Somatic & Social", nan],
+      ["Facial Surface", 0.39],
+    ]);
+    expect(layers[2]?.drivers.map((d) => [d.feature, d.shap, d.effect])).toEqual([
+      ["motion_now", Infinity, "supports"],
+      ["slump_now", -Infinity, "opposes"],
+    ]);
+  });
+
+  it("orders drivers with a NaN shap exactly like CPython's sorted", () => {
+    const drv = (feature: string, shap: number): Driver => ({
+      feature,
+      display: feature,
+      value: null,
+      unit: "",
+      shap,
+      level: "normal",
+      effect: "supports",
+      scope: "person",
+    });
+    const layer = (drivers: Driver[]): Layer[] => [
+      { name: "Somatic & Social", contribution: 0.0, drivers },
+    ];
+    const order = (ds: Driver[]) => topDrivers(layer(ds), 10, null).map((d) => d.feature);
+    // a stable descending Array.sort gives a, b, d, c and a, b, c, f, e, d here
+    expect(order([drv("a", 0.2), drv("b", NaN), drv("c", -0.1), drv("d", 0.3)])).toEqual([
+      "b",
+      "d",
+      "a",
+      "c",
+    ]);
+    expect(
+      order([drv("a", 0.1), drv("b", NaN), drv("c", 0.3), drv("d", 0.05), drv("e", -0.1), drv("f", 0.3)]),
+    ).toEqual(["b", "c", "f", "a", "e", "d"]);
+  });
+
+  it("raises like Python slicing on a non-integer driver count, only when a slice happens", () => {
+    // build_layers(..., drivers_per_layer=2.5) -> TypeError; with no drivers -> []
+    expect(() =>
+      buildLayers({ motion_now: 0.1 }, { motion_now: 0.04 }, { driversPerLayer: 2.5 }),
+    ).toThrow(TypeError);
+    expect(buildLayers({}, {}, { driversPerLayer: 2.5 })).toEqual([]);
+    // top_drivers([], k=2.5) -> TypeError
+    expect(() => topDrivers([], 2.5)).toThrow(TypeError);
+    // negative bounds count from the end, as in Python: [:-1] drops the last driver
+    const layers = buildLayers(
+      { motion_now: 0.3, slump_now: 0.2, hih_now: 0.1 },
+      { motion_now: 0.04, slump_now: 0.5, hih_now: 0.2 },
+      { driversPerLayer: -1 },
+    );
+    expect(layers[0]?.drivers.map((d) => d.feature)).toEqual(["motion_now", "slump_now"]);
+  });
+
+  const sheetArgs = (over: Partial<FactSheetArgs> = {}): FactSheetArgs => ({
+    event_id: "p1-000001",
+    person: "Person #1",
+    label: "Focused",
+    label_display: "Focused",
+    confidence: 0.5,
+    probabilities: { Focused: 0.87655 },
+    window_fill_min: 1.0,
+    n_people: 1,
+    face_only_label: null,
+    face_only_confidence: null,
+    face_valence: null,
+    face_visible: false,
+    mask_override: false,
+    layers: [],
+    face_visible_frac: 0.5,
+    lux: null,
+    ood_features: [],
+    ...over,
+  });
+
+  it("validates n_people like the pydantic int field", () => {
+    // FactSheet(n_people=2.0).n_people == 2; -0.0 -> 0; 2.5, nan, inf -> ValidationError
+    expect(buildFactSheet(sheetArgs({ n_people: 2.0 })).n_people).toBe(2);
+    expect(Object.is(buildFactSheet(sheetArgs({ n_people: -0 })).n_people, 0)).toBe(true);
+    for (const n of [2.5, NaN, Infinity]) expect(() => buildFactSheet(sheetArgs({ n_people: n }))).toThrow();
+  });
+
+  it("copies the layers and ood lists like pydantic, sharing their items", () => {
+    // Python: sheet.layers is not layers, sheet.layers[0] is layers[0]; same for ood_features
+    const layers = buildLayers({ motion_now: 0.2 }, { motion_now: 0.04 });
+    const ood = ["a"];
+    const sheet = buildFactSheet(sheetArgs({ layers, ood_features: ood }));
+    layers.push(layers[0] as Layer);
+    ood.push("b");
+    expect(sheet.layers).toHaveLength(1);
+    expect(sheet.layers[0]).toBe(layers[0]);
+    expect(sheet.data_quality.ood_features).toEqual(["a"]);
+  });
+
+  it("keeps a __proto__ state name as a plain probability key", () => {
+    // Python: {'__proto__': 0.1235, 'Focused': 0.8766}
+    const probabilities = JSON.parse('{"__proto__": 0.12345, "Focused": 0.87655}') as Record<string, number>;
+    const sheet = buildFactSheet(sheetArgs({ probabilities }));
+    expect(Object.entries(sheet.probabilities)).toEqual([
+      ["__proto__", 0.1235],
+      ["Focused", 0.8766],
+    ]);
+    expect(Object.getPrototypeOf(sheet.probabilities)).toBe(Object.prototype);
+  });
+
+  it("refuses an event id with a lone surrogate like str.encode()", () => {
+    // _pick(OPENERS, "p1-\ud800") -> UnicodeEncodeError: surrogates not allowed
+    expect(() => pick(OPENERS, "p1-\ud800")).toThrow(/UnicodeEncodeError/);
+    expect(() => pick(OPENERS, "\udc00x")).toThrow(/UnicodeEncodeError/);
+    expect(pick(OPENERS, "Person é☃")).toBe(OPENERS[2]); // a valid pair or BMP text still hashes
+  });
+});
+
 describe("numeric agreement", () => {
   it("reports no numeric difference anywhere", () => {
     expect(maxNumErr).toBe(0);
