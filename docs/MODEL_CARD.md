@@ -604,5 +604,26 @@ cues are.
 
   As a negative control, quiet typing reads a negative, high-arousal state on 0% of ticks (gate ≤ 20%), but
   this is in-sample for the simulator's refit and says nothing about the four new states or the cues themselves.
+- **Real browser cues** (`data/browser/*.jsonl` from Cloud C: the real in-browser perception on two CC BY 4.0
+  clips of standing people turning and nodding with a mostly neutral expression, about 6.9 face passes/s;
+  `browser_captures.json`). Per-tick cue medians against simulated Focused (p10–p90; median tick-to-tick step):
+
+  | Cue | female | male | Simulated Focused |
+  |---|---|---|---|
+  | `brow_down` | -0.003…+0.013 (0.003) | -0.037…+0.163 (0.042) | -0.066…+0.224 (0.069) |
+  | `eye_open` | -0.083…+0.008 (0.014) | -0.091…+0.007 (0.025) | -0.126…+0.166 (0.068) |
+  | `mouth_frown` | -0.002…+0.012 (0.005) | +0.000…+0.003 (0.000) | -0.105…+0.188 (0.054) |
+  | `smile` | -0.000…+0.004 (0.000) | +0.000…+0.001 (0.000) | -0.144…+0.181 (0.073) |
+  | `face_valence` | -0.044…+0.007 (0.020) | -0.208…+0.044 (0.094) | -0.208…+0.229 (0.055) |
+  | `head_pitch` | -8.117…+6.086 (3.087) | -2.084…+4.420 (2.050) | -13.271…+5.815 (4.469) |
+
+  On these neutral faces the real per-tick blendshape cues are steadier than the simulator assumes: smile and
+  frown sit at about 0, eye openness dips by up to about 0.09 (blinks, looking down), brow lowering stays near 0
+  for one person and reaches 0.16 at p90 for the other, and the tick-to-tick steps are smaller than simulated
+  for every blendshape cue. So the simulated within-state noise is pessimistic, while how far real
+  expressions move *between* states is still unmeasured: the per-state cue means (EMOTION_FEATURES.md §7) remain
+  the untested part. The emotion map reads these clips as female: Focused 93%, Collaborative 7%; male: Focused 50%, Calm 50% (after the first minute); no negative state.
+  Blinks at this face rate: 22 and 20 in 132 s, about 9–10 per minute (`data/browser/README.md`).
+
 - **Public dataset** (stretch): **not attempted.** DAiSEE releases its clips only after a request form, its host is
   not reachable from the event's cloud sessions, and it is raw video, which this track does not write to disk.

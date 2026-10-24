@@ -74,6 +74,37 @@ def corpus_stats(pred: EmotionPredictor) -> dict:
     return {"pos": pos, "share": share, "top": top, "confused_top": conf}
 
 
+def browser_block() -> list[str]:
+    """Real browser-perception recordings (data/browser), if evaluated: cue spreads vs simulated Focused."""
+    path = ART / "browser_captures.json"
+    if not path.exists():
+        return []
+    b = json.loads(path.read_text())
+    lines = ["- **Real browser cues** (`data/browser/*.jsonl` from Cloud C: the real in-browser perception on two CC BY 4.0",
+             "  clips of standing people turning and nodding with a mostly neutral expression, about 6.9 face passes/s;",
+             "  `browser_captures.json`). Per-tick cue medians against simulated Focused (p10–p90; median tick-to-tick step):",
+             "", "  | Cue | " + " | ".join(b["recordings"]) + " | Simulated Focused |", "  |---|" + "---|" * (len(b["recordings"]) + 1)]
+    for cue in ("brow_down", "eye_open", "mouth_frown", "smile", "face_valence", "head_pitch"):
+        cells = []
+        for e in b["recordings"].values():
+            d = e["channels"][cue]["live"]
+            cells.append(f"{d['p10']:+.3f}…{d['p90']:+.3f} ({d['tick_to_tick']:.3f})")
+        d = next(iter(b["recordings"].values()))["channels"][cue]["sim"]
+        cells.append(f"{d['p10']:+.3f}…{d['p90']:+.3f} ({d['tick_to_tick']:.3f})")
+        lines.append(f"  | `{cue}` | " + " | ".join(cells) + " |")
+    reads = "; ".join(f"{k}: " + ", ".join(f"{NICE.get(s, s)} {v:.0%}" for s, v in e["predicted_share"].items())
+                      for k, e in b["recordings"].items())
+    lines += ["",
+              "  On these neutral faces the real per-tick blendshape cues are steadier than the simulator assumes: smile and",
+              "  frown sit at about 0, eye openness dips by up to about 0.09 (blinks, looking down), brow lowering stays near 0",
+              "  for one person and reaches 0.16 at p90 for the other, and the tick-to-tick steps are smaller than simulated",
+              "  for every blendshape cue. So the simulated within-state noise is pessimistic, while how far real",
+              "  expressions move *between* states is still unmeasured: the per-state cue means (EMOTION_FEATURES.md §7) remain",
+              f"  the untested part. The emotion map reads these clips as {reads} (after the first minute); no negative state.",
+              "  Blinks at this face rate: 22 and 20 in 132 s, about 9–10 per minute (`data/browser/README.md`).", ""]
+    return lines
+
+
 def render() -> str:
     meta, met, rob, cis, real = j("meta.json"), j("metrics.json"), j("robustness.json"), j("ci.json"), j(
         "real_captures.json")
@@ -342,6 +373,7 @@ def render() -> str:
         "",
         f"  As a negative control, quiet typing reads a negative, high-arousal state on {stress:.0%} of ticks (gate ≤ 20%), but",
         "  this is in-sample for the simulator's refit and says nothing about the four new states or the cues themselves.",
+    ] + browser_block() + [
         "- **Public dataset** (stretch): **not attempted.** DAiSEE releases its clips only after a request form, its host is",
         "  not reachable from the event's cloud sessions, and it is raw video, which this track does not write to disk.",
         "",

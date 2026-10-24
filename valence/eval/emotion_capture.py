@@ -91,6 +91,7 @@ def main() -> None:
     ap.add_argument("--warmup-ticks", type=int, default=12, help="ignore the first minute (baselines settle)")
     ap.add_argument("--tz", help="time zone the recordings were made in (time of day from their wall clock)")
     ap.add_argument("--tod", type=float, default=12.0, help="fixed time of day (hours) when --tz is not given")
+    ap.add_argument("--ref", help="simulated state to compare cue distributions with, for recordings without :State")
     ap.add_argument("--out")
     args = ap.parse_args()
     predictor = EmotionPredictor(Path(args.models))
@@ -117,7 +118,9 @@ def main() -> None:
             if state:
                 entry["agreement"] = round(sum(lab == state for lab in labels) / n, 3)
                 entry["acted_anchor"] = AFFECT_ANCHORS.get(state)
-        ref = sim_people[sim_people["true_state"] == state] if state else sim_people
+        ref_state = state or args.ref
+        entry["sim_reference"] = ref_state or "all states"
+        ref = sim_people[sim_people["true_state"] == ref_state] if ref_state else sim_people
         entry["channels"] = {c: {"live": describe(person[c]) if c in person and len(person) else {"n": 0},
                                  "sim": describe(ref[c])}
                              for c in CUES}

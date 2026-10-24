@@ -1,0 +1,361 @@
+{
+ "model": "emotion-v1@006a8d7d",
+ "time_of_day": "fixed at 12 h (recordings carry no time zone)",
+ "recordings": {
+  "female": {
+   "acted": null,
+   "ticks": 26,
+   "scored_ticks": 14,
+   "warmup_skipped": true,
+   "predicted_share": {
+    "Focused": 0.929,
+    "Collaborative_Happy": 0.071
+   },
+   "map_position": {
+    "valence": 0.175,
+    "arousal": 0.139
+   },
+   "sim_reference": "Focused",
+   "channels": {
+    "brow_down": {
+     "live": {
+      "n": 26,
+      "p10": -0.0032,
+      "p50": -0.0022,
+      "p90": 0.0128,
+      "tick_to_tick": 0.0025
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.066,
+      "p50": 0.0787,
+      "p90": 0.2236,
+      "tick_to_tick": 0.0686
+     }
+    },
+    "eye_open": {
+     "live": {
+      "n": 26,
+      "p10": -0.0833,
+      "p50": -0.0051,
+      "p90": 0.0077,
+      "tick_to_tick": 0.0139
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1257,
+      "p50": 0.0212,
+      "p90": 0.1659,
+      "tick_to_tick": 0.0679
+     }
+    },
+    "mouth_frown": {
+     "live": {
+      "n": 26,
+      "p10": -0.0018,
+      "p50": 0.001,
+      "p90": 0.0123,
+      "tick_to_tick": 0.0046
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1048,
+      "p50": 0.0291,
+      "p90": 0.1875,
+      "tick_to_tick": 0.0539
+     }
+    },
+    "smile": {
+     "live": {
+      "n": 26,
+      "p10": -0.0,
+      "p50": -0.0,
+      "p90": 0.0035,
+      "tick_to_tick": 0.0001
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1437,
+      "p50": 0.016,
+      "p90": 0.181,
+      "tick_to_tick": 0.0726
+     }
+    },
+    "head_yaw": {
+     "live": {
+      "n": 26,
+      "p10": 0.3848,
+      "p50": 1.0123,
+      "p90": 16.2215,
+      "tick_to_tick": 0.6881
+     },
+     "sim": {
+      "n": 4667,
+      "p10": 2.14,
+      "p50": 3.9763,
+      "p90": 21.9978,
+      "tick_to_tick": 1.3541
+     }
+    },
+    "head_pitch": {
+     "live": {
+      "n": 26,
+      "p10": -8.1171,
+      "p50": 2.9805,
+      "p90": 6.0859,
+      "tick_to_tick": 3.0866
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -13.2715,
+      "p50": -2.974,
+      "p90": 5.815,
+      "tick_to_tick": 4.4689
+     }
+    },
+    "head_away": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 0.0282,
+      "p90": 0.5762,
+      "tick_to_tick": 0.0833
+     },
+     "sim": {
+      "n": 4667,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.6,
+      "tick_to_tick": 0.0
+     }
+    },
+    "blink_count": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 2.0,
+      "tick_to_tick": 1.0
+     },
+     "sim": {
+      "n": 5813,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "tick_to_tick": 1.0
+     }
+    },
+    "face_valence": {
+     "live": {
+      "n": 26,
+      "p10": -0.0445,
+      "p50": -0.006,
+      "p90": 0.0075,
+      "tick_to_tick": 0.02
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.2084,
+      "p50": 0.001,
+      "p90": 0.229,
+      "tick_to_tick": 0.0553
+     }
+    },
+    "face_visible": {
+     "live": {
+      "n": 26,
+      "p10": 0.9844,
+      "p50": 1.0,
+      "p90": 1.0,
+      "tick_to_tick": 0.0
+     },
+     "sim": {
+      "n": 5813,
+      "p10": 0.0,
+      "p50": 0.9064,
+      "p90": 0.9812,
+      "tick_to_tick": 0.068
+     }
+    }
+   }
+  },
+  "male": {
+   "acted": null,
+   "ticks": 26,
+   "scored_ticks": 14,
+   "warmup_skipped": true,
+   "predicted_share": {
+    "Focused": 0.5,
+    "Calm": 0.5
+   },
+   "map_position": {
+    "valence": 0.253,
+    "arousal": -0.046
+   },
+   "sim_reference": "Focused",
+   "channels": {
+    "brow_down": {
+     "live": {
+      "n": 26,
+      "p10": -0.0367,
+      "p50": 0.0014,
+      "p90": 0.1625,
+      "tick_to_tick": 0.0423
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.066,
+      "p50": 0.0787,
+      "p90": 0.2236,
+      "tick_to_tick": 0.0686
+     }
+    },
+    "eye_open": {
+     "live": {
+      "n": 26,
+      "p10": -0.0915,
+      "p50": -0.0023,
+      "p90": 0.0066,
+      "tick_to_tick": 0.0255
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1257,
+      "p50": 0.0212,
+      "p90": 0.1659,
+      "tick_to_tick": 0.0679
+     }
+    },
+    "mouth_frown": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 0.0001,
+      "p90": 0.0034,
+      "tick_to_tick": 0.0001
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1048,
+      "p50": 0.0291,
+      "p90": 0.1875,
+      "tick_to_tick": 0.0539
+     }
+    },
+    "smile": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.001,
+      "tick_to_tick": 0.0
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.1437,
+      "p50": 0.016,
+      "p90": 0.181,
+      "tick_to_tick": 0.0726
+     }
+    },
+    "head_yaw": {
+     "live": {
+      "n": 26,
+      "p10": 0.2564,
+      "p50": 0.8282,
+      "p90": 5.1834,
+      "tick_to_tick": 0.5364
+     },
+     "sim": {
+      "n": 4667,
+      "p10": 2.14,
+      "p50": 3.9763,
+      "p90": 21.9978,
+      "tick_to_tick": 1.3541
+     }
+    },
+    "head_pitch": {
+     "live": {
+      "n": 26,
+      "p10": -2.0836,
+      "p50": 1.0586,
+      "p90": 4.4201,
+      "tick_to_tick": 2.0501
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -13.2715,
+      "p50": -2.974,
+      "p90": 5.815,
+      "tick_to_tick": 4.4689
+     }
+    },
+    "head_away": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.4882,
+      "tick_to_tick": 0.0
+     },
+     "sim": {
+      "n": 4667,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 0.6,
+      "tick_to_tick": 0.0
+     }
+    },
+    "blink_count": {
+     "live": {
+      "n": 26,
+      "p10": 0.0,
+      "p50": 1.0,
+      "p90": 2.0,
+      "tick_to_tick": 1.0
+     },
+     "sim": {
+      "n": 5813,
+      "p10": 0.0,
+      "p50": 0.0,
+      "p90": 2.0,
+      "tick_to_tick": 1.0
+     }
+    },
+    "face_valence": {
+     "live": {
+      "n": 26,
+      "p10": -0.2084,
+      "p50": -0.0039,
+      "p90": 0.0445,
+      "tick_to_tick": 0.0943
+     },
+     "sim": {
+      "n": 4667,
+      "p10": -0.2084,
+      "p50": 0.001,
+      "p90": 0.229,
+      "tick_to_tick": 0.0553
+     }
+    },
+    "face_visible": {
+     "live": {
+      "n": 26,
+      "p10": 0.871,
+      "p50": 1.0,
+      "p90": 1.0,
+      "tick_to_tick": 0.0
+     },
+     "sim": {
+      "n": 5813,
+      "p10": 0.0,
+      "p50": 0.9064,
+      "p90": 0.9812,
+      "tick_to_tick": 0.068
+     }
+    }
+   }
+  }
+ },
+ "note": "Browser perception on two CC BY 4.0 clips (data/browser/README.md): standing people turning/nodding their heads with a mostly neutral expression; ~6.9 face passes/s. Not labeled; the simulator reference is Focused. python -m valence.eval.emotion_capture data/browser/*.jsonl --ref Focused"
+}
