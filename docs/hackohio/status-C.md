@@ -244,3 +244,13 @@ Chromium process's RSS sampled every 30 s.
   mic tap, pipelines, trackers, calibrators) and the counters start fresh, and a late report from the old run cannot
   land in the new one.
 - **Docs.** `e2e/README.md`'s console check now expects "Top drivers by layer" (Cloud A's request).
+
+### 19:45 — check-in
+
+- **Health.** No fixture drift. The frontend suite passes (898 tests, including the other teams' new ones) and tsc is
+  clean. `e2e/run-all.mjs`: all six scenarios pass at 4.5–7.5 fps (worker/CPU), with 0 off-origin requests and 0 CSP
+  violations. The roll-sign and two-people cross checks hold.
+- **Since 17:45.** Nobody else touched the perception module or the Python it ports.
+- **Now.** A bug hunt over the module, with one adversarial verifier per finding, across six areas: lifecycle,
+  privacy and purge counts, the audio path at non-48 kHz rates, video parity, Safari/Firefox compatibility, and the
+  contract and its use in the console. Fixes for confirmed findings land as separate commits.
