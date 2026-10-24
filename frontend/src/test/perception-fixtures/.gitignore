@@ -1,0 +1,2 @@
+# Plain JSON is an intermediate of the generators; scripts/export_perception_fixtures.py commits the gzipped .json.gz.
+*.json
