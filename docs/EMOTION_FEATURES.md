@@ -27,8 +27,8 @@ Inputs per face, from MediaPipe Tasks `FaceLandmarker` with `outputFaceBlendshap
 - `B[name]`: the blendshape score (0–1) for a category name below. A missing category counts as missing.
 - `M`: the 4×4 facial transformation matrix (`facialTransformationMatrixes[i].data`, 16 numbers).
 
-Let `avg(a, b)` be the mean of the two sides; if one side is missing use the other; if both are missing the value is
-NaN.
+Let `avg(a, b)` be the mean of the two sides; if one side is missing (absent, null or NaN) use the other; if both are
+missing the value is NaN.
 
 ### 1.1 Raw values
 
@@ -67,7 +67,11 @@ Resting faces and camera placements differ, so the cues are **relative to the pe
 
 - One calibrator per ephemeral display id, in memory only, holding the six raw channels
   `brow_raw, closure_raw, frown_raw, smile_raw, yaw_raw, pitch_raw`.
-- Visible-face time accrues only between consecutive visible frames, each gap capped at 1 s.
+- Perception feeds the calibrator only frames where the face is visible (a face was found **and** `face_valence` is
+  finite); other frames are "not visible" (`FaceCueTracker.update(None, t)`), and so is a frame whose six raw channels
+  are all NaN. A NaN in a single channel just skips that channel.
+- Visible-face time accrues only between consecutive visible frames: `gap = min(max(t − t_prev, 0), 1 s)` (a clock
+  that steps backwards adds 0).
 - While visible time < 20 s: append the frame's raw values; the baseline of each channel is the running median of
   its finite samples (0 before any sample).
 - At 20 s of visible face the baseline is frozen (per channel, the median at that moment) and never changes again for
@@ -85,7 +89,7 @@ Relative per-frame values (what perception puts into `PersonObs`):
 | `eye_open` | `base.closure − closure_raw` (= `eye_raw − (1 − base.closure)`) | −1..1 | blendshape score |
 | `mouth_frown` | `frown_raw − base.frown` | −1..1 | blendshape score |
 | `smile` | `smile_raw − base.smile` | −1..1 | blendshape score |
-| `head_yaw` | `wrap(yaw_raw − base.yaw)` (wrapped to −180..180) | −90..90 | degrees, signed as above |
+| `head_yaw` | `wrap(yaw_raw − base.yaw)` with `wrap(d) = ((d + 180) mod 360) − 180`, `mod` floored (result in [0, 360), Python's `%`; in JS `((x % 360) + 360) % 360`); so `d = 180` → −180 → clipped to −90 | −90..90 | degrees, signed as above |
 | `head_pitch` | `pitch_raw − base.pitch` | −90..90 | degrees, + up |
 | `blink_onsets` | 0 or 1, see §1.3 | int | events |
 
@@ -100,8 +104,11 @@ closure `b = base.closure` (the running median while calibrating):
 1. State `open` → `closed` when `closure_raw ≥ b + 0.30`. Remember `t_closed` = the frame's timestamp (ms).
 2. State `closed` → `open` when `closure_raw ≤ b + 0.15`. **A blink is counted on this frame**
    (`blink_onsets = 1`) if `t − t_closed ≤ 600 ms`; a longer closure is not a blink (it shows up as low `eye_open`).
-3. A frame without a visible face resets the state to `open` without counting.
-4. At most one blink per frame.
+3. A frame without a visible face resets the state to `open` without counting. A visible frame whose `closure_raw` is
+   NaN leaves the state unchanged.
+4. At most one blink per frame. The thresholds are compared exactly as written, in float64 (`closure_raw >= b + 0.30`,
+   `closure_raw <= b + 0.15`, `t − t_closed <= 600`); `t − t_closed` may be negative after a backwards clock step and
+   then counts.
 
 Blinks last ~100–400 ms, so the detector needs ≥ 15 processed face frames per second to see most of them. At lower
 rates the measured blink rate is lower than the true one; report the face fps next to any blink numbers.
@@ -122,8 +129,8 @@ in the tick is NaN.
 | `smile` | NaN | median of `smile` over face frames | score, relative |
 | `head_yaw` | NaN | median of `|head_yaw|` over face frames (unsigned) | degrees ≥ 0 |
 | `head_pitch` | NaN | median of `head_pitch` over face frames (signed) | degrees, + up |
-| `head_away` | NaN | share of face frames with a finite pose and `|head_yaw| > 20` or `|head_pitch| > 20` | 0–1 |
-| `blink_count` | 0 | sum of `blink_onsets` over **all** of the person's frames in the tick | count |
+| `head_away` | NaN | among the face frames whose `head_yaw` and `head_pitch` are both finite (the denominator; NaN if there are none), the share with `|head_yaw| > 20` or `|head_pitch| > 20` | 0–1 |
+| `blink_count` | 0 | sum of `blink_onsets` over **all** of the person's frames in the tick (a null/NaN `blink_onsets` adds 0) | count |
 
 The room row (`person_id 0`) leaves all eight at their defaults. Medians use the usual definition (mean of the two
 middle values for an even count).
@@ -146,7 +153,7 @@ like the existing `_nanstat`.
 | `eye_mean_15m` | `nanmean(eye_open[-180:])` | 1 |
 | `brow_max_1m` | `nanmax(brow_down[-12:])` | 1 |
 | `away_mean_1m`, `away_mean_5m` | `nanmean(head_away[-n:])` | 2 |
-| `blink_rate_1m`, `blink_rate_5m`, `blink_rate_15m` | `60 · Σ blink_count[-n:] / Σ (5 · face_visible[-n:])` per minute of visible face; NaN if the visible time `Σ (5 · face_visible[-n:]) < 10 s`. NaN counts as 0 in both sums | 3 |
+| `blink_rate_1m`, `blink_rate_5m`, `blink_rate_15m` | per minute of **cued** visible face: over the last `n` ticks, keep only ticks whose `eye_open` is finite (the cues were produced); `seconds = 5 · Σ face_visible`, `rate = 60 · Σ blink_count / seconds`; NaN if `seconds < 10 − 1e-9`. NaN counts as 0 in both sums. A tick with a visible face but no cues (an older producer) is missing, not "no blinks" | 3 |
 
 where `c` runs over `brow` (`brow_down`), `eye` (`eye_open`), `frown` (`mouth_frown`), `smile` (`smile`), `yaw`
 (`head_yaw`), `pitch` (`head_pitch`), in that order. **31 features**, in this exact order (also in
@@ -162,10 +169,19 @@ pitch_now pitch_mean_1m pitch_mean_5m pitch_std_5m
 eye_mean_15m brow_max_1m away_mean_1m away_mean_5m blink_rate_1m blink_rate_5m blink_rate_15m
 ```
 
+**Numerics.** Sums, means and standard deviations are numpy's (`np.sum`, `np.nanmean`, `np.nanstd`: pairwise
+summation), as in the frozen 123; the web engine's `pairwiseSum` matches them.
+
 **Missing face.** A tick without a readable face carries NaN in the seven continuous channels and contributes
 0 visible seconds to the blink rate; window statistics skip it. A window with no readable face at all gives NaN for
-every feature (blink rates included). The models treat NaN as missing (LightGBM's native handling); nothing is
-imputed and nothing is clipped. All 31 features belong to the **Facial Surface** explanation layer.
+every feature (blink rates included). Nothing is imputed and nothing is clipped. All 31 features belong to the
+**Facial Surface** explanation layer.
+
+**How the trees read NaN** (LightGBM, per split; `valence/models/emotion_json.py`): first, any input with
+`|x| <= 1e-35f` (1.0000000180025095e-35) is read as exactly 0; then a split with `missing_type` `NaN` sends NaN the
+`default_left` way, `Zero` reads NaN as 0 and sends 0 the default way, and `None` reads NaN as 0 and compares. All 31
+emotion features only meet `NaN` splits; 30 of the M2 inputs (e.g. `lux_room_now`, `hours_since_break`,
+`face_visible_now`, `fill_ratio`) only meet `None` splits, so for them NaN behaves like 0.
 
 **Model input.** The emotion models read `meta.json` → `input_features`: the served M2 set (`FEATURE_SETS["m2"]`,
 101 of the frozen 123, room-relative) followed by the 31 above; 132 values in that order. The face-only comparison
@@ -204,7 +220,8 @@ not by valence–arousal.
 |---|---|
 | `classifier.json.gz` | `booster.dump_model()` of the 10-state LightGBM classifier (multiclass, raw scores per class) |
 | `valence.json.gz`, `arousal.json.gz` | `booster.dump_model()` of the two LightGBM regressors (raw score = prediction) |
-| `meta.json` | `feature_version`, `input_features` (exact order), `emotion_feature_names`, `states` (id, display, valence, arousal, in class order), `temperature`, `layers` (feature → explanation layer), training summary and metrics |
+| `classifier.txt.gz`, `valence.txt.gz`, `arousal.txt.gz` | the same three models in LightGBM's text format, for Python (`EmotionPredictor`) |
+| `meta.json` | `feature_version`, `model_id` (`emotion-v1@<sha8>`, what `Affect.model` carries), `input_features` (exact order), `emotion_feature_names`, `states` (id, display, valence, arousal, in class order), `temperature`, `layers` (feature → explanation layer), training summary and metrics |
 | `golden.json` | ~20 input vectors with Python's raw scores, temperature-softmax probabilities, valence/arousal predictions and `pred_contrib`, plus golden windows (tick channels → the 31 features) and golden frames (blendshapes + matrix → per-frame cues) |
 
 Inference:

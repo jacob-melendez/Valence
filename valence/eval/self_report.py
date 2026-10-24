@@ -7,9 +7,11 @@ Each JSONL line is one tap: ``t``, ``person_id``, ``valence`` and ``arousal`` in
 vector at that moment in ``features`` (an object keyed by feature name, null = NaN, or a list in ``meta.json``
 ``input_features`` order), optionally ``session_id`` and a picked state ``label``. Lines never carry media or text.
 
-Reported (overall and per person): valence/arousal MAE and CCC of the regressors and of the probability-weighted
-anchors, the same for a constant (0, 0) guess, quadrant agreement, and agreement between the state nearest the tap
-and the state nearest the prediction (and the classifier's label). CCC needs >= 3 taps with some spread.
+Reported (overall, per person, and for taps with >= 1 min of window): valence/arousal MAE and CCC of the served map
+position (probability-weighted anchors), of the regressors and of a constant (0, 0) guess, quadrant agreement, and
+agreement between the state nearest the tap and the state nearest the map position (and the classifier's label).
+CCC needs >= 3 taps that vary on that axis. Lines with another feature_version, non-numeric or out-of-range taps
+are skipped and listed under ``problems``; absent input features are read as missing and listed too.
 """
 
 from __future__ import annotations
@@ -36,6 +38,10 @@ def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict],
                 continue
             try:
                 d = json.loads(line)
+                if d.get("feature_version") not in (None, "emotion-v1"):
+                    raise ValueError(f"feature_version {d.get('feature_version')!r} is not emotion-v1")
+                if any(isinstance(d[k], bool) or not isinstance(d[k], (int, float)) for k in KEYS):
+                    raise ValueError("valence/arousal must be numbers")
                 v, a = float(d["valence"]), float(d["arousal"])
                 if not (-1 <= v <= 1 and -1 <= a <= 1):
                     raise ValueError("valence/arousal outside [-1, 1]")
@@ -48,6 +54,10 @@ def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict],
                     for k, val in feats.items():
                         if k in index and val is not None:
                             x[index[k]] = float(val)
+                    absent = [n for n in input_features if n not in feats]
+                    if absent:
+                        problems.append(f"{path}:{ln}: {len(absent)} input features absent (read as missing), "
+                                        f"e.g. {absent[:3]}")
                 else:
                     if len(feats) != len(input_features):
                         raise ValueError(f"features list has {len(feats)} values, expected {len(input_features)}")
@@ -55,8 +65,6 @@ def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict],
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
                 problems.append(f"{path}:{ln}: skipped ({e})")
                 continue
-            if d.get("feature_version") not in (None, "emotion-v1"):
-                problems.append(f"{path}:{ln}: feature_version {d.get('feature_version')!r}")
             taps.append({"t": d.get("t"), "person": f"{d.get('session_id', Path(path).stem)}/{d.get('person_id', 1)}",
                          "valence": v, "arousal": a, "label": d.get("label")})
             rows.append(x)
@@ -69,9 +77,9 @@ def _block(tv, ta, pv, pa) -> dict:
            "valence_mae": round(float(np.abs(pv - tv).mean()), 4),
            "arousal_mae": round(float(np.abs(pa - ta).mean()), 4),
            "quadrant_agreement": round(float(((np.sign(pv) == np.sign(tv)) & (np.sign(pa) == np.sign(ta))).mean()), 4)}
-    spread = len(tv) >= 3 and tv.std() > 1e-6 and ta.std() > 1e-6
-    out["valence_ccc"] = round(ccc(pv, tv), 4) if spread else None
-    out["arousal_ccc"] = round(ccc(pa, ta), 4) if spread else None
+    # CCC per axis, only with >= 3 taps that vary on that axis
+    out["valence_ccc"] = round(ccc(pv, tv), 4) if len(tv) >= 3 and tv.std() > 1e-6 else None
+    out["arousal_ccc"] = round(ccc(pa, ta), 4) if len(ta) >= 3 and ta.std() > 1e-6 else None
     return out
 
 
@@ -81,17 +89,20 @@ def evaluate(taps: list[dict], X: np.ndarray, predictor) -> dict:
     r = predictor.predict(X)
     tv = np.array([t["valence"] for t in taps])
     ta = np.array([t["arousal"] for t in taps])
-    pv, pa = r["valence"], r["arousal"]
-    anchor = r["proba"] @ predictor.anchors
+    pv, pa = r["valence"], r["arousal"]  # regressors (comparison)
+    anchor = r["proba"] @ predictor.anchors  # the served map position
     states = predictor.states
     tap_state = nearest_anchor(tv, ta)
     face_cols = [i for i, c in enumerate(predictor.cols) if c == "face_visible_now"]
 
     def summary(m: np.ndarray) -> dict:
-        out = {"regressors": _block(tv[m], ta[m], pv[m], pa[m]),
-               "anchors_from_probabilities": _block(tv[m], ta[m], anchor[m, 0], anchor[m, 1]),
+        out = {"map_position": _block(tv[m], ta[m], anchor[m, 0], anchor[m, 1]),
+               "regressors": _block(tv[m], ta[m], pv[m], pa[m]),
                "constant_zero": _block(tv[m], ta[m], np.zeros(m.sum()), np.zeros(m.sum())),
-               "nearest_anchor_agreement": round(float((nearest_anchor(pv[m], pa[m]) == tap_state[m]).mean()), 4),
+               "nearest_anchor_agreement": round(float(
+                   (nearest_anchor(anchor[m, 0], anchor[m, 1]) == tap_state[m]).mean()), 4),
+               "nearest_anchor_agreement_regressors": round(float(
+                   (nearest_anchor(pv[m], pa[m]) == tap_state[m]).mean()), 4),
                "classifier_vs_tap_region": round(float((r["proba"][m].argmax(axis=1) == tap_state[m]).mean()), 4)}
         labelled = [i for i in np.nonzero(m)[0] if taps[i]["label"] in states]
         if labelled:

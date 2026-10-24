@@ -27,6 +27,7 @@ CUE_CHANNELS: dict[str, str] = {
 }
 EMOTION_FIELDS: tuple[str, ...] = (*CUE_CHANNELS.values(), "head_away", "blink_count", "face_visible")
 BLINK_MIN_VISIBLE_S = 10.0
+BLINK_EPS_S = 1e-9  # the 10 s test must not depend on summation order (pairwise vs sequential)
 
 EMOTION_FEATURE_NAMES: list[str] = [f"{c}_{s}" for c in CUE_CHANNELS for s in ("now", "mean_1m", "mean_5m", "std_5m")]
 EMOTION_FEATURE_NAMES += ["eye_mean_15m", "brow_max_1m", "away_mean_1m", "away_mean_5m",
@@ -39,11 +40,14 @@ FACE_ONLY_FEATURES: list[str] = list(FACE_FEATURES) + EMOTION_FEATURE_NAMES
 CONTEXT_FEATURES: list[str] = [n for n in INPUT_FEATURES if n not in FACE_ONLY_FEATURES]
 
 
-def _blink_rate(blinks: np.ndarray, visible: np.ndarray, n: int) -> float:
-    seconds = float(np.nan_to_num(visible[-n:], nan=0.0).sum()) * TICK_S
-    if seconds < BLINK_MIN_VISIBLE_S:
+def _blink_rate(blinks: np.ndarray, visible: np.ndarray, eye: np.ndarray, n: int) -> float:
+    """Blinks per minute of visible face, over ticks whose cues were produced (``eye_open`` finite): a tick with a
+    visible face but no cues (an older producer) is missing, not "no blinks"."""
+    cued = ~np.isnan(eye[-n:])
+    seconds = float(np.where(cued, np.nan_to_num(visible[-n:], nan=0.0), 0.0).sum()) * TICK_S
+    if seconds < BLINK_MIN_VISIBLE_S - BLINK_EPS_S:
         return math.nan
-    return 60.0 * float(np.nan_to_num(blinks[-n:], nan=0.0).sum()) / seconds
+    return 60.0 * float(np.where(cued, np.nan_to_num(blinks[-n:], nan=0.0), 0.0).sum()) / seconds
 
 
 def compute_emotion(person: dict[str, np.ndarray]) -> np.ndarray:
@@ -60,7 +64,7 @@ def compute_emotion(person: dict[str, np.ndarray]) -> np.ndarray:
         _nanstat(np.nanmean, p["head_away"][-WIN["1m"]:]),
         _nanstat(np.nanmean, p["head_away"][-WIN["5m"]:]),
     ]
-    feats += [_blink_rate(p["blink_count"], p["face_visible"], WIN[w]) for w in ("1m", "5m", "15m")]
+    feats += [_blink_rate(p["blink_count"], p["face_visible"], p["eye_open"], WIN[w]) for w in ("1m", "5m", "15m")]
     return np.asarray(feats, dtype=float)
 
 

@@ -66,6 +66,35 @@ def windows_from(df, picks):
     return out
 
 
+def edge_windows() -> list[dict]:
+    """Synthetic windows for the missing-data rules of section 3."""
+    rng = np.random.default_rng(9)
+    out = []
+
+    def add(note, person):
+        out.append({"note": note, "person": {f: _j(np.asarray(person[f], dtype=float)) for f in EMOTION_FIELDS},
+                    "expected": _j(compute_emotion(person))})
+
+    n = 24
+    cueless = {f: np.full(n, np.nan) for f in EMOTION_FIELDS}
+    cueless["face_visible"] = np.ones(n)
+    cueless["blink_count"] = np.zeros(n)
+    add("face visible, no cues produced (older producer): blink rates NaN", cueless)
+    vis = np.array([22, 16, 16, 20, 0, 21, 20, 19, 21, 18, 21, 20], dtype=float) / 107.0  # exactly 10 s
+    edge = {f: rng.normal(0, 0.05, 12) for f in EMOTION_FIELDS}
+    edge["face_visible"] = vis
+    edge["blink_count"] = np.array([1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0], dtype=float)
+    add("visible time exactly 10 s (summation-order independent)", edge)
+    mixed = {f: rng.normal(0, 0.05, 40) for f in EMOTION_FIELDS}
+    mixed["face_visible"] = rng.uniform(0.5, 1.0, 40)
+    mixed["blink_count"] = rng.integers(0, 3, 40).astype(float)
+    for f in ("brow_down", "eye_open", "mouth_frown", "smile", "head_yaw", "head_pitch", "head_away"):
+        mixed[f][::3] = np.nan  # every third tick without cues
+    mixed["head_yaw"] = np.abs(mixed["head_yaw"]) * 300
+    add("cues missing on every third tick", mixed)
+    return out
+
+
 def golden_frames() -> list[dict]:
     """Synthetic frame sequences through FaceCueTracker: calibration, brow lowering, a blink, a long closure,
     head turns, a missing face, and a row-major matrix."""
@@ -96,11 +125,33 @@ def golden_frames() -> list[dict]:
     seq.append((t, None, None))  # no face
     t += 1000 / 15
     seq.append((t, {k: v for k, v in base.items() if not k.endswith("Right")}, mat(3, -8)))  # one side missing
+    t += 1000 / 15
+    seq.append((t, {**base, "browDownRight": float("nan")}, mat(3, -8)))  # one side NaN: use the other
+    # Blink edge cases at the exact thresholds (baseline b from the calibration above).
+    probe = FaceCueTracker()
+    for t_ms, b, m in seq:
+        probe.update(None if b is None else raw_cues(b, m), t_ms)
+    bc = probe.baseline()["closure"]
+
+    def eyes(c):
+        return {**base, "eyeBlinkLeft": c, "eyeBlinkRight": c}
+
+    edge = [(70, eyes(bc + 0.30)), (300, eyes(bc + 0.15)),  # closes at == b+0.30, reopens at == b+0.15: a blink
+            (70, eyes(bc + 0.29)), (70, base),  # just below the close threshold: nothing
+            (70, eyes(0.95)), (600, base),  # closed exactly 600 ms: counts
+            (70, eyes(0.95)), (601, base),  # 601 ms: a closure, not a blink
+            (70, eyes(0.95)), (70, None), (70, base),  # closure across a frame without a face: reset, no blink
+            (70, eyes(0.95)), (70, {k: v for k, v in base.items() if not k.startswith("eyeBlink")}),
+            (70, base),  # NaN closure while closed leaves the state: the reopening counts
+            (70, eyes(0.95)), (-50, base)]  # time steps backwards (clamped gap): -50 ms after closing, counts
+    for dt, b in edge:
+        t += dt
+        seq.append((t, b, None if b is None else mat(3, -8)))
     tracker = FaceCueTracker()
     frames = []
     for t_ms, b, m in seq:
         cues = tracker.update(None if b is None else raw_cues(b, m), t_ms)
-        frames.append({"t_ms": t_ms, "blendshapes": b, "matrix": m, "expected": _j(cues)})
+        frames.append({"t_ms": t_ms, "blendshapes": _j(b), "matrix": m, "expected": _j(cues)})
     return frames
 
 
@@ -150,6 +201,7 @@ def main() -> None:
                                              "arousal": _j(c["arousal"][0])}})
         if len(windows) < 8:
             windows.append({"note": note, "person": {f: _j(person[f]) for f in EMOTION_FIELDS}, "expected": _j(xe)})
+    windows += edge_windows()
     golden = {
         "model_id": pred.model_id, "feature_version": pred.meta["feature_version"],
         "input_features": pred.cols, "states": pred.states, "temperature": pred.t,

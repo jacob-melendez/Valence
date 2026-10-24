@@ -148,6 +148,34 @@ def test_window_features_formulas_and_missing_face():
     assert out["smile_now"] == 0.2 and math.isnan(out["blink_rate_1m"])  # 1 s of visible face < 10 s
 
 
+def test_blink_rate_is_missing_when_no_cues_were_produced():
+    n = 24
+    person = {f: np.full(n, np.nan) for f in EMOTION_FIELDS}
+    person["face_visible"] = np.ones(n)  # an older producer: face visible, no cues, blink_count 0
+    person["blink_count"] = np.zeros(n)
+    x = dict(zip(EMOTION_FEATURE_NAMES, compute_emotion(person)))
+    assert all(math.isnan(x[f"blink_rate_{w}"]) for w in ("1m", "5m", "15m"))
+    person["eye_open"][-3:] = 0.0  # cues on the last 3 ticks only: 15 s of cued face, 0 blinks
+    x = dict(zip(EMOTION_FEATURE_NAMES, compute_emotion(person)))
+    assert x["blink_rate_1m"] == 0.0
+    vis = np.array([22, 16, 16, 20, 0, 21, 20, 19, 21, 18, 21, 20], dtype=float) / 107.0  # 10 s, pairwise sum < 10
+    edge = {f: np.zeros(12) for f in EMOTION_FIELDS}
+    edge["face_visible"] = vis
+    edge["blink_count"] = np.r_[np.ones(6), np.zeros(6)]
+    assert dict(zip(EMOTION_FEATURE_NAMES, compute_emotion(edge)))["blink_rate_1m"] == pytest.approx(36.0)
+
+
+def test_one_sided_blendshapes_and_null_blinks():
+    out = raw_cues({"browDownLeft": 0.2, "browDownRight": float("nan"), "eyeBlinkLeft": 0.1}, None)
+    assert out["brow"] == pytest.approx(0.2) and out["closure"] == pytest.approx(0.1) and math.isnan(out["yaw"])
+    agg = Aggregator(Settings(), "null-blink")
+    p = PersonObs(track_id=1, bbox=(0.2, 0.1, 0.8, 0.9), face_visible=True, face_valence=0.0, eye_open=0.0,
+                  blink_onsets=float("nan"))
+    agg.push(VideoObs(t=0.0, wall=1000.0, frame_seq=0, frames_decoded=1, persons=(p,)))
+    _, rec = agg.flush(1005.0, 5.0, 12.0)
+    assert rec.blink_count == 0
+
+
 def test_no_lookahead():
     rng = np.random.default_rng(0)
     person = {f: rng.random(120) for f in EMOTION_FIELDS}

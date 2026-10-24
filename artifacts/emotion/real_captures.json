@@ -10,8 +10,8 @@
     "Calm": 0.087
    },
    "map_position": {
-    "valence": 0.15,
-    "arousal": 0.204
+    "valence": 0.19,
+    "arousal": 0.132
    },
    "agreement": 0.913,
    "acted_anchor": [
@@ -161,8 +161,8 @@
     "Focused": 1.0
    },
    "map_position": {
-    "valence": 0.15,
-    "arousal": 0.173
+    "valence": 0.181,
+    "arousal": 0.098
    },
    "agreement": 1.0,
    "acted_anchor": [
@@ -312,8 +312,8 @@
     "Focused": 1.0
    },
    "map_position": {
-    "valence": 0.115,
-    "arousal": 0.263
+    "valence": 0.133,
+    "arousal": 0.219
    },
    "agreement": 1.0,
    "acted_anchor": [
@@ -464,8 +464,8 @@
     "Calm": 0.042
    },
    "map_position": {
-    "valence": 0.137,
-    "arousal": 0.156
+    "valence": 0.135,
+    "arousal": 0.175
    },
    "channels": {
     "brow_down": {
@@ -607,12 +607,13 @@
    "ticks": 36,
    "scored_ticks": 24,
    "predicted_share": {
-    "Focused": 0.958,
-    "Collaborative_Happy": 0.042
+    "Focused": 0.875,
+    "Collaborative_Happy": 0.083,
+    "Calm": 0.042
    },
    "map_position": {
-    "valence": 0.156,
-    "arousal": 0.209
+    "valence": 0.172,
+    "arousal": 0.201
    },
    "channels": {
     "brow_down": {
@@ -754,12 +755,13 @@
    "ticks": 9,
    "scored_ticks": 9,
    "predicted_share": {
-    "Focused": 0.889,
+    "Focused": 0.667,
+    "Calm": 0.222,
     "Collaborative_Happy": 0.111
    },
    "map_position": {
-    "valence": 0.181,
-    "arousal": 0.188
+    "valence": 0.238,
+    "arousal": 0.102
    },
    "channels": {
     "brow_down": {

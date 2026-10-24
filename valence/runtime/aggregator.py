@@ -197,7 +197,8 @@ class Aggregator:
             acc.hih += int(p.head_in_hands)
             if not math.isnan(p.motion):
                 acc.motion.append(p.motion)
-            acc.blinks += p.blink_onsets
+            if p.blink_onsets == p.blink_onsets:  # a null in a recording reads back as NaN: no blink
+                acc.blinks += int(p.blink_onsets)
             if p.face_visible and not math.isnan(p.face_valence):
                 acc.face_frames += 1
                 acc.face.append(p.face_valence)

@@ -21,7 +21,8 @@ RAW_CHANNELS = ("brow", "closure", "frown", "smile", "yaw", "pitch")
 
 
 def _avg(b: Mapping[str, float], stem: str) -> float:
-    vals = [float(b[k]) for k in (f"{stem}Left", f"{stem}Right") if k in b and b[k] is not None]
+    vals = [float(b[k]) for k in (f"{stem}Left", f"{stem}Right")
+            if k in b and b[k] is not None and not math.isnan(float(b[k]))]
     return sum(vals) / len(vals) if vals else math.nan
 
 
@@ -74,7 +75,9 @@ class FaceCueTracker:
         return {k: float(statistics.median(v)) if v else 0.0 for k, v in self._samples.items()}
 
     def update(self, raw: dict[str, float] | None, t_ms: float) -> dict[str, float]:
-        """One frame. ``raw`` is None (or has NaN closure) when no face is visible. Returns the PersonObs cues."""
+        """One frame. Pass ``raw=None`` when the face is not visible (no face, or ``face_valence`` NaN); a ``raw`` whose
+        six channels are all NaN counts the same. Individual NaN channels are skipped (a NaN closure leaves the blink
+        state unchanged). Returns the PersonObs cues."""
         visible = raw is not None and not all(math.isnan(v) for v in raw.values())
         t = t_ms / 1000.0
         if visible and self._prev_visible and self._prev_t is not None:

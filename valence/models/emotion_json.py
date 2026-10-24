@@ -1,9 +1,11 @@
 """Evaluate LightGBM ``dump_model()`` JSON without LightGBM: the reference the TypeScript runtime ports.
 
-Numerical splits only (the emotion models have no categorical features), LightGBM's missing-value rules:
+Numerical splits only (the emotion models have no categorical features), LightGBM's rules:
 
+* before any split, every input with ``|x| <= kZeroThreshold`` (the float32 ``1e-35f`` = 1.0000000180025095e-35) is
+  read as exactly 0 (LightGBM's dense-row predict stores only larger values and NaN);
 * ``missing_type == "NaN"``: a NaN input goes to ``default_left ? left : right``;
-* ``missing_type == "Zero"``: NaN is read as 0, and a value with ``|x| <= 1e-35`` goes the default way;
+* ``missing_type == "Zero"``: NaN is read as 0, and a value with ``|x| <= kZeroThreshold`` goes the default way;
 * ``missing_type == "None"``: NaN is read as 0, then compared;
 * otherwise ``x <= threshold`` goes left.
 
@@ -21,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-K_ZERO = 1e-35
+K_ZERO = float(np.float32(1e-35))  # LightGBM kZeroThreshold = 1e-35f
 
 
 def load_dump(path: Path) -> dict[str, Any]:
@@ -47,6 +49,7 @@ def _leaf(node: dict[str, Any], x: np.ndarray) -> float:
 def raw_scores(dump: dict[str, Any], x: np.ndarray) -> np.ndarray:
     """Raw scores (one per class; one value for a regressor) for one input vector."""
     k = int(dump.get("num_tree_per_iteration", dump.get("num_class", 1)))
+    x = np.where(np.abs(x) <= K_ZERO, 0.0, x)  # NaN stays NaN (comparison is False)
     out = np.zeros(k)
     for i, tree in enumerate(dump["tree_info"]):
         out[i % k] += _leaf(tree["tree_structure"], x)

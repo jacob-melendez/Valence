@@ -92,7 +92,22 @@ def test_golden_windows_and_frames(golden):
         for k, v in f["expected"].items():
             assert (math.isnan(cues[k]) if v is None else cues[k] == pytest.approx(v, abs=1e-12)), k
         blinks += cues["blink_onsets"]
-    assert blinks == 1  # one short blink; the 1 s closure is not one
+    assert blinks == 5  # the short blink, the threshold-equality, 600 ms, NaN-closure and backwards-clock cases
+
+
+def test_json_evaluator_zeroes_tiny_inputs_like_lightgbm():
+    """LightGBM reads |x| <= 1e-35f as 0 before any split; the dumps split at exactly +-1e-35f."""
+    if not (ART / "meta.json").exists():
+        pytest.skip("no trained emotion artifacts")
+    pred = EmotionPredictor(ART)
+    dump = load_dump(ART / "classifier.json.gz")
+    rng = np.random.default_rng(1)
+    x0 = rng.normal(0, 0.5, len(pred.cols))
+    for _ in range(100):
+        x = x0.copy()
+        j = rng.choice(len(x), 12, replace=False)
+        x[j] = rng.choice([0.0, -1.0000000180025095e-35, 1.0000000180025095e-35, 5e-36, -3e-40, np.nan, 1e-30], 12)
+        np.testing.assert_allclose(raw_scores(dump, x), pred.raw(x)[0], rtol=0, atol=1e-12)
 
 
 def test_face_dropout_keeps_targets_aligned():
@@ -117,9 +132,22 @@ def test_self_report_eval_on_a_synthetic_fixture(tmp_path, predictor):
     path.write_text("".join(json.dumps(d) + "\n" for d in [*lines, as_list, bad]) + "\n")
     taps, X, problems = load_taps([path], predictor.cols)
     assert len(taps) == len(lines) + 1 and len(problems) == 1 and "outside" in problems[0]
+    odd = [{"valence": True, "arousal": 0.0, "features": {}}, {"valence": 0.1, "arousal": 0.0, "features": {},
+                                                              "feature_version": "emotion-v2"},
+           {"valence": 0.3, "arousal": -0.2, "features": {"face_now": 0.1}}]
+    path2 = tmp_path / "odd.jsonl"
+    path2.write_text("".join(json.dumps(d) + "\n" for d in odd))
+    taps2, X2, problems2 = load_taps([path2], predictor.cols)
+    assert len(taps2) == 1 and np.isnan(X2[0]).sum() == len(predictor.cols) - 1
+    assert any("numbers" in p for p in problems2) and any("emotion-v2" in p for p in problems2)
+    assert any("absent" in p for p in problems2)
+    # CCC is per axis: no arousal spread still gives a valence CCC
+    from valence.eval.self_report import _block
+    flat = _block(np.array([-0.5, 0.0, 0.5]), np.zeros(3), np.array([-0.4, 0.1, 0.4]), np.zeros(3))
+    assert flat["valence_ccc"] is not None and flat["arousal_ccc"] is None
     np.testing.assert_array_equal(np.isnan(X[0]), np.isnan(X[-1]))
     report = evaluate(taps, X, predictor)
-    o = report["overall"]["regressors"]
+    o = report["overall"]["map_position"]
     assert report["n_taps"] == len(taps) and 0 <= o["valence_mae"] <= 2 and "list-form/1" in report["per_person"]
     # The fixture is the simulator itself, so the models must beat a constant guess on it.
     assert o["valence_mae"] < report["overall"]["constant_zero"]["valence_mae"]

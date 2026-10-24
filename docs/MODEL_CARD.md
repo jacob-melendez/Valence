@@ -578,12 +578,16 @@ a retrain once real captures show how noisy the cues are.
 
   | Capture | Scored ticks | Emotion map reads | Map position (V, A) |
   |---|---|---|---|
-  | Quiet typing (acted Focused) | 23 | Focused 91%, Calm 9% | (+0.15, +0.20) |
-  | Keyboard gaze (acted Focused) | 23 | Focused 100% | (+0.12, +0.26) |
-  | Baseline (acted Focused) | 4 | Focused 100% | (+0.15, +0.17) |
-  | Cued slumps | 24 | Focused 96%, Calm 4% | (+0.14, +0.16) |
-  | Cued fists | 24 | Focused 96%, Collaborative 4% | (+0.16, +0.21) |
-  | Laughter and compliments | 9 | Focused 89%, Collaborative 11% | (+0.18, +0.19) |
+  | Quiet typing (acted Focused) | 23 | Focused 91%, Calm 9% | (+0.19, +0.13) |
+  | Keyboard gaze (acted Focused) | 23 | Focused 100% | (+0.13, +0.22) |
+  | Baseline (acted Focused) | 4 | Focused 100% | (+0.18, +0.10) |
+  | Cued slumps | 24 | Focused 96%, Calm 4% | (+0.14, +0.18) |
+  | Cued fists | 24 | Focused 88%, Collaborative 8%, Calm 4% | (+0.17, +0.20) |
+  | Laughter and compliments | 9 | Focused 67%, Calm 22%, Collaborative 11% | (+0.24, +0.10) |
+
+  (Blink rates are missing here, not zero: since the reviewed spec fix, ticks with a visible face but no cues do not
+  count as "no blinks". Before that fix these captures read Focused 89–100% with the arousal of the map position
+  slightly higher.)
 
   As a negative control this passes (no negative, high-arousal state on quiet typing), but it is in-sample for the
   simulator's refit and it says nothing about the four new states or the cues themselves.
