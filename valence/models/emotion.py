@@ -38,6 +38,7 @@ REG_PARAMS = dict(objective="regression", learning_rate=0.1, num_leaves=31, min_
 CLS_ROUNDS = 280  # keeps classifier.json.gz under ~3 MB (10 trees per round)
 REG_ROUNDS = 800
 DROPOUT = {"face_hidden": 0.30, "face_degraded": 0.20}
+SIM_TAG = "pose2"  # bump when the emotion simulator changes, so cached corpora are not reused
 
 FACE_LEVELS = ["face_now", "face_mean_1m", "face_mean_5m", "face_mean_15m"]
 FACE_VIS = ["face_visible_now", "face_visible_frac_5m"]
@@ -49,7 +50,8 @@ POSE_LEVELS = [n for n in EMOTION_FEATURE_NAMES if n.split("_")[0] in ("yaw", "p
 def load_corpus(sessions: int, seed: int, noise_scale: float = 1.0, cache: Path | None = None):
     """(X, meta) for an emotion-state-set corpus; cached as parquet outside the repository."""
     if cache is not None:
-        xp, mp = cache / f"emotion_X_{sessions}_{seed}_{noise_scale}.parquet", cache / f"emotion_meta_{sessions}_{seed}_{noise_scale}.parquet"
+        tag = f"{sessions}_{seed}_{noise_scale}_{SIM_TAG}"
+        xp, mp = cache / f"emotion_X_{tag}.parquet", cache / f"emotion_meta_{tag}.parquet"
         if xp.exists() and mp.exists():
             return pd.read_parquet(xp), pd.read_parquet(mp)
     df = simulate_corpus(sessions, seed, state_set="emotion", noise_scale=noise_scale)

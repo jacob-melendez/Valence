@@ -1,36 +1,36 @@
 {
  "full": {
-  "macro_f1": 0.6881,
-  "accuracy": 0.7022,
-  "ece": 0.007,
+  "macro_f1": 0.6815,
+  "accuracy": 0.6964,
+  "ece": 0.0074,
   "per_state_f1": {
-   "Focused": 0.6752,
-   "Frustrated_Masked": 0.7617,
-   "Exhausted": 0.7524,
-   "Collaborative_Happy": 0.8369,
-   "Overwhelmed": 0.6842,
-   "Tense": 0.7898,
-   "Bored": 0.6135,
-   "Confused": 0.4761,
-   "Calm": 0.6727,
-   "Anxious": 0.6181
+   "Focused": 0.664,
+   "Frustrated_Masked": 0.7522,
+   "Exhausted": 0.7613,
+   "Collaborative_Happy": 0.8365,
+   "Overwhelmed": 0.6658,
+   "Tense": 0.7756,
+   "Bored": 0.6122,
+   "Confused": 0.4616,
+   "Calm": 0.6676,
+   "Anxious": 0.6178
   },
-  "ece_uncalibrated": 0.0187,
+  "ece_uncalibrated": 0.0145,
   "va": {
-   "valence_mae": 0.1992,
-   "valence_ccc": 0.7502,
-   "arousal_mae": 0.2666,
-   "arousal_ccc": 0.6985,
-   "quadrant_acc": 0.7612
+   "valence_mae": 0.1958,
+   "valence_ccc": 0.7544,
+   "arousal_mae": 0.2625,
+   "arousal_ccc": 0.7047,
+   "quadrant_acc": 0.7674
   },
   "va_from_probabilities": {
-   "valence_mae": 0.1755,
-   "valence_ccc": 0.7834,
-   "arousal_mae": 0.2382,
-   "arousal_ccc": 0.7238,
-   "quadrant_acc": 0.7843
+   "valence_mae": 0.1741,
+   "valence_ccc": 0.782,
+   "arousal_mae": 0.2363,
+   "arousal_ccc": 0.7281,
+   "quadrant_acc": 0.7865
   },
-  "nearest_anchor_state_acc": 0.4054,
+  "nearest_anchor_state_acc": 0.402,
   "confusion": {
    "states": [
     "Focused",
@@ -46,246 +46,246 @@
    ],
    "row_normalized": [
     [
-     0.6686,
-     0.0115,
-     0.0237,
-     0.0095,
-     0.0149,
-     0.0068,
-     0.0352,
-     0.0921,
-     0.1066,
-     0.0311
+     0.653,
+     0.0105,
+     0.0247,
+     0.0085,
+     0.0173,
+     0.0081,
+     0.041,
+     0.0907,
+     0.1181,
+     0.0281
     ],
     [
-     0.0205,
-     0.736,
-     0.0101,
-     0.1102,
      0.0159,
+     0.7175,
+     0.0105,
+     0.1249,
+     0.018,
+     0.0105,
      0.013,
-     0.0142,
-     0.0319,
-     0.0339,
-     0.0142
+     0.039,
+     0.036,
+     0.0147
     ],
     [
-     0.031,
-     0.0078,
-     0.7131,
-     0.005,
+     0.0299,
+     0.0091,
+     0.7222,
+     0.0044,
      0.0551,
-     0.0169,
-     0.0942,
-     0.0208,
-     0.0269,
-     0.0294
+     0.015,
+     0.0814,
+     0.0219,
+     0.033,
+     0.028
     ],
     [
-     0.0048,
-     0.0827,
      0.0052,
-     0.8434,
+     0.0787,
+     0.0026,
+     0.8467,
      0.0041,
-     0.0018,
-     0.0048,
-     0.0041,
-     0.044,
-     0.0052
-    ],
-    [
-     0.0172,
-     0.0074,
-     0.0617,
-     0.006,
-     0.6982,
-     0.0468,
-     0.0598,
-     0.0343,
-     0.0153,
-     0.0533
-    ],
-    [
-     0.0104,
-     0.006,
-     0.0153,
      0.0022,
-     0.0402,
-     0.7868,
+     0.0052,
+     0.003,
+     0.0454,
+     0.007
+    ],
+    [
+     0.0301,
+     0.0074,
+     0.0603,
+     0.0065,
+     0.6898,
+     0.0496,
+     0.0607,
+     0.0385,
+     0.013,
+     0.044
+    ],
+    [
      0.0112,
+     0.003,
+     0.0134,
+     0.0019,
+     0.0465,
+     0.7678,
+     0.0138,
      0.0368,
-     0.0022,
-     0.0889
+     0.0033,
+     0.1023
     ],
     [
-     0.0584,
-     0.0143,
-     0.0976,
-     0.0078,
-     0.0704,
-     0.017,
-     0.6245,
-     0.0327,
-     0.029,
-     0.0483
-    ],
-    [
-     0.1288,
-     0.0169,
-     0.0346,
-     0.0066,
-     0.053,
-     0.0515,
-     0.0559,
-     0.5276,
-     0.028,
-     0.0971
-    ],
-    [
-     0.126,
-     0.0345,
-     0.0307,
-     0.0426,
-     0.0047,
-     0.0017,
-     0.0324,
-     0.0311,
-     0.6782,
-     0.0183
-    ],
-    [
-     0.0388,
+     0.058,
+     0.0138,
+     0.0916,
      0.0074,
-     0.0212,
+     0.0824,
+     0.0207,
+     0.6065,
+     0.0364,
+     0.0345,
+     0.0488
+    ],
+    [
+     0.1376,
+     0.0213,
+     0.0294,
+     0.0052,
+     0.0625,
+     0.0559,
+     0.0464,
+     0.5158,
+     0.0331,
+     0.0927
+    ],
+    [
+     0.1222,
+     0.0332,
+     0.0328,
+     0.0375,
+     0.0047,
+     0.0013,
+     0.0204,
+     0.0358,
+     0.6875,
+     0.0247
+    ],
+    [
+     0.0333,
+     0.0074,
+     0.0208,
      0.0055,
-     0.0476,
-     0.103,
-     0.0425,
-     0.0855,
-     0.0194,
-     0.6291
+     0.0559,
+     0.1062,
+     0.0351,
+     0.085,
+     0.0185,
+     0.6323
     ]
    ],
    "counts": [
     [
-     1975,
-     34,
-     70,
-     28,
-     44,
-     20,
-     104,
-     272,
-     315,
-     92
-    ],
-    [
-     49,
-     1756,
-     24,
-     263,
-     38,
+     1929,
      31,
-     34,
-     76,
-     81,
-     34
+     73,
+     25,
+     51,
+     24,
+     121,
+     268,
+     349,
+     83
     ],
     [
-     112,
-     28,
-     2575,
-     18,
+     38,
+     1712,
+     25,
+     298,
+     43,
+     25,
+     31,
+     93,
+     86,
+     35
+    ],
+    [
+     108,
+     33,
+     2608,
+     16,
      199,
-     61,
-     340,
+     54,
+     294,
+     79,
+     119,
+     101
+    ],
+    [
+     14,
+     213,
+     7,
+     2292,
+     11,
+     6,
+     14,
+     8,
+     123,
+     19
+    ],
+    [
+     65,
+     16,
+     130,
+     14,
+     1488,
+     107,
+     131,
+     83,
+     28,
+     95
+    ],
+    [
+     30,
+     8,
+     36,
+     5,
+     125,
+     2063,
+     37,
+     99,
+     9,
+     275
+    ],
+    [
+     126,
+     30,
+     199,
+     16,
+     179,
+     45,
+     1318,
+     79,
      75,
-     97,
      106
     ],
     [
-     13,
-     224,
-     14,
-     2283,
-     11,
-     5,
-     13,
-     11,
-     119,
-     14
-    ],
-    [
-     37,
-     16,
-     133,
-     13,
-     1506,
-     101,
-     129,
-     74,
-     33,
-     115
-    ],
-    [
-     28,
-     16,
-     41,
-     6,
-     108,
-     2114,
-     30,
-     99,
-     6,
-     239
-    ],
-    [
-     127,
-     31,
-     212,
-     17,
-     153,
-     37,
-     1357,
-     71,
+     187,
+     29,
+     40,
+     7,
+     85,
+     76,
      63,
-     105
+     701,
+     45,
+     126
     ],
     [
-     175,
-     23,
-     47,
-     9,
-     72,
-     70,
-     76,
-     717,
-     38,
-     132
-    ],
-    [
-     296,
-     81,
-     72,
-     100,
+     287,
+     78,
+     77,
+     88,
      11,
-     4,
-     76,
-     73,
-     1593,
-     43
+     3,
+     48,
+     84,
+     1615,
+     58
     ],
     [
-     84,
+     72,
      16,
-     46,
+     45,
      12,
-     103,
-     223,
-     92,
-     185,
-     42,
-     1362
+     121,
+     230,
+     76,
+     184,
+     40,
+     1369
     ]
    ],
    "region": {
@@ -295,114 +295,114 @@
      "Anxious",
      "Overwhelmed"
     ],
-    "predicted_inside_region": 0.8279,
-    "exact_within_region": 0.8663
+    "predicted_inside_region": 0.8226,
+    "exact_within_region": 0.8582
    }
   },
   "by_history": {
-   "<=1m": 0.6576,
-   "1-5m": 0.6915,
-   "5-15m": 0.6895
+   "<=1m": 0.6631,
+   "1-5m": 0.6841,
+   "5-15m": 0.6819
   }
  },
  "full_face_hidden": {
-  "macro_f1": 0.4139,
-  "accuracy": 0.4373,
-  "ece": 0.0139,
+  "macro_f1": 0.4151,
+  "accuracy": 0.4372,
+  "ece": 0.0092,
   "per_state_f1": {
-   "Focused": 0.4367,
-   "Frustrated_Masked": 0.397,
-   "Exhausted": 0.635,
-   "Collaborative_Happy": 0.4911,
-   "Overwhelmed": 0.4033,
-   "Tense": 0.4836,
-   "Bored": 0.3098,
-   "Confused": 0.1407,
-   "Calm": 0.454,
-   "Anxious": 0.3874
+   "Focused": 0.4225,
+   "Frustrated_Masked": 0.401,
+   "Exhausted": 0.6388,
+   "Collaborative_Happy": 0.4897,
+   "Overwhelmed": 0.414,
+   "Tense": 0.4868,
+   "Bored": 0.3119,
+   "Confused": 0.1492,
+   "Calm": 0.4406,
+   "Anxious": 0.3961
   },
-  "ece_uncalibrated": 0.0103,
+  "ece_uncalibrated": 0.0061,
   "va": {
-   "valence_mae": 0.2819,
-   "valence_ccc": 0.4589,
-   "arousal_mae": 0.3347,
-   "arousal_ccc": 0.513,
-   "quadrant_acc": 0.6345
+   "valence_mae": 0.2767,
+   "valence_ccc": 0.4625,
+   "arousal_mae": 0.3303,
+   "arousal_ccc": 0.5173,
+   "quadrant_acc": 0.6387
   },
   "va_from_probabilities": {
-   "valence_mae": 0.2752,
-   "valence_ccc": 0.4776,
-   "arousal_mae": 0.3291,
-   "arousal_ccc": 0.5123,
-   "quadrant_acc": 0.6346
+   "valence_mae": 0.2715,
+   "valence_ccc": 0.4768,
+   "arousal_mae": 0.3261,
+   "arousal_ccc": 0.5143,
+   "quadrant_acc": 0.6394
   },
-  "nearest_anchor_state_acc": 0.222
+  "nearest_anchor_state_acc": 0.2248
  },
  "shuffled_context_test": {
-  "macro_f1": 0.4287,
-  "accuracy": 0.4299,
-  "ece": 0.1633,
+  "macro_f1": 0.4282,
+  "accuracy": 0.4295,
+  "ece": 0.1602,
   "per_state_f1": {
-   "Focused": 0.4036,
-   "Frustrated_Masked": 0.5202,
-   "Exhausted": 0.3204,
-   "Collaborative_Happy": 0.5809,
-   "Overwhelmed": 0.4789,
-   "Tense": 0.5628,
-   "Bored": 0.4383,
-   "Confused": 0.3251,
-   "Calm": 0.3707,
-   "Anxious": 0.2862
+   "Focused": 0.39,
+   "Frustrated_Masked": 0.4998,
+   "Exhausted": 0.3384,
+   "Collaborative_Happy": 0.5751,
+   "Overwhelmed": 0.4761,
+   "Tense": 0.5689,
+   "Bored": 0.4555,
+   "Confused": 0.319,
+   "Calm": 0.3656,
+   "Anxious": 0.2932
   },
-  "ece_uncalibrated": 0.1458,
+  "ece_uncalibrated": 0.1463,
   "va": {
-   "valence_mae": 0.276,
-   "valence_ccc": 0.4985,
-   "arousal_mae": 0.387,
-   "arousal_ccc": 0.3742,
-   "quadrant_acc": 0.5529
+   "valence_mae": 0.2717,
+   "valence_ccc": 0.5084,
+   "arousal_mae": 0.3856,
+   "arousal_ccc": 0.3773,
+   "quadrant_acc": 0.5513
   },
   "va_from_probabilities": {
-   "valence_mae": 0.2662,
-   "valence_ccc": 0.5018,
-   "arousal_mae": 0.366,
-   "arousal_ccc": 0.4012,
-   "quadrant_acc": 0.5857
+   "valence_mae": 0.2626,
+   "valence_ccc": 0.5076,
+   "arousal_mae": 0.3614,
+   "arousal_ccc": 0.4092,
+   "quadrant_acc": 0.5826
   },
-  "nearest_anchor_state_acc": 0.2004
+  "nearest_anchor_state_acc": 0.1999
  },
  "face_only": {
-  "macro_f1": 0.6208,
-  "accuracy": 0.6309,
-  "ece": 0.0071,
+  "macro_f1": 0.6155,
+  "accuracy": 0.6264,
+  "ece": 0.0089,
   "per_state_f1": {
-   "Focused": 0.6042,
-   "Frustrated_Masked": 0.7068,
-   "Exhausted": 0.6408,
-   "Collaborative_Happy": 0.7716,
-   "Overwhelmed": 0.6392,
-   "Tense": 0.7446,
-   "Bored": 0.5578,
-   "Confused": 0.4554,
-   "Calm": 0.5677,
-   "Anxious": 0.5195
+   "Focused": 0.5942,
+   "Frustrated_Masked": 0.6678,
+   "Exhausted": 0.6695,
+   "Collaborative_Happy": 0.7651,
+   "Overwhelmed": 0.6328,
+   "Tense": 0.724,
+   "Bored": 0.5763,
+   "Confused": 0.447,
+   "Calm": 0.5741,
+   "Anxious": 0.5042
   },
-  "ece_uncalibrated": 0.0071,
+  "ece_uncalibrated": 0.0105,
   "va": {
-   "valence_mae": 0.2174,
-   "valence_ccc": 0.6906,
-   "arousal_mae": 0.2953,
-   "arousal_ccc": 0.6346,
-   "quadrant_acc": 0.7091
+   "valence_mae": 0.217,
+   "valence_ccc": 0.6861,
+   "arousal_mae": 0.2904,
+   "arousal_ccc": 0.6408,
+   "quadrant_acc": 0.7131
   },
   "va_from_probabilities": {
-   "valence_mae": 0.2047,
-   "valence_ccc": 0.7082,
-   "arousal_mae": 0.2754,
-   "arousal_ccc": 0.645,
-   "quadrant_acc": 0.7314
+   "valence_mae": 0.2052,
+   "valence_ccc": 0.6986,
+   "arousal_mae": 0.2719,
+   "arousal_ccc": 0.6523,
+   "quadrant_acc": 0.7272
   },
-  "nearest_anchor_state_acc": 0.3392
+  "nearest_anchor_state_acc": 0.3413
  },
  "context_only": {
   "macro_f1": 0.4248,
@@ -422,60 +422,60 @@
   },
   "ece_uncalibrated": 0.0195,
   "va": {
-   "valence_mae": 0.278,
-   "valence_ccc": 0.4694,
-   "arousal_mae": 0.3296,
-   "arousal_ccc": 0.5239,
-   "quadrant_acc": 0.6397
+   "valence_mae": 0.2729,
+   "valence_ccc": 0.4751,
+   "arousal_mae": 0.3253,
+   "arousal_ccc": 0.5283,
+   "quadrant_acc": 0.6428
   },
   "va_from_probabilities": {
-   "valence_mae": 0.2735,
-   "valence_ccc": 0.4824,
-   "arousal_mae": 0.3285,
-   "arousal_ccc": 0.5118,
-   "quadrant_acc": 0.6408
+   "valence_mae": 0.2687,
+   "valence_ccc": 0.4843,
+   "arousal_mae": 0.3248,
+   "arousal_ccc": 0.5155,
+   "quadrant_acc": 0.6435
   },
-  "nearest_anchor_state_acc": 0.232
+  "nearest_anchor_state_acc": 0.2345
  },
  "shuffled_context_trained": {
-  "macro_f1": 0.6175,
-  "accuracy": 0.6281,
-  "ece": 0.0068,
+  "macro_f1": 0.6117,
+  "accuracy": 0.6229,
+  "ece": 0.0075,
   "per_state_f1": {
-   "Focused": 0.6016,
-   "Frustrated_Masked": 0.7019,
-   "Exhausted": 0.6416,
-   "Collaborative_Happy": 0.7681,
-   "Overwhelmed": 0.6413,
-   "Tense": 0.7441,
-   "Bored": 0.5522,
-   "Confused": 0.4469,
-   "Calm": 0.5651,
-   "Anxious": 0.5123
+   "Focused": 0.5815,
+   "Frustrated_Masked": 0.6652,
+   "Exhausted": 0.671,
+   "Collaborative_Happy": 0.76,
+   "Overwhelmed": 0.6327,
+   "Tense": 0.722,
+   "Bored": 0.5772,
+   "Confused": 0.4403,
+   "Calm": 0.5726,
+   "Anxious": 0.4946
   },
-  "ece_uncalibrated": 0.0067,
+  "ece_uncalibrated": 0.0103,
   "va": {
    "valence_mae": 0.218,
-   "valence_ccc": 0.6887,
-   "arousal_mae": 0.296,
-   "arousal_ccc": 0.6324,
-   "quadrant_acc": 0.7083
+   "valence_ccc": 0.683,
+   "arousal_mae": 0.2922,
+   "arousal_ccc": 0.6357,
+   "quadrant_acc": 0.7099
   },
   "va_from_probabilities": {
-   "valence_mae": 0.206,
-   "valence_ccc": 0.7042,
-   "arousal_mae": 0.2766,
-   "arousal_ccc": 0.6429,
-   "quadrant_acc": 0.7272
+   "valence_mae": 0.2059,
+   "valence_ccc": 0.6964,
+   "arousal_mae": 0.275,
+   "arousal_ccc": 0.6456,
+   "quadrant_acc": 0.7238
   },
-  "nearest_anchor_state_acc": 0.3354
+  "nearest_anchor_state_acc": 0.3377
  },
  "scenarios": {
   "collaborative_happy": {
    "Collaborative_Happy": {
     "n": 242,
     "agreement": 1.0,
-    "valence": 0.645,
+    "valence": 0.649,
     "arousal": 0.494,
     "top_label": "Collaborative_Happy"
    }
@@ -484,72 +484,72 @@
    "Collaborative_Happy": {
     "n": 122,
     "agreement": 1.0,
-    "valence": 0.688,
+    "valence": 0.684,
     "arousal": 0.498,
     "top_label": "Collaborative_Happy"
    },
    "Exhausted": {
     "n": 85,
-    "agreement": 0.9647,
-    "valence": -0.39,
-    "arousal": -0.56,
+    "agreement": 0.9765,
+    "valence": -0.4,
+    "arousal": -0.614,
     "top_label": "Exhausted"
    }
   },
   "exhausted": {
    "Exhausted": {
     "n": 121,
-    "agreement": 0.9504,
-    "valence": -0.392,
-    "arousal": -0.509,
+    "agreement": 0.9008,
+    "valence": -0.385,
+    "arousal": -0.487,
     "top_label": "Exhausted"
    }
   },
   "focused": {
    "Focused": {
     "n": 121,
-    "agreement": 0.686,
-    "valence": 0.171,
-    "arousal": 0.039,
+    "agreement": 0.8017,
+    "valence": 0.152,
+    "arousal": 0.068,
     "top_label": "Focused"
    }
   },
   "frustrated_masked": {
    "Focused": {
     "n": 25,
-    "agreement": 0.84,
-    "valence": -0.031,
-    "arousal": 0.287,
+    "agreement": 0.88,
+    "valence": -0.054,
+    "arousal": 0.273,
     "top_label": "Focused"
    },
    "Frustrated_Masked": {
     "n": 97,
     "agreement": 1.0,
-    "valence": -0.593,
-    "arousal": 0.595,
+    "valence": -0.596,
+    "arousal": 0.598,
     "top_label": "Frustrated_Masked"
    }
   },
   "full_demo": {
    "Focused": {
     "n": 37,
-    "agreement": 0.9459,
-    "valence": 0.147,
-    "arousal": 0.102,
+    "agreement": 1.0,
+    "valence": 0.122,
+    "arousal": 0.204,
     "top_label": "Focused"
    },
    "Frustrated_Masked": {
     "n": 85,
     "agreement": 1.0,
-    "valence": -0.5,
-    "arousal": 0.565,
+    "valence": -0.569,
+    "arousal": 0.589,
     "top_label": "Frustrated_Masked"
    },
    "Collaborative_Happy": {
     "n": 49,
     "agreement": 1.0,
-    "valence": 0.631,
-    "arousal": 0.479,
+    "valence": 0.563,
+    "arousal": 0.483,
     "top_label": "Collaborative_Happy"
    }
   },
@@ -557,31 +557,31 @@
    "Focused": {
     "n": 49,
     "agreement": 1.0,
-    "valence": 0.09,
-    "arousal": 0.292,
+    "valence": 0.092,
+    "arousal": 0.29,
     "top_label": "Focused"
    },
    "Frustrated_Masked": {
     "n": 85,
-    "agreement": 1.0,
-    "valence": -0.474,
-    "arousal": 0.579,
+    "agreement": 0.9176,
+    "valence": -0.391,
+    "arousal": 0.577,
     "top_label": "Frustrated_Masked"
    }
   },
   "overwhelmed": {
    "Focused": {
     "n": 13,
-    "agreement": 0.1538,
-    "valence": -0.257,
-    "arousal": 0.089,
-    "top_label": "Bored"
+    "agreement": 0.3846,
+    "valence": -0.253,
+    "arousal": 0.17,
+    "top_label": "Anxious"
    },
    "Overwhelmed": {
     "n": 97,
-    "agreement": 0.9691,
-    "valence": -0.557,
-    "arousal": 0.58,
+    "agreement": 1.0,
+    "valence": -0.561,
+    "arousal": 0.62,
     "top_label": "Overwhelmed"
    }
   },
@@ -589,41 +589,42 @@
    "Focused": {
     "n": 26,
     "agreement": 0.8846,
-    "valence": 0.007,
-    "arousal": 0.299,
+    "valence": 0.041,
+    "arousal": 0.261,
     "top_label": "Focused"
    },
    "Tense": {
     "n": 194,
     "agreement": 1.0,
-    "valence": -0.402,
+    "valence": -0.403,
     "arousal": 0.5,
     "top_label": "Tense"
    }
   }
  },
- "model_id": "emotion-v1@378fa16c",
+ "model_id": "emotion-v1@006a8d7d",
  "sizes": {
   "classifier": {
-   "json_gz_bytes": 2775341,
-   "trees": 2790,
-   "rounds": 279
+   "json_gz_bytes": 2785618,
+   "trees": 2800,
+   "rounds": 280
   },
   "valence": {
-   "json_gz_bytes": 446666,
-   "trees": 246,
-   "rounds": 246
+   "json_gz_bytes": 573242,
+   "trees": 317,
+   "rounds": 317
   },
   "arousal": {
-   "json_gz_bytes": 705887,
-   "trees": 390,
-   "rounds": 390
+   "json_gz_bytes": 625138,
+   "trees": 344,
+   "rounds": 344
   }
  },
  "training": {
   "sessions": 600,
   "seed": 11,
   "noise_scale": 1.0,
+  "noise_mix": null,
   "windows": 169171,
   "split": "by session, 70/7.5/7.5/15 (train/early-stop/calibration/test)",
   "split_windows": {

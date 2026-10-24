@@ -163,7 +163,8 @@ def main() -> None:
     pred = EmotionPredictor(out_dir)
     cases = []
     demo = render("full_demo")
-    cases += windows_from(demo, [(1, 60, 60, "full_demo focused 5 min"), (1, 150, 180, "full_demo 12.5 min"),
+    cases += windows_from(demo, [(1, 59, 60, "full_demo focused 5 min"), (1, 60, 60, "full_demo first Frustrated tick"),
+                                 (1, 150, 180, "full_demo 12.5 min"),
                                  (1, 2, 3, "full_demo warm-up 3 ticks"), (1, 300, 180, "full_demo after the break")])
     for name, st in (("tense", "all"), ("overwhelmed", "all"), ("exhausted", "core"), ("collaborative_happy", "core")):
         df = render(name, state_set=st)

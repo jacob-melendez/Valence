@@ -191,17 +191,21 @@ class _Person:
             "smile": smile + cn.smile_from_face * f_pos + self.neutral[3] + r.normal(0.0, sd),
         }
         out = {k: float(np.clip(v, -1.0, 1.0)) for k, v in out.items()}
-        if self.away_on:
-            away = r.uniform(0.5, 1.0)
-            yaw = r.uniform(*cn.away_yaw) * (1.0 if r.random() < 0.5 else -1.0)
-            pitch_t = pitch + away_pitch + r.normal(0.0, 2.0 * psd)
-        else:
-            away = r.uniform(0.0, 0.12) if r.random() < 0.3 else 0.0
-            yaw = r.normal(0.0, 4.0 * self.ns)
-            pitch_t = pitch + r.normal(0.0, psd)
-        out["head_yaw"] = float(abs(yaw + self.neutral_deg[0]))
-        out["head_pitch"] = float(np.clip(pitch_t + self.neutral_deg[1], -90.0, 90.0))
-        out["head_away"] = float(away)
+        # Head pose frame by frame, then the aggregator's tick rule, so head_yaw, head_pitch and head_away agree the
+        # way they do live (a head drooping past -20 degrees counts as "away" whatever the reason).
+        f = cn.frames_per_tick
+        share = r.uniform(0.5, 1.0) if self.away_on else (r.uniform(0.0, 0.12) if r.random() < 0.3 else 0.0)
+        k = int(round(share * f))
+        pitch_tick = pitch + r.normal(0.0, psd)
+        yaw = np.r_[r.uniform(*cn.away_yaw, k) * np.where(r.random(k) < 0.5, 1.0, -1.0),
+                    r.normal(0.0, cn.yaw_frame_sd * self.ns, f - k)]
+        pitches = np.r_[pitch_tick + away_pitch + r.normal(0.0, psd, k),
+                        pitch_tick + r.normal(0.0, cn.pitch_frame_sd, f - k)]
+        yaw = np.clip(yaw + self.neutral_deg[0], -90.0, 90.0)
+        pitches = np.clip(pitches + self.neutral_deg[1], -90.0, 90.0)
+        out["head_yaw"] = float(np.median(np.abs(yaw)))
+        out["head_pitch"] = float(np.median(pitches))
+        out["head_away"] = float(np.mean((np.abs(yaw) > 20.0) | (np.abs(pitches) > 20.0)))
         out["blink_count"] = int(r.poisson(blink_rate * self.blink_mult / 60.0 * TICK_S * face_vis))
         return out
 

@@ -296,6 +296,10 @@ On top of the table (`FaceCueNuisance`):
 - spread: episode means N(0, 0.08) (blendshape cues), pitch N(0, 4°), blink rate × lognormal(0, 0.3), away share
   ± N(0, 0.10); per-tick noise 0.06 (frown 0.045) and 4° pitch, growing below 200 lux like `face_valence`; each
   person's neutral baseline is off by N(0, 0.06) and N(0, 4°); resting blink rates differ by × U(0.6, 1.6);
+- head pose is simulated per frame (10 frames per tick: the tick's share of looking-away frames, away frames at
+  |yaw| U(18°, 45°) and the state's extra away pitch, the others near the screen with 4° yaw and 2° pitch jitter around
+  the tick's pitch) and aggregated with the live tick rule (§2), so `head_yaw`, `head_pitch` and `head_away` agree
+  the way they do live: a head drooping past −20° counts as looking away whatever the state;
 - cues lag a state change like the other behaviors (the person's 1–2 min lag), and a hidden face gives NaN cues and
   no blinks.
 

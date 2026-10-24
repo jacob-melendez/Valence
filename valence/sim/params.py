@@ -145,6 +145,9 @@ class FaceCueNuisance:
     away_episode_sd: float = 0.10  # spread of an episode's share of time looking away
     away_switch: float = 0.3
     away_yaw: tuple[float, float] = (18.0, 45.0)  # |yaw| while looking away, degrees
+    frames_per_tick: int = 10  # head pose is simulated per frame and aggregated like the live tick rule
+    pitch_frame_sd: float = 2.0  # frame-to-frame pitch jitter within a tick, degrees
+    yaw_frame_sd: float = 4.0  # |yaw| jitter of frames facing the screen, degrees
     va_sd: float = 0.10  # per-episode offset of true valence and arousal from the state's anchor
     smile_from_face: float = 0.35  # smile follows positive face valence
     frown_from_face: float = 0.25  # frown follows negative face valence
