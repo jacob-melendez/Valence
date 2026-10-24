@@ -24,6 +24,7 @@ import numpy as np
 from valence.eval.emotion_eval import ccc, nearest_anchor
 
 KEYS = ("valence", "arousal")
+WARM_FILL = 12 / 180  # fill_ratio of a 1-minute window
 
 
 def load_taps(paths: list[Path], input_features: list[str]) -> tuple[list[dict], np.ndarray, list[str]]:
@@ -102,12 +103,47 @@ def evaluate(taps: list[dict], X: np.ndarray, predictor) -> dict:
 
     report = {"model": predictor.model_id, "n_taps": len(taps), "overall": summary(np.ones(len(taps), bool)),
               "per_person": {}}
+    if "fill_ratio" in predictor.cols:  # taps with >= 1 min of window (the console shows "warming up" before)
+        warm = np.nan_to_num(X[:, predictor.cols.index("fill_ratio")]) >= WARM_FILL
+        report["warm_only"] = summary(warm) if warm.any() else {"n": 0}
+        report["n_warm_taps"] = int(warm.sum())
     for person in sorted({t["person"] for t in taps}):
         m = np.array([t["person"] == person for t in taps])
         report["per_person"][person] = summary(m)
     report["predicted_states"] = {s: int(c) for s, c in zip(states, np.bincount(r["proba"].argmax(axis=1),
                                                                                 minlength=len(states))) if c}
     return report
+
+
+def figure(taps: list[dict], X: np.ndarray, predictor, path: Path) -> None:
+    """Taps vs the served map position, one arrow per tap (tap -> prediction), anchors in gray."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    r = predictor.predict(X)
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=130)
+    fig.patch.set_facecolor("#fcfcfb")
+    ax.set_facecolor("#fcfcfb")
+    ax.axhline(0, color="#e4e3df", lw=1)
+    ax.axvline(0, color="#e4e3df", lw=1)
+    for (av, aa), s in zip(predictor.anchors, predictor.states):
+        ax.scatter([av], [aa], s=40, facecolor="#fcfcfb", edgecolor="#8a8984", lw=1.2, zorder=2)
+        ax.text(av + 0.03, aa, s.split("_")[0], fontsize=7, color="#52514e", va="center")
+    for t, v, a in zip(taps, r["valence_mix"], r["arousal_mix"]):
+        ax.plot([t["valence"], v], [t["arousal"], a], color="#8a8984", lw=0.8, zorder=1)
+        ax.scatter([t["valence"]], [t["arousal"]], s=22, color="#eb6834", zorder=3)
+        ax.scatter([v], [a], s=22, color="#2a78d6", zorder=3)
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    ax.set_xlabel("Valence", color="#52514e")
+    ax.set_ylabel("Arousal", color="#52514e")
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.set_title(f"Self-report taps (orange) vs map position (blue), n = {len(taps)}", loc="left", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(path, facecolor="#fcfcfb")
 
 
 def synthetic_taps(n_sessions: int, seed: int, every_s: float = 120.0, report_sd: float = 0.15) -> list[dict]:
@@ -155,6 +191,7 @@ def main() -> None:
     ap.add_argument("--synthetic", type=int, help="write a simulator fixture with this many sessions first")
     ap.add_argument("--write", help="where --synthetic writes its JSONL")
     ap.add_argument("--seed", type=int, default=99)
+    ap.add_argument("--figure", help="write a taps-vs-prediction PNG here")
     args = ap.parse_args()
     files = [Path(f) for f in args.files]
     if args.synthetic:
@@ -164,6 +201,8 @@ def main() -> None:
     predictor = EmotionPredictor(Path(args.models))
     taps, X, problems = load_taps(files, predictor.cols)
     report = {"files": [str(f) for f in files], **evaluate(taps, X, predictor), "problems": problems[:50]}
+    if args.figure and taps:
+        figure(taps, X, predictor, Path(args.figure))
     text = json.dumps(report, indent=1)
     if args.out:
         Path(args.out).write_text(text)
