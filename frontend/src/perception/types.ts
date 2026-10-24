@@ -134,6 +134,8 @@ export interface PerceptionStatus {
   mic: boolean;
   /** Video observations per second (EMA). */
   fps: number;
+  /** Face passes per second (= fps by default, fps / 2 at the Python cadence): report it next to blink counts. */
+  face_hz: number;
   /** Time to process one video frame, ms (EMA). */
   video_ms: number;
   /** Time to process one audio block, ms (EMA). */
@@ -170,6 +172,12 @@ export interface PerceptionOptions {
   minPersonH?: number;
   /** Run the video models in a Web Worker (default true where supported; falls back to the main thread). */
   worker?: boolean;
+  /**
+   * Face pass on every video frame (default true) instead of every other one (false: the Python edge's cadence).
+   * The emotion cues' blink detector needs the face rate (docs/EMOTION_FEATURES.md 1.3); measured on a CPU-only
+   * machine: 7.2 fps with 7.2 face passes/s, against 8.4 fps with 4.2 at the Python cadence.
+   */
+  faceEveryFrame?: boolean;
 }
 
 export type ObservationListener = (obs: Obs) => void;
@@ -219,6 +227,7 @@ export const idleStatus = (mock = false): PerceptionStatus => ({
   camera: false,
   mic: false,
   fps: 0,
+  face_hz: 0,
   video_ms: 0,
   audio_ms: 0,
   load_ms: null,

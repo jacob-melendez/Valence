@@ -247,7 +247,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
       laughUntil = -Infinity;
       nextLaughAt = 0;
       timers = [setInterval(videoTick, 1000 / fps), setInterval(audioTick, 1000 * blockS)];
-      setStatus({ ...idleStatus(true), phase: "running", camera: true, mic: true, fps, load_ms: 0 });
+      setStatus({ ...idleStatus(true), phase: "running", camera: true, mic: true, fps, face_hz: fps, load_ms: 0 });
     },
     stop() {
       for (const id of timers) clearInterval(id);

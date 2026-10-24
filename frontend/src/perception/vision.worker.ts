@@ -34,7 +34,9 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         useModule: isModuleWorker(),
       });
       closeModels = () => models.close();
-      pipeline = new VisionPipeline(models, reader, { maxPeople: msg.maxPeople, minPersonH: msg.minPersonH });
+      pipeline = new VisionPipeline(models, reader, {
+        maxPeople: msg.maxPeople, minPersonH: msg.minPersonH, faceEveryFrame: msg.faceEveryFrame,
+      });
       post({ kind: "ready", delegate: models.delegate });
     } catch (err) {
       post({ kind: "error", message: err instanceof Error ? err.message : String(err) });

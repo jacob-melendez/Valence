@@ -10,7 +10,7 @@ import type { VideoObs } from "./types";
 import { VisionPipeline } from "./video";
 
 export type WorkerRequest =
-  | { kind: "init"; assetBase: string; delegate?: Delegate; maxPeople: number; minPersonH: number }
+  | { kind: "init"; assetBase: string; delegate?: Delegate; maxPeople: number; minPersonH: number; faceEveryFrame: boolean }
   | { kind: "frame"; id: number; bitmap: ImageBitmap; t: number; wall: number; seq: number; decoded: number }
   | { kind: "close" };
 
@@ -26,6 +26,7 @@ export interface VisionBackendOptions {
   delegate?: Delegate;
   maxPeople: number;
   minPersonH: number;
+  faceEveryFrame?: boolean;
   /** Called with the number of derived pixel buffers wiped while processing. */
   onDerivedPurged: (n: number) => void;
 }
@@ -43,7 +44,9 @@ export async function inlineBackend(opts: VisionBackendOptions): Promise<VisionB
     ...(opts.delegate ? { delegate: opts.delegate } : {}), maxPeople: opts.maxPeople,
   });
   const reader = new PixelReader(() => opts.onDerivedPurged(1));
-  const pipeline = new VisionPipeline(models, reader, { maxPeople: opts.maxPeople, minPersonH: opts.minPersonH });
+  const pipeline = new VisionPipeline(models, reader, {
+    maxPeople: opts.maxPeople, minPersonH: opts.minPersonH, faceEveryFrame: opts.faceEveryFrame ?? false,
+  });
   return {
     where: "main",
     delegate: models.delegate,
@@ -86,7 +89,8 @@ export async function workerBackend(opts: VisionBackendOptions, timeoutMs = 6000
     };
     const init: WorkerRequest = {
       kind: "init", assetBase: new URL(opts.assetBase, location.href).href, maxPeople: opts.maxPeople,
-      minPersonH: opts.minPersonH, ...(opts.delegate ? { delegate: opts.delegate } : {}),
+      minPersonH: opts.minPersonH, faceEveryFrame: opts.faceEveryFrame ?? false,
+      ...(opts.delegate ? { delegate: opts.delegate } : {}),
     };
     worker.postMessage(init);
   }).catch((e: unknown) => {

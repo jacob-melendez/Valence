@@ -262,6 +262,19 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     expect(left.raw!.blendshapes["mouthSmileLeft"]).toBe(0.0);
   });
 
+  it("faceEveryFrame runs the face pass on every frame (default: odd frames, the Python cadence)", () => {
+    const scene = () => ({ poses: [seated()], faces: [{ nose: [0.5, 0.3] as [number, number], smile: 0.2 }], hands: [] });
+    const a = fakeModels(scene);
+    run(new VisionPipeline(a.models, fakePixels().pixels), 10);
+    expect(a.calls.faces).toHaveLength(5);
+    expect(a.calls.gestures).toHaveLength(5);
+    const b = fakeModels(scene);
+    const obs = run(new VisionPipeline(b.models, fakePixels().pixels, { faceEveryFrame: true }), 10);
+    expect(b.calls.faces).toHaveLength(10);
+    expect(b.calls.gestures).toHaveLength(5);
+    expect(obs[0]!.persons[0]!.face_visible).toBe(true); // visible from the first frame
+  });
+
   it("sends strictly increasing timestamps to each VIDEO-mode task even if t repeats", () => {
     const { models, calls } = fakeModels(() => ({ poses: [], faces: [], hands: [] }));
     const pipe = new VisionPipeline(models, fakePixels().pixels);

@@ -5,7 +5,7 @@
 // download size.
 //
 //   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
-//                    [--audio file.wav] [--no-build] [--headed]
+//                    [--audio file.wav] [--python-cadence] [--no-build] [--headed]
 //
 // Run from frontend/. Needs `npm install`, the repo's Python venv (for make_media.py) and Playwright's Chromium
 // (NODE_PATH or /opt/node-tools/node_modules provides `playwright`).
@@ -122,7 +122,10 @@ page.on("console", (m) => {
 page.on("pageerror", (e) => pageErrors.push(String(e)));
 page.on("worker", (w) => w.on("console", (m) => /Content Security Policy|Refused to/i.test(m.text()) && consoleCsp.push(m.text())));
 
-const query = DELEGATE ? `?delegate=${DELEGATE}` : "";
+const params = new URLSearchParams();
+if (DELEGATE) params.set("delegate", DELEGATE);
+if (args.includes("--python-cadence")) params.set("faceEveryFrame", "0");
+const query = params.size ? `?${params}` : "";
 const resp = await page.goto(`${origin}/${query}`, { waitUntil: "load" });
 const startedAt = Date.now();
 let state;

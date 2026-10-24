@@ -95,6 +95,12 @@ export interface VisionPipelineOptions {
   maxPeople?: number;
   /** Ignore people shorter than this share of the frame height (settings.min_box_height = 0.25). */
   minPersonH?: number;
+  /**
+   * Run the face pass on every frame instead of every other one (the Python edge's cadence, the default). Doubles
+   * the face rate for the emotion cues' blink detector (docs/EMOTION_FEATURES.md 1.3 wants >= 15 face frames/s), at
+   * the cost of one more model per even frame.
+   */
+  faceEveryFrame?: boolean;
 }
 
 const area = (b: BoxPx) => (b[2] - b[0]) * (b[3] - b[1]);
@@ -107,6 +113,7 @@ export class VisionPipeline {
   private readonly people = new Map<number, Person>();
   private readonly maxPeople: number;
   private readonly minPersonH: number;
+  private readonly faceEveryFrame: boolean;
   private iter = 0;
   private readonly lastTs = { pose: -1, faces: -1, gestures: -1 };
   private lastLuxT = -Infinity;
@@ -122,6 +129,7 @@ export class VisionPipeline {
   ) {
     this.maxPeople = opts.maxPeople ?? 3;
     this.minPersonH = opts.minPersonH ?? 0.25;
+    this.faceEveryFrame = opts.faceEveryFrame ?? false;
   }
 
   process(frame: FrameInput, t: number, wall: number, seq: number, framesDecoded = 0): VideoObs {
@@ -151,7 +159,7 @@ export class VisionPipeline {
     }
 
     if (it % 2 === 0) this.updateFists(frame, byId, w, h, t);
-    else this.updateFaces(frame, byId, w, h, t);
+    if (it % 2 === 1 || this.faceEveryFrame) this.updateFaces(frame, byId, w, h, t);
 
     if (t - this.lastLuxT >= LUX_PERIOD_S) {
       this.lastLuxT = t;

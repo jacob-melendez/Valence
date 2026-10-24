@@ -186,6 +186,7 @@ class BrowserPerception implements Perception {
     const backend = await this.deps.visionBackend({
       assetBase: this.opts.assetBase ?? "/mediapipe/", maxPeople: this.opts.maxPeople ?? 3,
       minPersonH: this.opts.minPersonH ?? 0.25, onDerivedPurged: (n) => (cnt.derived_purged += n),
+      faceEveryFrame: this.opts.faceEveryFrame ?? true,
       ...(this.opts.delegate ? { delegate: this.opts.delegate } : {}),
       ...(this.opts.worker !== undefined ? { worker: this.opts.worker } : {}),
     });
@@ -284,9 +285,10 @@ class BrowserPerception implements Perception {
     const ms = performance.now() - t0;
     const hz = this.lastVideoT !== null && t > this.lastVideoT ? 1 / (t - this.lastVideoT) : 0;
     this.lastVideoT = t;
+    const fps = hz ? (this.st.fps ? 0.9 * this.st.fps + 0.1 * hz : hz) : this.st.fps;
     this.setStatus({
       video_ms: this.st.video_ms ? 0.9 * this.st.video_ms + 0.1 * ms : ms,
-      fps: hz ? (this.st.fps ? 0.9 * this.st.fps + 0.1 * hz : hz) : this.st.fps,
+      fps, face_hz: (this.opts.faceEveryFrame ?? true) ? fps : fps / 2,
     }, false);
     if (obs) this.emit(obs, gen);
   }

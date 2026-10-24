@@ -432,7 +432,7 @@ describe("workerBackend (fake Worker)", () => {
     const posted: unknown[] = [];
     vi.spyOn(self, "postMessage").mockImplementation(((m: unknown) => void posted.push(m)) as typeof self.postMessage);
     await import("@/perception/vision.worker");
-    const init: WorkerRequest = { kind: "init", assetBase: "http://localhost/mediapipe/", maxPeople: 3, minPersonH: 0.25 };
+    const init: WorkerRequest = { kind: "init", assetBase: "http://localhost/mediapipe/", maxPeople: 3, minPersonH: 0.25, faceEveryFrame: false };
     void (self.onmessage as unknown as (e: { data: WorkerRequest }) => Promise<void>)({ data: init });
     await Promise.resolve();
     expect(posted).toEqual([{ kind: "started" }]);
