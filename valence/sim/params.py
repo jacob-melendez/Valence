@@ -132,12 +132,17 @@ FACE_CUES: dict[str, FaceCueParams] = {
 
 @dataclass(frozen=True)
 class FaceCueNuisance:
-    episode_sd: float = 0.04  # between-episode spread of brow/eye/frown/smile means
-    tick_sd: float = 0.04  # per-tick noise of the blendshape cues (frown: 0.75x)
-    pitch_tick_sd: float = 3.0  # degrees
-    neutral_sd: float = 0.03  # per-person error of the 20 s neutral baseline (blendshape cues)
-    neutral_deg_sd: float = 3.0  # same for yaw and pitch, degrees
-    blink_mult: tuple[float, float] = (0.7, 1.4)  # people's resting blink rates differ
+    # Deliberately wide: expression differs between people and episodes far more than between these states'
+    # textbook means (the existing face_valence uses face_episode_sd 0.12 for the same reason).
+    episode_sd: float = 0.08  # between-episode spread of brow/eye/frown/smile means
+    tick_sd: float = 0.06  # per-tick noise of the blendshape cues (frown: 0.75x)
+    pitch_tick_sd: float = 4.0  # degrees
+    pitch_episode_sd: float = 4.0  # degrees
+    neutral_sd: float = 0.06  # per-person error of the 20 s neutral baseline (blendshape cues)
+    neutral_deg_sd: float = 4.0  # same for yaw and pitch, degrees
+    blink_mult: tuple[float, float] = (0.6, 1.6)  # people's resting blink rates differ
+    blink_episode_sd: float = 0.3  # log-normal spread of an episode's blink rate
+    away_episode_sd: float = 0.10  # spread of an episode's share of time looking away
     away_switch: float = 0.3
     away_yaw: tuple[float, float] = (18.0, 45.0)  # |yaw| while looking away, degrees
     va_sd: float = 0.10  # per-episode offset of true valence and arousal from the state's anchor

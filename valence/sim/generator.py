@@ -160,13 +160,15 @@ class _Person:
         self.true_v = float(np.clip(av + dv, -1.0, 1.0))
         self.true_a = float(np.clip(aa + da, -1.0, 1.0))
         jit = r.normal(0.0, cn.episode_sd, 4)
+        blink_jit = float(np.exp(r.normal(0.0, cn.blink_episode_sd)))
+        away = float(np.clip(c.away_p + r.normal(0.0, cn.away_episode_sd), 0.0, 0.95))
         self.cue_target = np.array([
             c.brow + jit[0],
             c.eye + jit[1] + cn.eye_from_arousal * da,
             c.frown + jit[2] - cn.frown_from_valence * dv,
             c.smile + jit[3] + cn.smile_from_valence * dv,
-            c.blink_per_min * max(0.2, 1.0 + cn.blink_from_arousal * da),
-            c.away_p, c.pitch, c.away_pitch,
+            c.blink_per_min * blink_jit * max(0.2, 1.0 + cn.blink_from_arousal * da),
+            away, c.pitch + r.normal(0.0, cn.pitch_episode_sd), c.away_pitch,
         ])
 
     def face_cues(self, face_ok: bool, face: float, face_vis: float, lux: float) -> dict[str, float]:
