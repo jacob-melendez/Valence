@@ -207,9 +207,17 @@ not by valence–arousal.
 | `meta.json` | `feature_version`, `input_features` (exact order), `emotion_feature_names`, `states` (id, display, valence, arousal, in class order), `temperature`, `layers` (feature → explanation layer), training summary and metrics |
 | `golden.json` | ~20 input vectors with Python's raw scores, temperature-softmax probabilities, valence/arousal predictions and `pred_contrib`, plus golden windows (tick channels → the 31 features) and golden frames (blendshapes + matrix → per-frame cues) |
 
-Inference: `p = softmax(raw / T)`; `valence = clip(valence_raw, −1, 1)`, `arousal = clip(arousal_raw, −1, 1)`.
-`pred_contrib` is LightGBM's path-dependent TreeSHAP (per class for the classifier: `n + 1` values per class, the last
-being the bias).
+Inference:
+
+- `p = softmax(raw / T)` over the 10 classes.
+- **Map position (served):** `valence = Σ_k p_k · states[k].valence`, `arousal = Σ_k p_k · states[k].arousal`, the
+  probability-weighted anchors. On held-out simulated sessions this beats the regressors on MAE and CCC for both
+  axes (the simulator's within-state spread carries little observable signal), and the point always agrees with
+  the displayed probabilities.
+- Regressors (exported for comparison and for retraining on real taps later):
+  `valence = clip(valence_raw, −1, 1)`, `arousal = clip(arousal_raw, −1, 1)`.
+- `pred_contrib` is LightGBM's path-dependent TreeSHAP (per class for the classifier: `n + 1` values per class, the
+  last being the bias). Golden vectors carry `valence_mix` / `arousal_mix` (map position) and the regressor values.
 
 The optional `Prediction.affect` field (`valence/contracts.py` `Affect`) carries the result to the console:
 `valence`, `arousal`, `label`, `label_display`, `confidence`, `probabilities` (10 states) and `model`.
@@ -228,3 +236,37 @@ One JSON line per tap, appended by the console's capture; **never media, never a
   list in `meta.json` → `input_features` order. Optional `label` (a state id the person picked) is scored too.
 - Evaluated by `python -m valence.eval.self_report <files.jsonl>` (MAE, CCC, quadrant agreement, nearest-anchor
   state agreement, per person).
+
+## 7. Simulator assumptions for the new cues (`valence/sim/params.py`)
+
+The training data is simulated. These numbers **are** the hypothesis the emotion models are trained and evaluated
+under; none of them was measured on people. Values are episode means relative to the person's neutral
+(`FACE_CUES`); blinks per minute of visible face; away = share of time with `|yaw|` or `|pitch|` > 20°.
+
+| State | brow | eye | frown | smile | blinks/min | away | pitch (°) | pitch when away |
+|---|---|---|---|---|---|---|---|---|
+| Focused | +0.06 | +0.02 | +0.01 | 0 | 7 | 0.05 | −2 | — |
+| Frustrated_Masked | +0.15 | −0.02 | +0.06 | 0 | 16 | 0.15 | −3 | — |
+| Exhausted | 0 | −0.15 | +0.03 | 0 | 24 | 0.20 | −10 | −10 more |
+| Collaborative_Happy | −0.03 | −0.05 | 0 | +0.10 | 18 | 0.35 | +2 | — |
+| Overwhelmed | +0.12 | −0.05 | +0.10 | 0 | 22 | 0.25 | −12 | −10 more |
+| Tense | +0.20 | +0.03 | +0.14 | 0 | 20 | 0.20 | 0 | — |
+| Bored | 0 | −0.06 | +0.04 | 0 | 16 | 0.55 | −8 | −18 more (phone) |
+| Confused | +0.22 | −0.03 | +0.03 | 0 | 11 | 0.15 | +1 | — |
+| Calm | −0.02 | −0.03 | 0 | +0.06 | 13 | 0.25 | +2 | — |
+| Anxious | +0.05 | +0.05 | +0.07 | 0 | 26 | 0.35 | −2 | — |
+
+On top of the table (`FaceCueNuisance`):
+
+- smile also follows positive face valence (+0.35 × max(face, 0)) and frown negative face valence
+  (+0.25 × max(−face, 0)), so a masked episode's forced smile shows in `smile` while its brows stay lowered;
+- each episode draws its true valence/arousal offset (N(0, 0.10) each); +0.25 × the valence offset goes to smile,
+  −0.15 × to frown; +0.10 × the arousal offset to eye openness and ×(1 + arousal offset) to the blink rate;
+- spread: episode means N(0, 0.08) (blendshape cues), pitch N(0, 4°), blink rate × lognormal(0, 0.3), away share
+  ± N(0, 0.10); per-tick noise 0.06 (frown 0.045) and 4° pitch, growing below 200 lux like `face_valence`; each
+  person's neutral baseline is off by N(0, 0.06) and N(0, 4°); resting blink rates differ by × U(0.6, 1.6);
+- cues lag a state change like the other behaviors (the person's 1–2 min lag), and a hidden face gives NaN cues and
+  no blinks.
+
+The cues come from their own random stream (`crc32(session_id + "/face-cues")`), so every existing channel of every
+scenario and corpus is unchanged (`tests/test_emotion_features.py` checks hashes against the pre-event simulator).

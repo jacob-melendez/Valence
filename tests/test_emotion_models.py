@@ -123,3 +123,29 @@ def test_self_report_eval_on_a_synthetic_fixture(tmp_path, predictor):
     assert report["n_taps"] == len(taps) and 0 <= o["valence_mae"] <= 2 and "list-form/1" in report["per_person"]
     # The fixture is the simulator itself, so the models must beat a constant guess on it.
     assert o["valence_mae"] < report["overall"]["constant_zero"]["valence_mae"]
+
+
+@needs_artifacts
+def test_tour_replays_through_the_python_pipeline(predictor):
+    from valence.contracts import TICK_FIELDS
+    from valence.features.compute import PERSON_FIELDS, ROOM_FIELDS, compute
+    from valence.features.emotion import model_input
+
+    doc = json.loads(gzip.decompress((ART / "tour.json.gz").read_bytes()))
+    assert doc["model_id"] == predictor.model_id and len(doc["ticks"]) == 600
+    assert set(doc["order"]) == set(EMOTION_STATES)
+    rows = [t["records"] for t in doc["ticks"]]
+    assert all(set(r[0]) == set(TICK_FIELDS) and r[0]["person_id"] == 0 and r[1]["person_id"] == 1 for r in rows)
+
+    def arrays(recs, fields):
+        return {f: np.array([np.nan if r[f] is None else r[f] for r in recs], dtype=float) for f in fields}
+
+    for i in (0, 5, 59, 250, 599):
+        lo = max(0, i - 179)
+        person = arrays([rows[j][1] for j in range(lo, i + 1)], sorted(set(PERSON_FIELDS) | set(EMOTION_FIELDS)))
+        room = arrays([rows[j][0] for j in range(lo, i + 1)], ROOM_FIELDS)
+        xe = compute_emotion(person)
+        np.testing.assert_allclose(xe, _x(doc["ticks"][i]["emotion_features"]), atol=1e-12)
+        r = predictor.predict(model_input(compute({f: person[f] for f in PERSON_FIELDS}, room), xe))
+        np.testing.assert_allclose(r["proba"][0], doc["ticks"][i]["probabilities"], atol=1e-9)
+        assert r["valence_mix"][0] == pytest.approx(doc["ticks"][i]["valence"], abs=1e-9)

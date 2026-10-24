@@ -1,0 +1,637 @@
+{
+ "full": {
+  "macro_f1": 0.6881,
+  "accuracy": 0.7022,
+  "ece": 0.007,
+  "per_state_f1": {
+   "Focused": 0.6752,
+   "Frustrated_Masked": 0.7617,
+   "Exhausted": 0.7524,
+   "Collaborative_Happy": 0.8369,
+   "Overwhelmed": 0.6842,
+   "Tense": 0.7898,
+   "Bored": 0.6135,
+   "Confused": 0.4761,
+   "Calm": 0.6727,
+   "Anxious": 0.6181
+  },
+  "ece_uncalibrated": 0.0187,
+  "va": {
+   "valence_mae": 0.1992,
+   "valence_ccc": 0.7502,
+   "arousal_mae": 0.2666,
+   "arousal_ccc": 0.6985,
+   "quadrant_acc": 0.7612
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.1755,
+   "valence_ccc": 0.7834,
+   "arousal_mae": 0.2382,
+   "arousal_ccc": 0.7238,
+   "quadrant_acc": 0.7843
+  },
+  "nearest_anchor_state_acc": 0.4054,
+  "confusion": {
+   "states": [
+    "Focused",
+    "Frustrated_Masked",
+    "Exhausted",
+    "Collaborative_Happy",
+    "Overwhelmed",
+    "Tense",
+    "Bored",
+    "Confused",
+    "Calm",
+    "Anxious"
+   ],
+   "row_normalized": [
+    [
+     0.6686,
+     0.0115,
+     0.0237,
+     0.0095,
+     0.0149,
+     0.0068,
+     0.0352,
+     0.0921,
+     0.1066,
+     0.0311
+    ],
+    [
+     0.0205,
+     0.736,
+     0.0101,
+     0.1102,
+     0.0159,
+     0.013,
+     0.0142,
+     0.0319,
+     0.0339,
+     0.0142
+    ],
+    [
+     0.031,
+     0.0078,
+     0.7131,
+     0.005,
+     0.0551,
+     0.0169,
+     0.0942,
+     0.0208,
+     0.0269,
+     0.0294
+    ],
+    [
+     0.0048,
+     0.0827,
+     0.0052,
+     0.8434,
+     0.0041,
+     0.0018,
+     0.0048,
+     0.0041,
+     0.044,
+     0.0052
+    ],
+    [
+     0.0172,
+     0.0074,
+     0.0617,
+     0.006,
+     0.6982,
+     0.0468,
+     0.0598,
+     0.0343,
+     0.0153,
+     0.0533
+    ],
+    [
+     0.0104,
+     0.006,
+     0.0153,
+     0.0022,
+     0.0402,
+     0.7868,
+     0.0112,
+     0.0368,
+     0.0022,
+     0.0889
+    ],
+    [
+     0.0584,
+     0.0143,
+     0.0976,
+     0.0078,
+     0.0704,
+     0.017,
+     0.6245,
+     0.0327,
+     0.029,
+     0.0483
+    ],
+    [
+     0.1288,
+     0.0169,
+     0.0346,
+     0.0066,
+     0.053,
+     0.0515,
+     0.0559,
+     0.5276,
+     0.028,
+     0.0971
+    ],
+    [
+     0.126,
+     0.0345,
+     0.0307,
+     0.0426,
+     0.0047,
+     0.0017,
+     0.0324,
+     0.0311,
+     0.6782,
+     0.0183
+    ],
+    [
+     0.0388,
+     0.0074,
+     0.0212,
+     0.0055,
+     0.0476,
+     0.103,
+     0.0425,
+     0.0855,
+     0.0194,
+     0.6291
+    ]
+   ],
+   "counts": [
+    [
+     1975,
+     34,
+     70,
+     28,
+     44,
+     20,
+     104,
+     272,
+     315,
+     92
+    ],
+    [
+     49,
+     1756,
+     24,
+     263,
+     38,
+     31,
+     34,
+     76,
+     81,
+     34
+    ],
+    [
+     112,
+     28,
+     2575,
+     18,
+     199,
+     61,
+     340,
+     75,
+     97,
+     106
+    ],
+    [
+     13,
+     224,
+     14,
+     2283,
+     11,
+     5,
+     13,
+     11,
+     119,
+     14
+    ],
+    [
+     37,
+     16,
+     133,
+     13,
+     1506,
+     101,
+     129,
+     74,
+     33,
+     115
+    ],
+    [
+     28,
+     16,
+     41,
+     6,
+     108,
+     2114,
+     30,
+     99,
+     6,
+     239
+    ],
+    [
+     127,
+     31,
+     212,
+     17,
+     153,
+     37,
+     1357,
+     71,
+     63,
+     105
+    ],
+    [
+     175,
+     23,
+     47,
+     9,
+     72,
+     70,
+     76,
+     717,
+     38,
+     132
+    ],
+    [
+     296,
+     81,
+     72,
+     100,
+     11,
+     4,
+     76,
+     73,
+     1593,
+     43
+    ],
+    [
+     84,
+     16,
+     46,
+     12,
+     103,
+     223,
+     92,
+     185,
+     42,
+     1362
+    ]
+   ],
+   "region": {
+    "states": [
+     "Frustrated_Masked",
+     "Tense",
+     "Anxious",
+     "Overwhelmed"
+    ],
+    "predicted_inside_region": 0.8279,
+    "exact_within_region": 0.8663
+   }
+  },
+  "by_history": {
+   "<=1m": 0.6576,
+   "1-5m": 0.6915,
+   "5-15m": 0.6895
+  }
+ },
+ "full_face_hidden": {
+  "macro_f1": 0.4139,
+  "accuracy": 0.4373,
+  "ece": 0.0139,
+  "per_state_f1": {
+   "Focused": 0.4367,
+   "Frustrated_Masked": 0.397,
+   "Exhausted": 0.635,
+   "Collaborative_Happy": 0.4911,
+   "Overwhelmed": 0.4033,
+   "Tense": 0.4836,
+   "Bored": 0.3098,
+   "Confused": 0.1407,
+   "Calm": 0.454,
+   "Anxious": 0.3874
+  },
+  "ece_uncalibrated": 0.0103,
+  "va": {
+   "valence_mae": 0.2819,
+   "valence_ccc": 0.4589,
+   "arousal_mae": 0.3347,
+   "arousal_ccc": 0.513,
+   "quadrant_acc": 0.6345
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.2752,
+   "valence_ccc": 0.4776,
+   "arousal_mae": 0.3291,
+   "arousal_ccc": 0.5123,
+   "quadrant_acc": 0.6346
+  },
+  "nearest_anchor_state_acc": 0.222
+ },
+ "shuffled_context_test": {
+  "macro_f1": 0.4287,
+  "accuracy": 0.4299,
+  "ece": 0.1633,
+  "per_state_f1": {
+   "Focused": 0.4036,
+   "Frustrated_Masked": 0.5202,
+   "Exhausted": 0.3204,
+   "Collaborative_Happy": 0.5809,
+   "Overwhelmed": 0.4789,
+   "Tense": 0.5628,
+   "Bored": 0.4383,
+   "Confused": 0.3251,
+   "Calm": 0.3707,
+   "Anxious": 0.2862
+  },
+  "ece_uncalibrated": 0.1458,
+  "va": {
+   "valence_mae": 0.276,
+   "valence_ccc": 0.4985,
+   "arousal_mae": 0.387,
+   "arousal_ccc": 0.3742,
+   "quadrant_acc": 0.5529
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.2662,
+   "valence_ccc": 0.5018,
+   "arousal_mae": 0.366,
+   "arousal_ccc": 0.4012,
+   "quadrant_acc": 0.5857
+  },
+  "nearest_anchor_state_acc": 0.2004
+ },
+ "face_only": {
+  "macro_f1": 0.6208,
+  "accuracy": 0.6309,
+  "ece": 0.0071,
+  "per_state_f1": {
+   "Focused": 0.6042,
+   "Frustrated_Masked": 0.7068,
+   "Exhausted": 0.6408,
+   "Collaborative_Happy": 0.7716,
+   "Overwhelmed": 0.6392,
+   "Tense": 0.7446,
+   "Bored": 0.5578,
+   "Confused": 0.4554,
+   "Calm": 0.5677,
+   "Anxious": 0.5195
+  },
+  "ece_uncalibrated": 0.0071,
+  "va": {
+   "valence_mae": 0.2174,
+   "valence_ccc": 0.6906,
+   "arousal_mae": 0.2953,
+   "arousal_ccc": 0.6346,
+   "quadrant_acc": 0.7091
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.2047,
+   "valence_ccc": 0.7082,
+   "arousal_mae": 0.2754,
+   "arousal_ccc": 0.645,
+   "quadrant_acc": 0.7314
+  },
+  "nearest_anchor_state_acc": 0.3392
+ },
+ "context_only": {
+  "macro_f1": 0.4248,
+  "accuracy": 0.447,
+  "ece": 0.0047,
+  "per_state_f1": {
+   "Focused": 0.4479,
+   "Frustrated_Masked": 0.4001,
+   "Exhausted": 0.6351,
+   "Collaborative_Happy": 0.505,
+   "Overwhelmed": 0.4205,
+   "Tense": 0.4825,
+   "Bored": 0.334,
+   "Confused": 0.1703,
+   "Calm": 0.4576,
+   "Anxious": 0.3955
+  },
+  "ece_uncalibrated": 0.0195,
+  "va": {
+   "valence_mae": 0.278,
+   "valence_ccc": 0.4694,
+   "arousal_mae": 0.3296,
+   "arousal_ccc": 0.5239,
+   "quadrant_acc": 0.6397
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.2735,
+   "valence_ccc": 0.4824,
+   "arousal_mae": 0.3285,
+   "arousal_ccc": 0.5118,
+   "quadrant_acc": 0.6408
+  },
+  "nearest_anchor_state_acc": 0.232
+ },
+ "shuffled_context_trained": {
+  "macro_f1": 0.6175,
+  "accuracy": 0.6281,
+  "ece": 0.0068,
+  "per_state_f1": {
+   "Focused": 0.6016,
+   "Frustrated_Masked": 0.7019,
+   "Exhausted": 0.6416,
+   "Collaborative_Happy": 0.7681,
+   "Overwhelmed": 0.6413,
+   "Tense": 0.7441,
+   "Bored": 0.5522,
+   "Confused": 0.4469,
+   "Calm": 0.5651,
+   "Anxious": 0.5123
+  },
+  "ece_uncalibrated": 0.0067,
+  "va": {
+   "valence_mae": 0.218,
+   "valence_ccc": 0.6887,
+   "arousal_mae": 0.296,
+   "arousal_ccc": 0.6324,
+   "quadrant_acc": 0.7083
+  },
+  "va_from_probabilities": {
+   "valence_mae": 0.206,
+   "valence_ccc": 0.7042,
+   "arousal_mae": 0.2766,
+   "arousal_ccc": 0.6429,
+   "quadrant_acc": 0.7272
+  },
+  "nearest_anchor_state_acc": 0.3354
+ },
+ "scenarios": {
+  "collaborative_happy": {
+   "Collaborative_Happy": {
+    "n": 242,
+    "agreement": 1.0,
+    "valence": 0.645,
+    "arousal": 0.494,
+    "top_label": "Collaborative_Happy"
+   }
+  },
+  "context_blindness": {
+   "Collaborative_Happy": {
+    "n": 122,
+    "agreement": 1.0,
+    "valence": 0.688,
+    "arousal": 0.498,
+    "top_label": "Collaborative_Happy"
+   },
+   "Exhausted": {
+    "n": 85,
+    "agreement": 0.9647,
+    "valence": -0.39,
+    "arousal": -0.56,
+    "top_label": "Exhausted"
+   }
+  },
+  "exhausted": {
+   "Exhausted": {
+    "n": 121,
+    "agreement": 0.9504,
+    "valence": -0.392,
+    "arousal": -0.509,
+    "top_label": "Exhausted"
+   }
+  },
+  "focused": {
+   "Focused": {
+    "n": 121,
+    "agreement": 0.686,
+    "valence": 0.171,
+    "arousal": 0.039,
+    "top_label": "Focused"
+   }
+  },
+  "frustrated_masked": {
+   "Focused": {
+    "n": 25,
+    "agreement": 0.84,
+    "valence": -0.031,
+    "arousal": 0.287,
+    "top_label": "Focused"
+   },
+   "Frustrated_Masked": {
+    "n": 97,
+    "agreement": 1.0,
+    "valence": -0.593,
+    "arousal": 0.595,
+    "top_label": "Frustrated_Masked"
+   }
+  },
+  "full_demo": {
+   "Focused": {
+    "n": 37,
+    "agreement": 0.9459,
+    "valence": 0.147,
+    "arousal": 0.102,
+    "top_label": "Focused"
+   },
+   "Frustrated_Masked": {
+    "n": 85,
+    "agreement": 1.0,
+    "valence": -0.5,
+    "arousal": 0.565,
+    "top_label": "Frustrated_Masked"
+   },
+   "Collaborative_Happy": {
+    "n": 49,
+    "agreement": 1.0,
+    "valence": 0.631,
+    "arousal": 0.479,
+    "top_label": "Collaborative_Happy"
+   }
+  },
+  "loud_venue": {
+   "Focused": {
+    "n": 49,
+    "agreement": 1.0,
+    "valence": 0.09,
+    "arousal": 0.292,
+    "top_label": "Focused"
+   },
+   "Frustrated_Masked": {
+    "n": 85,
+    "agreement": 1.0,
+    "valence": -0.474,
+    "arousal": 0.579,
+    "top_label": "Frustrated_Masked"
+   }
+  },
+  "overwhelmed": {
+   "Focused": {
+    "n": 13,
+    "agreement": 0.1538,
+    "valence": -0.257,
+    "arousal": 0.089,
+    "top_label": "Bored"
+   },
+   "Overwhelmed": {
+    "n": 97,
+    "agreement": 0.9691,
+    "valence": -0.557,
+    "arousal": 0.58,
+    "top_label": "Overwhelmed"
+   }
+  },
+  "tense": {
+   "Focused": {
+    "n": 26,
+    "agreement": 0.8846,
+    "valence": 0.007,
+    "arousal": 0.299,
+    "top_label": "Focused"
+   },
+   "Tense": {
+    "n": 194,
+    "agreement": 1.0,
+    "valence": -0.402,
+    "arousal": 0.5,
+    "top_label": "Tense"
+   }
+  }
+ },
+ "model_id": "emotion-v1@378fa16c",
+ "sizes": {
+  "classifier": {
+   "json_gz_bytes": 2775341,
+   "trees": 2790,
+   "rounds": 279
+  },
+  "valence": {
+   "json_gz_bytes": 446666,
+   "trees": 246,
+   "rounds": 246
+  },
+  "arousal": {
+   "json_gz_bytes": 705887,
+   "trees": 390,
+   "rounds": 390
+  }
+ },
+ "training": {
+  "sessions": 600,
+  "seed": 11,
+  "noise_scale": 1.0,
+  "windows": 169171,
+  "split": "by session, 70/7.5/7.5/15 (train/early-stop/calibration/test)",
+  "split_windows": {
+   "train": 117672,
+   "early": 12206,
+   "calib": 14745,
+   "test": 24548
+  },
+  "data": "simulated (valence.sim, state set 'emotion'); no real data"
+ }
+}

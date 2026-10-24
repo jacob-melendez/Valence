@@ -31,10 +31,10 @@ STATES = EMOTION_STATES
 K = len(STATES)
 CLS_PARAMS = dict(objective="multiclass", num_class=K, learning_rate=0.1, num_leaves=15, min_data_in_leaf=100,
                   feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1,
-                  num_threads=4, seed=11)
-REG_PARAMS = dict(objective="regression", learning_rate=0.05, num_leaves=31, min_data_in_leaf=100,
+                  num_threads=4, seed=11, deterministic=True, force_row_wise=True)
+REG_PARAMS = dict(objective="regression", learning_rate=0.1, num_leaves=31, min_data_in_leaf=100,
                   feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1,
-                  num_threads=4, seed=11)
+                  num_threads=4, seed=11, deterministic=True, force_row_wise=True)
 CLS_ROUNDS = 280  # keeps classifier.json.gz under ~3 MB (10 trees per round)
 REG_ROUNDS = 800
 DROPOUT = {"face_hidden": 0.30, "face_degraded": 0.20}
@@ -119,8 +119,8 @@ def train_regressor(X: pd.DataFrame, target: np.ndarray, y: np.ndarray, split: S
                     augment: bool = True, params: dict | None = None, rounds: int = REG_ROUNDS) -> lgb.Booster:
     p = {**REG_PARAMS, **(params or {})}
     Xt, src = _train_rows(X, split, cols, augment, p["seed"] + 1)
-    tt, yt = target[split.train][src], y[split.train][src]
-    dtrain = lgb.Dataset(Xt, tt, weight=class_weights(yt, K), free_raw_data=False)
+    tt = target[split.train][src]  # unweighted: class weights distort an L2 regression's targets
+    dtrain = lgb.Dataset(Xt, tt, free_raw_data=False)
     dval = lgb.Dataset(X.loc[split.early, cols], target[split.early], reference=dtrain)
     return lgb.train(p, dtrain, num_boost_round=rounds, valid_sets=[dval],
                      callbacks=[lgb.early_stopping(50, verbose=False)])
@@ -183,8 +183,10 @@ class EmotionPredictor:
         p = np.exp(z) / np.exp(z).sum(axis=1, keepdims=True)
         v = self.models["valence"].predict(X, num_threads=1)
         a = self.models["arousal"].predict(X, num_threads=1)
+        mix = p @ self.anchors  # the served map position: probability-weighted anchors
         return {"raw": raw, "proba": p, "valence_raw": v, "arousal_raw": a,
-                "valence": np.clip(v, -1, 1), "arousal": np.clip(a, -1, 1)}
+                "valence": np.clip(v, -1, 1), "arousal": np.clip(a, -1, 1),
+                "valence_mix": mix[:, 0], "arousal_mix": mix[:, 1]}
 
     def contrib(self, X: np.ndarray) -> dict[str, np.ndarray]:
         X = np.atleast_2d(np.asarray(X, dtype=float))
@@ -234,8 +236,12 @@ def export(full, out: Path, report: dict, train_info: dict) -> dict:
                     "arousal": AFFECT_ANCHORS[s][1]} for s in STATES],
         "anchors_are_assumptions": True,
         "temperature": full.t,
-        "inference": {"probabilities": "softmax(raw / temperature)", "valence": "clip(raw, -1, 1)",
-                      "arousal": "clip(raw, -1, 1)", "missing": "NaN (LightGBM native); no clipping of inputs",
+        "inference": {"probabilities": "softmax(raw / temperature)",
+                      "map_position": "valence = sum_k p_k * states[k].valence, arousal = sum_k p_k * states[k].arousal "
+                                      "(served: beats the regressors on held-out simulated sessions, see summary)",
+                      "regressors": "valence = clip(valence raw, -1, 1), arousal = clip(arousal raw, -1, 1) "
+                                    "(exported for comparison)",
+                      "missing": "NaN (LightGBM native); no clipping of inputs",
                       "pred_contrib": "path-dependent TreeSHAP, n_features + 1 values (last = bias) per output"},
         "files": {k: {"json": f"{k}.json.gz", "python": f"{k}.txt.gz"} for k in boosters},
         "layers": layers_of(full.cols),
@@ -287,6 +293,9 @@ def main() -> None:
             "split_windows": {k: int(getattr(split, k).sum()) for k in ("train", "early", "calib", "test")},
             "data": "simulated (valence.sim, state set 'emotion'); no real data"}
     m = export(full, out, report, info)
+    from valence.eval.emotion_eval import scenario_check
+
+    report["scenarios"] = scenario_check(EmotionPredictor(out))
     report["model_id"] = m["model_id"]
     report["sizes"] = m["training"]["sizes"]
     report["training"] = info

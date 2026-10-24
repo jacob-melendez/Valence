@@ -144,7 +144,8 @@ def main() -> None:
             vectors.append({"note": n, "true_state": state, "x": _j(v), "raw": _j(r["raw"][0]),
                             "probabilities": _j(r["proba"][0]), "valence_raw": _j(r["valence_raw"][0]),
                             "arousal_raw": _j(r["arousal_raw"][0]), "valence": _j(r["valence"][0]),
-                            "arousal": _j(r["arousal"][0]), "label": pred.states[int(np.argmax(r["proba"][0]))],
+                            "arousal": _j(r["arousal"][0]), "valence_mix": _j(r["valence_mix"][0]),
+                            "arousal_mix": _j(r["arousal_mix"][0]), "label": pred.states[int(np.argmax(r["proba"][0]))],
                             "pred_contrib": {"classifier": _j(c["classifier"][0]), "valence": _j(c["valence"][0]),
                                              "arousal": _j(c["arousal"][0])}})
         if len(windows) < 8:

@@ -125,7 +125,7 @@ def score(models: Models, X: pd.DataFrame, meta: pd.DataFrame, y: np.ndarray) ->
     anchor = p @ ANCHORS
     out = cls_metrics(p, y, models.proba(X, calibrated=False))
     out["va"] = va_metrics(pv, pa, tv, ta)
-    out["va_from_probabilities"] = va_metrics(anchor[:, 0], anchor[:, 1], tv, ta)
+    out["va_from_probabilities"] = va_metrics(anchor[:, 0], anchor[:, 1], tv, ta)  # the served map position
     out["nearest_anchor_state_acc"] = round(float((nearest_anchor(pv, pa) == y).mean()), 4)
     return out
 
@@ -172,3 +172,48 @@ def evaluate_all(X, meta, y, split: Split, *, seed: int, full: Models | None = N
     report["shuffled_context_trained"] = score(m, Xt, mt, yt)
     log(f"  shuffled ctx  macro-F1={report['shuffled_context_trained']['macro_f1']:.3f} (trained)", flush=True)
     return report, full
+
+
+def scenario_check(predictor, grace_s: float = 120.0) -> dict:
+    """The exported models on the scripted replay scenarios: share of ticks (after a 2-min grace in each scripted
+    segment) where the 10-state label equals the scripted state, and the mean map position per state."""
+    from valence.contracts import CORE_STATES
+    from valence.features.compute import PERSON_FIELDS, ROOM_FIELDS, compute
+    from valence.features.emotion import EMOTION_FIELDS, compute_emotion, model_input
+    from valence.sim.scenarios import SCENARIO_DIR, load_script, render
+
+    out = {}
+    fields = sorted(set(PERSON_FIELDS) | set(EMOTION_FIELDS))
+    for path in sorted(SCENARIO_DIR.glob("*.yaml")):
+        script = load_script(path.stem)
+        states = {s for seg in script.segments for s in seg.states if s is not None}
+        df = render(path.stem, state_set="core" if states <= set(CORE_STATES) else "all")
+        room = df[df["person_id"] == 0].sort_values("tick")
+        rarr = {f: room[f].to_numpy(dtype=float) for f in ROOM_FIELDS}
+        rpos = {t: i for i, t in enumerate(room["tick"].to_numpy())}
+        per_state: dict[str, list] = {}
+        for _, p in df[df["person_id"] != 0].groupby("person_id"):
+            p = p.sort_values("tick")
+            arr = {f: p[f].to_numpy(dtype=float) for f in fields}
+            ticks, truth, age = p["tick"].to_numpy(), p["true_state"].to_numpy(), p["episode_age_s"].to_numpy()
+            rows, keep = [], []
+            for i in range(len(p)):
+                if age[i] < grace_s:
+                    continue
+                lo, rp = max(0, i - 179), rpos[ticks[i]]
+                rows.append(model_input(compute({f: arr[f][lo:i + 1] for f in PERSON_FIELDS},
+                                                {f: v[max(0, rp - 179):rp + 1] for f, v in rarr.items()}),
+                                        compute_emotion({f: arr[f][lo:i + 1] for f in EMOTION_FIELDS})))
+                keep.append(truth[i])
+            if not rows:
+                continue
+            r = predictor.predict(np.vstack(rows))
+            labels = [predictor.states[k] for k in r["proba"].argmax(axis=1)]
+            for s, lab, v, a in zip(keep, labels, r["valence_mix"], r["arousal_mix"]):
+                per_state.setdefault(s, []).append((lab == s, v, a, lab))
+        out[path.stem] = {s: {"n": len(v), "agreement": round(float(np.mean([x[0] for x in v])), 4),
+                              "valence": round(float(np.mean([x[1] for x in v])), 3),
+                              "arousal": round(float(np.mean([x[2] for x in v])), 3),
+                              "top_label": max(set(x[3] for x in v), key=[x[3] for x in v].count)}
+                          for s, v in per_state.items()}
+    return out
