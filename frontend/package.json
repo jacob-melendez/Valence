@@ -4,7 +4,9 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/mediapipe-assets.mjs || echo \"[mediapipe-assets] failed: in-browser perception will not load\"",
     "dev": "vite dev",
+    "prebuild": "node scripts/mediapipe-assets.mjs",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
