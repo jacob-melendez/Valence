@@ -2,7 +2,7 @@
 
 _Times in America/New_York. Newest last._
 
-### 12:58 ET — Spec published (emotion-v1)
+### 12:32 ET — Spec published (emotion-v1)
 
 Done:
 - `docs/EMOTION_FEATURES.md`: per-frame face cues from MediaPipe (brow lowering, eye openness, blinks, head
