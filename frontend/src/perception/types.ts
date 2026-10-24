@@ -147,6 +147,8 @@ export interface PerceptionStatus {
   error: string | null;
   /** True for createMockPerception(). */
   mock: boolean;
+  /** Where the video models run and on what ("worker/GPU", "main/CPU"); null until loaded or without a camera. */
+  video_backend: string | null;
 }
 
 export interface PerceptionOptions {
@@ -166,6 +168,8 @@ export interface PerceptionOptions {
   maxPeople?: number;
   /** Ignore people shorter than this fraction of the frame height (Python settings.min_box_height = 0.25). */
   minPersonH?: number;
+  /** Run the video models in a Web Worker (default true where supported; falls back to the main thread). */
+  worker?: boolean;
 }
 
 export type ObservationListener = (obs: Obs) => void;
@@ -222,6 +226,7 @@ export const idleStatus = (mock = false): PerceptionStatus => ({
   degraded: [],
   error: null,
   mock,
+  video_backend: null,
 });
 
 // ---------- JSON form (contracts.obs_to_dict / obs_from_dict) ----------

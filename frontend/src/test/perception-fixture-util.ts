@@ -1,16 +1,19 @@
 /**
- * Parity fixtures written by scripts/export_perception_fixtures.py (strict JSON: non-finite floats are the strings
- * "NaN", "Infinity" and "-Infinity"), revived here into numbers.
+ * Parity fixtures written by scripts/export_perception_fixtures.py (strict JSON, gzipped: non-finite floats are the
+ * strings "NaN", "Infinity" and "-Infinity"), revived here into numbers. A plain `<name>.json` (a generator run on its
+ * own) is read too.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { expect } from "vitest";
 
 const NON_FINITE: Record<string, number> = { NaN: NaN, Infinity: Infinity, "-Infinity": -Infinity };
 
 export function loadFixture<T = unknown>(name: string): T {
   const file = path.resolve(__dirname, "perception-fixtures", `${name}.json`);
-  return JSON.parse(readFileSync(file, "utf8"), (_k, v: unknown) =>
+  const text = existsSync(file) ? readFileSync(file, "utf8") : gunzipSync(readFileSync(`${file}.gz`)).toString("utf8");
+  return JSON.parse(text, (_k, v: unknown) =>
     typeof v === "string" && v in NON_FINITE ? NON_FINITE[v] : v,
   ) as T;
 }
