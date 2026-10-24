@@ -12,11 +12,15 @@ Newest entry last.
 | Observations keep NaN for "no reading" | Same as `contracts.py`; `obsToDict` writes null like `obs_to_dict`, and `obsFromDict` reads the Python JSONL recordings unchanged (tested on `data/real/capture_fists.jsonl`). |
 | A `type` tag on each observation | The same key `obs_to_dict` writes, so TypeScript gets a discriminated union and recordings parse as-is. |
 | `audio_blocks_purged` counts ~100 ms raw mic buffers | Same meaning as the Python edge, where the gate counts each capture part. 1 s blocks and resampled copies count under `derived_purged`. |
+| Model and WASM files self-hosted, never committed | `frontend/scripts/mediapipe-assets.mjs` (prebuild and predev) copies the WASM from `node_modules` and downloads the four models from Google's model bucket with pinned SHA-256s (the files `scripts/download_models.sh` gives the Python edge). The Cloudflare build (`npm install && npm run build`) has internet access; the browser never contacts Google. |
+| CPU delegate when WebGL is software-rendered | In headless Chromium (SwiftShader) MediaPipe's GPU path is ~10x slower: pose 660 ms vs 68 ms per frame, face 180 vs 33 ms, gestures 306 vs 58 ms. `autoDelegate()` checks the WebGL renderer string. |
+| Video models in a Web Worker | MediaPipe takes 10-100 ms per frame; in a worker the console's main thread stays free. Main-thread fallback where workers can't run it. |
+| Pose: PoseLandmarker lite + a simple IoU tracker | Stands in for YOLO26n-pose + ByteTrack (track buffer 6 s, as `bytetrack_valence.yaml`). BlazePose landmarks 0,2,5,7,8,11-16,23-28 map to COCO 0-16; confidence = BlazePose visibility, 0 outside the frame. The person box is the landmarks' extent with the top raised above the eyes. |
 | `frontend/package-lock.json` re-synced | `npm ci` failed on the committed lock (ajv 6/8 entries missing). `npm install` fixed it while adding MediaPipe; `bun.lock` got the two MediaPipe entries by hand (bun can't reach the private registry its lock names for `@lovable.dev/vite-tanstack-config`). |
 
 ## Log
 
-### 12:40 — Interface pushed
+### 12:33 — Interface pushed
 
 - `frontend/src/perception/`: `types.ts` (PersonObs / VideoObs / AudioObs mirrors, raw extras: 52 blendshapes and
   head yaw/pitch/roll in degrees, counters, status), `createPerception()` (stub: reports a "stub" degradation and
@@ -27,9 +31,25 @@ Newest entry last.
 - Tests: `src/test/perception-interface.test.ts` (types, JSONL round trip, mock cadence and content, media fallbacks).
 - Next: the pure ports with parity fixtures, then the MediaPipe pipeline and the headless-Chromium end-to-end test.
 
-### 12:50 — Emotion cues in the interface
+### 12:35 — Emotion cues in the interface
 
 Cloud B's `docs/EMOTION_FEATURES.md` (emotion-v1) landed: `PersonObs` gains `brow_down`, `eye_open`, `mouth_frown`,
 `smile`, `head_yaw`, `head_pitch` and `blink_onsets`. They are in `types.ts` (required; `obsFromDict` gives older
 recordings the Python defaults), `faceCues.ts` ports `valence/features/face_cues.py` (baseline, blink detector, head
 pose from the matrix), and the mock fills them. The raw extras follow B's sign convention (pitch > 0 = face up).
+
+### 13:05 — MediaPipe runs under the strict CSP
+
+- A throwaway probe loaded all four models from `/mediapipe/` under `default-src 'self'; script-src 'self'
+  'wasm-unsafe-eval'; connect-src 'self'; worker-src 'self' blob:` in headless Chromium with a fake camera playing
+  the test portrait: 0 off-origin requests, no CSP errors, 1 face with 52 blendshapes (smile 0.90), 1 pose, matrix
+  column-major with the translation at (-4, 23, -70) cm as `docs/EMOTION_FEATURES.md` assumes.
+- Load: vision models 0.93-1.0 s, YAMNet 0.2 s (local server, warm disk). Per frame on this 4-core container
+  (CPU delegate, other jobs running): pose 68 ms, face 33 ms, gestures 58 ms, `createImageBitmap` 6 ms; YAMNet 76 ms
+  per 0.975 s clip.
+- Pushed: the asset script and prebuild hook, the mic worklet, the e2e media (public-domain NASA portrait from
+  scikit-image, CC BY 4.0 LibriSpeech clip) and their licenses.
+- In progress: the ports of `audio_features.py` + scipy `resample_poly` (done: bit-identical to scipy), `posture.py`,
+  `hands.py` + `ids.py`, `lux.py` + `regions.py` + OpenCV's BGR2GRAY, and the face parity checks run as parallel
+  agents, each followed by an adversarial review. The video pipeline (`video.ts`), the audio pipeline, the capture
+  loop and the worker are written and wait on them.
