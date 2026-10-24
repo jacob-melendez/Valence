@@ -79,7 +79,9 @@ const server = createServer((req, res) => {
   createReadStream(file).pipe(res);
 });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
-const origin = `http://127.0.0.1:${server.address().port}`;
+// --hostname name: load the page as http://name:port (mapped to this server), e.g. to see the hosted-site defaults.
+const HOSTNAME = opt("--hostname", null);
+const origin = `http://${HOSTNAME ?? "127.0.0.1"}:${server.address().port}`;
 
 const browser = await chromium.launch({
   args: FAKE
@@ -89,8 +91,9 @@ const browser = await chromium.launch({
         ...(FAKE_VIDEO ? [`--use-file-for-fake-video-capture=${path.resolve(FAKE_VIDEO)}`] : []),
         ...(FAKE_AUDIO ? [`--use-file-for-fake-audio-capture=${path.resolve(FAKE_AUDIO)}`] : []),
         "--autoplay-policy=no-user-gesture-required",
+        ...(HOSTNAME ? [`--host-resolver-rules=MAP ${HOSTNAME} 127.0.0.1`] : []),
       ]
-    : [],
+    : HOSTNAME ? [`--host-resolver-rules=MAP ${HOSTNAME} 127.0.0.1`] : [],
 });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 if (FAKE) await context.grantPermissions(["camera", "microphone"], { origin });

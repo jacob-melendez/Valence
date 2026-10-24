@@ -360,7 +360,8 @@ export function baselineProgress(b: RoomBaseline | null): number {
 
 /** Live sensors without a captured venue baseline: the operator should capture one before judging. */
 export function baselineWarning(s: Pick<ValenceState, "source" | "conn" | "status" | "baseline">): boolean {
-  const sensing = s.source === "browser" || (s.source === "live" && s.conn === "open" && s.status?.mode === "live");
+  // The in-browser tour replays a scripted session that carries its own baseline: no warning there.
+  const sensing = (s.source === "browser" && browserMode === "live") || (s.source === "live" && s.conn === "open" && s.status?.mode === "live");
   return sensing && s.baseline?.mode !== "captured";
 }
 
@@ -865,10 +866,24 @@ export function hasBrowserParam(): boolean {
     return q.get("source") === "browser" || q.get("demo") === "tour";
   } catch { return false; }
 }
-/** Mock by default; `?source=browser` runs the engine in this page; `?api=` connects to that backend right away. */
+/**
+ * The hosted Valence Web site (any origin other than localhost / 127.0.0.1 / a LAN address): a first-time visitor
+ * with no URL parameters gets the camera-free tour instead of the operator's mock stream.
+ */
+export function isHostedSite(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return !!h && !/^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(h)
+    && !window.location.search;
+}
+/**
+ * Mock by default; `?source=browser` runs the engine in this page; `?demo=tour` replays the scripted tour through
+ * it; `?api=` connects to that backend right away. On the hosted site a bare visit starts the tour.
+ */
 export function boot() {
   if (booted) return;
   booted = true;
+  if (!hasBrowserParam() && !hasApiParam() && isHostedSite()) { startBrowserSource("tour"); return; }
   setSource(hasBrowserParam() ? "browser" : hasApiParam() ? "live" : "mock", resolveBaseUrl());
 }
 

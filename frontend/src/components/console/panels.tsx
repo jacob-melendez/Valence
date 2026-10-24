@@ -846,7 +846,7 @@ export function SelfReport() {
   const person = pid !== null && ids.includes(pid) ? pid : (ids[0] ?? null);
   useEffect(() => onSelfReports(() => setTaps(getSelfReports().length)), []);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  if (s.source !== "browser") return null;
+  if (s.source !== "browser" || getBrowserMode() === "tour") return null; // taps on a simulated session mean nothing
   const since = last ? Math.floor((now - last.at) / 1000) : null;
   const due = since === null || since >= SELF_REPORT_EVERY_S;
   const onTap = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -891,5 +891,38 @@ export function SelfReport() {
       </div>
       {note && <p className="mt-1 text-xs text-warn">{note}</p>}
     </div>
+  );
+}
+
+// ---------- Welcome (Valence Web) ----------
+/** What a first-time visitor of the hosted site sees above the console: what this is, and the two ways to try it. */
+export function Welcome() {
+  const s = useValence();
+  const [hidden, setHidden] = useState(false);
+  if (hidden || s.source !== "browser") return null;
+  const tour = getBrowserMode() === "tour";
+  return (
+    <section className="mx-6 mt-5 rounded-lg border border-primary/60 bg-primary/5 p-5" data-testid="welcome">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="min-w-[18rem] flex-1">
+          <h2 className="text-2xl font-bold">Valence Web <span className="font-mono text-sm font-normal text-muted-foreground">context-aware affect, entirely in your browser</span></h2>
+          <p className="mt-2 max-w-3xl text-base text-muted-foreground">
+            Valence reads how a person is doing from the <em>context</em> around the face: room noise and light, posture,
+            motion, fists, laughter, time since a break, and the face itself, over a 15-minute window, and explains every call.
+            Here the whole engine runs in this page. Camera and microphone are processed in memory and dropped;
+            the page is not allowed to send data anywhere (<span className="font-mono">connect-src 'self'</span>).
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {tour ? "Now playing: a scripted, simulated session walking through the 10 states at 10× speed (no camera)."
+              : "Now running on your camera and microphone. The first minute warms up the window and your neutral face baseline."}
+          </p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Btn tone="primary" active={!tour} onClick={() => startBrowserSource("live")}>● Use my camera (on-device)</Btn>
+          <Btn active={tour} onClick={() => startBrowserSource("tour")}>▶ Watch the 10-state tour</Btn>
+          <button onClick={() => setHidden(true)} className="font-mono text-xs text-muted-foreground hover:text-foreground">hide</button>
+        </div>
+      </div>
+    </section>
   );
 }
