@@ -237,6 +237,18 @@ One JSON line per tap, appended by the console's capture; **never media, never a
 - Evaluated by `python -m valence.eval.self_report <files.jsonl>` (MAE, CCC, quadrant agreement, nearest-anchor
   state agreement, per person).
 
+**Session protocol** (what makes the taps usable):
+
+1. Consent first: the person knows that only the feature numbers and their taps are kept, in the browser's memory
+   until they press Download, and that they can stop and clear at any time.
+2. Sit at the desk for ≥ 1 minute before the first tap, looking at the screen normally: the face cues' neutral
+   baseline is the first 20 s of visible face, and the window needs a minute to warm up.
+3. Tap every ~2 minutes (the console reminds), from how you feel *right now*: left–right = unpleasant–pleasant,
+   down–up = calm/tired–activated. Optionally pick a state name.
+4. Aim for ≥ 30 minutes and some variety (a hard task, a break, a chat, a boring stretch); the evaluator needs
+   ≥ 3 taps with some spread for CCC, and a constant mood only tests the mean.
+5. Download the JSONL and run the evaluator; commit the file only if the person agrees (features and taps only).
+
 ## 7. Simulator assumptions for the new cues (`valence/sim/params.py`)
 
 The training data is simulated. These numbers **are** the hypothesis the emotion models are trained and evaluated
