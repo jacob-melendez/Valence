@@ -8,7 +8,7 @@
  *
  * Keypoints are passed flat (the Python (17, 2) array, row-major): `kptsXy` = [x0, y0, x1, y1, ..., x16, y16] in
  * pixels, COCO-17 order, and `kptsConf` = the 17 confidences. Any ArrayLike works (number[], a model's
- * Float32Array, ...); both are copied into float64 and never retained.
+ * Float32Array, ...); both are copied into float64 and never retained (a null entry reads as NaN, as numpy reads None).
  */
 import { TIME_EPS } from "./debounce";
 
@@ -54,15 +54,68 @@ export interface PostureTrackerOptions {
   motionMinPoints?: number;
 }
 
+/** np.array(..., dtype=float) of one element: null (None, and JSON's spelling of NaN) is NaN, not Number(null) = 0. */
+const toFloat = (v: number | null | undefined): number => (v === null ? NaN : Number(v));
+
 const x = (xy: Float64Array, k: number): number => xy[2 * k]!;
 const y = (xy: Float64Array, k: number): number => xy[2 * k + 1]!;
 
 /**
- * Euclidean length of (dx, dy) as np.linalg.norm(..., axis=1) computes it: sqrt(dx * dx + dy * dy), so NaN and inf
+ * Euclidean length of (dx, dy) as np.linalg.norm(..., axis=k) computes it: sqrt(dx * dx + dy * dy), so NaN and inf
  * propagate like numpy (Math.hypot returns Infinity for (Infinity, NaN) and rounds differently).
  */
 function norm2(dx: number, dy: number): number {
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+const SPLITTER = 134217729; // 2^27 + 1: Veltkamp's split of a binary64 into two 26-bit halves
+const BITS_F64 = new Float64Array(1);
+const BITS_U64 = new BigUint64Array(BITS_F64.buffer);
+
+/** Knuth's TwoSum: [s, err] with s = fl(a + b) and a + b = s + err exactly. */
+function twoSum(a: number, b: number): [number, number] {
+  const s = a + b;
+  const bb = s - a;
+  return [s, (a - (s - bb)) + (b - bb)];
+}
+
+/** a + b rounded to odd: the exact sum when representable, else whichever neighbour has an odd last bit. */
+function addRoundToOdd(a: number, b: number): number {
+  const [s, err] = twoSum(a, b);
+  if (err === 0) return s;
+  BITS_F64[0] = s;
+  const bits = BITS_U64[0]!;
+  if ((bits & 1n) === 1n) return s;
+  BITS_U64[0] = (err > 0) === (s > 0) ? bits + 1n : bits - 1n; // one ulp toward the exact sum
+  return BITS_F64[0]!;
+}
+
+/**
+ * fma(a, a, c): a * a + c with a single rounding. Dekker's exact square plus Boldo & Melquiond's emulation
+ * (RN(th + RO(tl + pl)), "Emulation of FMA and correctly rounded sums: proved algorithms using rounding to odd",
+ * 2008), exact for 2^-450 <= |a| <= 2^450 and |c| <= 2^960: any pixel or normalized coordinate. Outside that range
+ * (non-finite, or a shoulder delta beyond ~1e135 or under ~1e-135) it is a * a + c, which may be 1 ulp off.
+ */
+function fmaSquare(a: number, c: number): number {
+  const p = a * a;
+  if (!(Math.abs(a) >= 2 ** -450 && Math.abs(a) <= 2 ** 450 && Math.abs(c) <= 2 ** 960)) {
+    return Number.isFinite(a) && !Number.isFinite(c) ? c : p + c; // a * a is never infinite inside an fma
+  }
+  const t = SPLITTER * a;
+  const hi = t - (t - a);
+  const lo = a - hi;
+  const pl = (((hi * hi - p) + hi * lo) + lo * hi) + lo * lo; // a * a = p + pl exactly
+  const [th, tl] = twoSum(c, p);
+  return th + addRoundToOdd(tl, pl);
+}
+
+/**
+ * Length of the single vector (dx, dy) as np.linalg.norm(v) computes it: sqrt(v.dot(v)), a BLAS ddot whose
+ * multiply-adds are fused (OpenBLAS's x86-64 Haswell+ and arm64 kernels): sqrt(fma(dy, dy, dx * dx)). That is 1 ulp
+ * from `norm2` about 6% of the time when dx and dy are of similar size: enough to flip an exact radius or jump tie.
+ */
+function vectorNorm2(dx: number, dy: number): number {
+  return Math.sqrt(fmaSquare(dy, dx * dx));
 }
 
 /** numpy's pairwise summation of a float64 vector (8 accumulators, blocks of 128), as np.add.reduce runs it. */
@@ -211,7 +264,7 @@ export class PostureTracker {
    * Feed one pose sample at `t`: `kptsXy` = 34 pixel coordinates, row-major (x0, y0, ..., x16, y16); `kptsConf` = 17
    * per-keypoint confidences. Throws if the lengths are not 34 and 17.
    */
-  update(kptsXy: ArrayLike<number>, kptsConf: ArrayLike<number>, t: number): PostureState {
+  update(kptsXy: ArrayLike<number | null>, kptsConf: ArrayLike<number | null>, t: number): PostureState {
     const [xy, body] = this.mask(kptsXy, kptsConf);
     const t0 = (this.t0 = this.t0 === null ? t : this.t0);
 
@@ -240,17 +293,17 @@ export class PostureTracker {
   }
 
   /** (all keypoints at `minConf`, torso/arm keypoints at `motionMinConf`), both 34 flat; NaN = not valid. */
-  private mask(kptsXy: ArrayLike<number>, kptsConf: ArrayLike<number>): [Float64Array, Float64Array] {
+  private mask(kptsXy: ArrayLike<number | null>, kptsConf: ArrayLike<number | null>): [Float64Array, Float64Array] {
     if (kptsXy.length !== 2 * N_KPTS || kptsConf.length !== N_KPTS) {
       throw new Error(`expected 34 (17x2) keypoint coordinates and 17 conf, got ${kptsXy.length}, ${kptsConf.length}`);
     }
     const xy = new Float64Array(2 * N_KPTS);
     const body = new Float64Array(2 * N_KPTS).fill(NaN);
     for (let k = 0; k < N_KPTS; k++) {
-      const conf = Number(kptsConf[k]);
+      const conf = toFloat(kptsConf[k]);
       const valid = conf >= this.minConf;
-      xy[2 * k] = valid ? Number(kptsXy[2 * k]) : NaN;
-      xy[2 * k + 1] = valid ? Number(kptsXy[2 * k + 1]) : NaN;
+      xy[2 * k] = valid ? toFloat(kptsXy[2 * k]) : NaN;
+      xy[2 * k + 1] = valid ? toFloat(kptsXy[2 * k + 1]) : NaN;
       if (BODY_POINTS.includes(k) && conf >= this.motionMinConf) {
         body[2 * k] = xy[2 * k]!;
         body[2 * k + 1] = xy[2 * k + 1]!;
@@ -260,8 +313,8 @@ export class PostureTracker {
   }
 
   private updateShoulderWidth(xy: Float64Array): void {
-    // np.linalg.norm of a single vector goes through BLAS ddot, which may fuse the multiply-add (1 ulp apart).
-    const width = norm2(x(xy, L_SHOULDER) - x(xy, R_SHOULDER), y(xy, L_SHOULDER) - y(xy, R_SHOULDER));
+    // np.linalg.norm of a single vector goes through BLAS ddot, which fuses the multiply-add.
+    const width = vectorNorm2(x(xy, L_SHOULDER) - x(xy, R_SHOULDER), y(xy, L_SHOULDER) - y(xy, R_SHOULDER));
     if (Number.isFinite(width) && width > 0.0) this.shoulderW = ema(this.shoulderW, width, this.emaAlpha);
   }
 

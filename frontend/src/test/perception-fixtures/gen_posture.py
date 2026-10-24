@@ -2,8 +2,9 @@
 
 Replays the real valence.perception.posture.PostureTracker over long synthetic sequences of a seated person
 (calibration, slumps, keyboard gaze, head in hands, dropouts, hidden ears, L/R swaps, identity jumps, shoulder width
-changes, jittered / repeated / decreasing timestamps, non-finite inputs, custom parameters) and records every output
-per step: the PostureState fields plus baseline / ear_baseline / shoulder_width after the step.
+changes, jittered / repeated / decreasing timestamps, non-finite and None inputs, custom parameters, zero widths and
+ties that need numpy's fused ddot norm) and records every output per step: the PostureState fields plus baseline /
+ear_baseline / shoulder_width after the step.
 
 Writes posture-<part>.json (strict JSON; non-finite floats as "NaN" / "Infinity" / "-Infinity").
 """
@@ -208,26 +209,40 @@ def timestamps(rng: np.random.Generator, n: int, *, t0: float = 0.0, jitter: flo
 
 
 def replay(name: str, frames: list[tuple[np.ndarray, np.ndarray]], ts: list[float], params: dict[str, Any] | None = None,
-           *, scale: float = 1.0, decimals: int = 1) -> dict[str, Any]:
+           *, scale: float = 1.0, decimals: int | None = 1,
+           nulls: dict[int, tuple[tuple[int, ...], tuple[int, ...]]] | None = None) -> dict[str, Any]:
     """Round the inputs to what the JSON stores, feed them to the real tracker, record every output per step.
 
-    Coordinates keep ``decimals`` digits (the always-hidden knees and ankles ``decimals - 1``)."""
+    Coordinates keep ``decimals`` digits (the always-hidden knees and ankles ``decimals - 1``; None keeps them exact,
+    for constructions that are exact doubles already). ``nulls`` maps a step to (flat xy indices, conf indices) passed
+    as None (numpy reads it as NaN; the JSON stores null)."""
     params = params or {}
     tracker = PostureTracker(**params)
     case: dict[str, Any] = {"name": name, "params": params, "t": [], "xy": [], "conf": [], "slump": [],
                             "head_in_hands": [], "motion": [], "head_drop": [], "calibrated": [], "baseline": [],
                             "ear_baseline": [], "shoulder_width": []}
     assert len(frames) == len(ts)
-    for (xy, conf), t in zip(frames, ts):
+    for i, ((xy, conf), t) in enumerate(zip(frames, ts)):
         xy = xy * scale
-        xy[:13] = np.round(xy[:13], decimals)
-        xy[13:] = np.round(xy[13:], decimals - 1)
+        if decimals is not None:
+            xy[:13] = np.round(xy[:13], decimals)
+            xy[13:] = np.round(xy[13:], decimals - 1)
+        flat: list[float | None] = [float(v) for v in xy.reshape(-1)]
+        cl: list[float | None] = [float(v) for v in conf]
+        xy_in: Any = xy
+        conf_in: Any = conf
+        if nulls and i in nulls:  # nested lists with None, as a JSON-fed caller would pass them
+            for j in nulls[i][0]:
+                flat[j] = None
+            for j in nulls[i][1]:
+                cl[j] = None
+            xy_in, conf_in = [flat[2 * k: 2 * k + 2] for k in range(17)], cl
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)  # mean of an empty slice when motion_min_points <= 0
-            state = tracker.update(xy, conf, t)
+            state = tracker.update(xy_in, conf_in, t)
         case["t"].append(float(t))
-        case["xy"].append([float(v) for v in xy.reshape(-1)])
-        case["conf"].append([float(v) for v in conf])
+        case["xy"].append(flat)
+        case["conf"].append(cl)
         case["slump"].append(bool(state.slump))
         case["head_in_hands"].append(bool(state.head_in_hands))
         case["motion"].append(float(state.motion))
@@ -488,13 +503,71 @@ def rounding_case() -> dict[str, Any]:
     return replay("float_rounding_holds", frames, ts, dict(baseline_s=2.0, ema_alpha=1.0))
 
 
+def ddot_fma_norm(dx: float, dy: float) -> float:
+    """np.linalg.norm of a 2-vector: sqrt(v.dot(v)), a BLAS ddot that fuses its multiply-adds (posture.ts emulates)."""
+    return math.sqrt(math.fma(dy, dy, dx * dx))
+
+
+def degenerate_case() -> dict[str, Any]:
+    """Exact constructions around the shoulder width: a zero / infinite width, an infinite head drop under ema_alpha 1
+    (1.0 * v + 0.0 * inf is NaN), null inputs, and ties that only hold with numpy's fused ddot norm.
+
+    Ties: shoulders R = (0, 0), L = (a, b), the ear at (0, 0) the only head point and the wrists at (+-a/2, -b/2), so
+    every wrist sits at exactly half the unfused norm of (a, b) while the radius is half the fused one; then the
+    shoulders alternate between that pose and one shifted by exactly (a, b), so each step moves them the unfused norm
+    against a jump gate of the fused one (and the L/R swap test ties: 0 + 2n vs n + n keeps the labels). Where the
+    fused norm is 1 ulp shorter there are no hands and the motion is gated (held); where 1 ulp longer, both count."""
+    ties = (((150.0, 97.9), True), ((150.0, 88.9), False), ((150.1, 71.8), True), ((150.2, 85.6), False))
+    for (a, b), shorter in ties:
+        fused, plain = float(np.linalg.norm(np.array([a, b]))), math.sqrt(a * a + b * b)
+        if fused != ddot_fma_norm(a, b) or (fused < plain) != shorter:
+            raise SystemExit(f"np.linalg.norm([{a}, {b}]) = {fused!r}: this numpy's BLAS ddot does not fuse "
+                             "multiply-adds, so the fused-norm ties in posture-edges would not hold; regenerate on a "
+                             "machine whose OpenBLAS uses FMA (x86-64 Haswell+ or arm64)")
+
+    def bare(points: dict[int, tuple[float, float]]) -> tuple[np.ndarray, np.ndarray]:
+        xy, conf = np.zeros((17, 2)), np.zeros(17)
+        for k, p in points.items():
+            xy[k], conf[k] = p, 0.9
+        return xy, conf
+
+    frames: list[tuple[np.ndarray, np.ndarray]] = []
+    nulls: dict[int, tuple[tuple[int, ...], tuple[int, ...]]] = {}
+    same = tpose()
+    same[0][6] = same[0][5]  # both shoulders on one point: width 0 is never used
+    frames += [(same[0].copy(), same[1].copy()) for _ in range(3)]
+    frames += [tpose() for _ in range(15)]  # window [0, 1) holds 7 nose samples: calibrates on the 10th, at t 1.2
+    frames += [(same[0].copy(), same[1].copy()) for _ in range(3)]  # width 0 again: the last width is kept
+    inf_y = tpose()
+    inf_y[0][5, 1] = INF  # infinite shoulder y with good conf: width skipped, head and ear drop inf
+    frames += [inf_y, tpose(), tpose()]  # then 1.0 * v + 0.0 * inf = NaN, then v
+    inf_x = tpose(head_drop=0.3)
+    inf_x[0][6, 0] = -INF
+    frames += [inf_x, tpose(head_drop=0.3)]
+    nulls[len(frames)] = ((1, 6 * 2, 3 * 2 + 1), (4,))  # nose y, R shoulder x, L ear y as None; R ear conf None
+    frames += [tpose(head_drop=0.3)]
+    nulls[len(frames)] = ((), (0, 5, 9))
+    frames += [tpose(head_drop=0.3)]
+    frames += [tpose(head_drop=0.3) for _ in range(6)]
+    for (a, b), _ in ties:
+        hands = bare({3: (0.0, 0.0), 5: (a, b), 6: (0.0, 0.0), 9: (a / 2, -b / 2), 10: (-a / 2, -b / 2)})
+        frames += [(hands[0].copy(), hands[1].copy()) for _ in range(10)]
+        for i in range(8):
+            frames.append(bare({5: (a, b), 6: (0.0, 0.0)} if i % 2 == 0 else {5: (2 * a, 2 * b), 6: (a, b)}))
+    nulls[len(frames)] = (tuple(range(34)), tuple(range(17)))  # all None: nothing valid
+    frames += [tpose()]
+    ts = [round(i / 10, 6) for i in range(len(frames))]
+    return replay("degenerate_widths_and_fused_norm_ties", frames, ts,
+                  dict(ema_alpha=1.0, baseline_s=1.0, hih_hold_s=0.5, slump_hold_s=0.3), decimals=None, nulls=nulls)
+
+
 def edge_cases() -> list[dict[str, Any]]:
     restart = sequence("restart_opens_a_new_window", 64, [
         dict(n=55, hd=-0.2),  # 5 s window, median < 0: restarts with t0 = now
         dict(n=80, hd=0.7, ramp=3),  # calibrates 5 s after the restart, not after 10 more samples
         dict(n=30, hd=0.3, ramp=5),
     ], params=dict(baseline_s=5.0), timing=dict(p_gap=0.0, p_back=0.0))
-    return [boundary_case(), rounding_case(), restart]
+    return [boundary_case(), rounding_case(), restart, degenerate_case()]
 
 
 def constructor_cases() -> list[dict[str, Any]]:

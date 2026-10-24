@@ -53,7 +53,10 @@ export class HysteresisDebouncer {
         this.streak = 0;
         this.highSince = null;
       }
-      if (this.streak < this.onCount || t - this.highSince! < this.onHoldS - TIME_EPS) return false;
+      if (this.streak < this.onCount) return false;
+      // Python computes `t - None` here when on_count <= 0 and the sample is low: a TypeError.
+      if (this.highSince === null) throw new TypeError("unsupported operand type(s) for -: 'float' and 'NoneType'");
+      if (t - this.highSince < this.onHoldS - TIME_EPS) return false;
       this.active = true;
       this.streak = 0;
       this.highSince = null;

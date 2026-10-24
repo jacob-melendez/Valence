@@ -4,12 +4,16 @@ Ports valence/perception/audio_features.py (mean_power, power_to_db, PowerSmooth
 resample_48k_to_16k) and scipy.signal.resample_poly with its defaults as resample_48k_to_16k calls it (float32 in,
 float32 out). Writes audio-features.json, audio-resample.json and audio-resample-<rate>.json (one 1 s block per rate).
 
-Encodings: a float32 block is {"scale": s, "ints": [...]} (x = ints / s, exact in float32) or {"floats": [...]};
-non-finite floats are the strings "NaN", "Infinity", "-Infinity".
+Encodings: a float32 block is {"scale": s, "ints": [...]} (x = ints / s, exact in float32), {"scale": s, "i16": b64}
+(the same with the ints as base64 little-endian int16), {"floats": [...]} or {"f32": b64} (base64 little-endian
+float32); a resampled output is {"f32": b64}, its exact float32 bits. Non-finite floats are the strings "NaN",
+"Infinity", "-Infinity". The base64 forms keep the long blocks small (gzip packs float32 bits far better than their
+decimal digits).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import sys
@@ -38,6 +42,8 @@ from valence.perception.debounce import HysteresisDebouncer  # noqa: E402
 
 SEED = 20261024
 RATES = (48000, 44100, 32000, 22050, 16000)
+# Other sample rates a browser AudioContext may run at: a short block each (every tap of the filter still meets data).
+EXTRA_RATES = (8000, 11025, 12000, 24000, 88200, 96000, 192000)
 
 
 def enc(v: object) -> object:
@@ -72,6 +78,19 @@ def ints_block(ints: np.ndarray, scale: int = 32768) -> tuple[np.ndarray, dict]:
     return x, {"scale": scale, "ints": ints.tolist()}
 
 
+def i16_block(ints: np.ndarray, scale: int = 32768) -> tuple[np.ndarray, dict]:
+    """ints_block with the ints as base64 int16 (int16 PCM range only)."""
+    ints = np.asarray(ints, dtype=np.int64)
+    assert ints.size == 0 or (ints.min() >= -32768 and ints.max() <= 32767)
+    x = (ints.astype(np.float64) / scale).astype(np.float32)
+    return x, {"scale": scale, "i16": base64.b64encode(ints.astype("<i2").tobytes()).decode("ascii")}
+
+
+def f32_b64(values: np.ndarray) -> dict:
+    """Exact float32 bits as base64 little-endian float32."""
+    return {"f32": base64.b64encode(np.asarray(values, dtype="<f4").tobytes()).decode("ascii")}
+
+
 def floats_block(values: np.ndarray, dtype: type = np.float32) -> tuple[np.ndarray, dict]:
     x = np.asarray(values, dtype=dtype)
     return x, {"floats": [float(v) for v in x]}
@@ -102,7 +121,7 @@ def mean_power_cases(rng: np.random.Generator) -> list[dict]:
     for n in (0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 127, 128, 129, 130, 136, 255, 256, 257, 1000, 1023, 4800, 16000):
         x, data = ints_block(pcm(rng, n))
         add(x, data, "float32")
-    x, data = ints_block(pcm(rng, 48000, 48000))
+    x, data = i16_block(pcm(rng, 48000, 48000))
     add(x, data, "float32")  # a 1 s block at 48 kHz: deep pairwise recursion
     for n in (0, 5, 100, 1000, 16000):
         ints = pcm(rng, n)
@@ -264,6 +283,18 @@ def laughter_cases(rng: np.random.Generator) -> list[dict]:
                         ({"Speech": 0.15, "Laughter": 0.08, "Snicker": 0.06}, 3.0)]))
     seqs.append((None, [({"Laughter": 0.08}, 0.0), ({"Laughter": 0.0}, 1.0), ({"Laughter": 0.0}, 2.0),
                         ({"Laughter": 0.04}, 3.0), ({"Laughter": 0.08}, 4.0)]))
+    # odd input: NaN and backwards timestamps, +-inf family scores, a large clock (coarser float spacing)
+    odd: list[tuple[dict, float]] = []
+    t = 1e5 + float(rng.uniform(0, 1))
+    for _ in range(150):
+        r = rng.random()
+        odd.append((random_scores(rng, float(rng.choice([0.01, 0.5]))),
+                    math.nan if r < 0.05 else t - float(rng.uniform(0, 3)) if r < 0.12 else t))
+        if rng.random() < 0.06:
+            odd[-1][0][str(rng.choice(LAUGH_FAMILY))] = float(rng.choice([math.inf, -math.inf]))
+        t += float(rng.choice([0.1, 0.5, 1.0, 1.5]))
+    seqs.append((None, odd))
+    seqs.append((configs[3], odd))
     cases = []
     for cfg, seq in seqs:
         tr = LaughterTracker() if cfg is None else LaughterTracker(debouncer=HysteresisDebouncer(**cfg))
@@ -291,7 +322,7 @@ def resample(x: np.ndarray, up: int, down: int) -> np.ndarray:
 def resample_case(x: np.ndarray, data: dict, up: int, down: int) -> dict:
     y = resample(x, up, down)
     assert y.dtype == np.float32
-    return {"up": up, "down": down, "x": data, "y": [float(v) for v in y]}
+    return {"up": up, "down": down, "x": data, "y": f32_b64(y)}
 
 
 def short_resample_cases(rng: np.random.Generator) -> list[dict]:
@@ -306,7 +337,7 @@ def short_resample_cases(rng: np.random.Generator) -> list[dict]:
             cases.append(resample_case(*ints_block(pcm(rng, n)), up, down))
     for rate in (44100, 22050, 32000):
         g = math.gcd(16000, rate)
-        cases.append(resample_case(*ints_block(pcm(rng, rate // 10 + 7, rate)), 16000 // g, rate // g))
+        cases.append(resample_case(*i16_block(pcm(rng, rate // 10 + 7, rate)), 16000 // g, rate // g))
     # non-finite samples spread over the filter span (inf * a zero tap is NaN, as in scipy)
     for special in ([np.nan], [np.inf], [-np.inf, np.inf]):
         for up, down in ((1, 3), (160, 441), (3, 2)):
@@ -320,7 +351,7 @@ def short_resample_cases(rng: np.random.Generator) -> list[dict]:
         x = np.asarray(vals, dtype=np.float64)
         with np.errstate(over="ignore"):
             y = resample(x, up, down)
-        cases.append({"up": up, "down": down, "x": {"floats64": [float(v) for v in x]}, "y": [float(v) for v in y]})
+        cases.append({"up": up, "down": down, "x": {"floats64": [float(v) for v in x]}, "y": f32_b64(y)})
     return cases
 
 
@@ -355,12 +386,15 @@ def export(out_dir: Path) -> None:
         "kaiser": kaisers,
         "firwin": firwins,
         "cases": short_resample_cases(rng),
+        "rates": [{"rate": rate, **resample_case(*i16_block(pcm(rng, rate // 20 + 3, rate, level=0.3)),
+                                                 16000 // math.gcd(16000, rate), rate // math.gcd(16000, rate))}
+                  for rate in EXTRA_RATES],
     })
 
     for rate in RATES:
         g = math.gcd(16000, rate)
         up, down = 16000 // g, rate // g
-        x, data = ints_block(pcm(rng, rate, rate, level=0.3))
+        x, data = i16_block(pcm(rng, rate, rate, level=0.3))
         case = resample_case(x, data, up, down)
         write(out_dir, f"audio-resample-{rate}", {"rate": rate, **case})
 

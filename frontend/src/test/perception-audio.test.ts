@@ -8,7 +8,19 @@ import { expectClose, loadFixture } from "./perception-fixture-util";
 
 // ---------------------------------------------------------------------------------------------- helpers
 
-type Block = { scale: number; ints: number[] } | { ints: number[] } | { floats: number[] } | { floats64: number[] };
+type Block =
+  | { scale: number; ints: number[] } | { scale: number; i16: string } | { ints: number[] } | { floats: number[] }
+  | { f32: string } | { floats64: number[] };
+/** Exact float32 bits, base64 little-endian (resampled outputs). */
+type F32 = { f32: string };
+
+/** Base64 little-endian int16 / float32 (the fixtures' compact form of long blocks and exact outputs). */
+function fromBase64(s: string, kind: "i16" | "f32"): Int16Array | Float32Array {
+  const b = Buffer.from(s, "base64");
+  const view = new DataView(b.buffer, b.byteOffset, b.length);
+  if (kind === "i16") return Int16Array.from({ length: b.length / 2 }, (_, i) => view.getInt16(2 * i, true));
+  return Float32Array.from({ length: b.length / 4 }, (_, i) => view.getFloat32(4 * i, true));
+}
 
 const INT_ARRAYS: Record<string, (v: number[]) => ArrayLike<number>> = {
   int8: (v) => Int8Array.from(v), uint8: (v) => Uint8Array.from(v), int16: (v) => Int16Array.from(v),
@@ -25,8 +37,9 @@ function block(data: Block, dtype = "float32"): ArrayLike<number> {
     return make("ints" in data ? data.ints : []);
   }
   if ("floats" in data) return Float32Array.from(data.floats);
+  if ("f32" in data) return fromBase64(data.f32, "f32");
   const scale = "scale" in data ? data.scale : 1;
-  return Float32Array.from(data.ints, (v) => v / scale);
+  return Float32Array.from("i16" in data ? fromBase64(data.i16, "i16") : data.ints, (v) => v / scale);
 }
 
 function sine(freq = 1000.0, sr = 16000, seconds = 1.0, amp = 1.0): Float32Array {
@@ -235,19 +248,21 @@ interface FeaturesFixture {
   family_max: { scores: Record<string, number>; laugh: number }[];
   laughter: { debouncer: DebouncerCfg | null; steps: LaughterStep[]; final_take: number }[];
 }
-interface ResampleCase { up: number; down: number; x: Block; y: number[] }
+interface ResampleCase { up: number; down: number; x: Block; y: F32 }
 interface ResampleFixture {
   i0: { x: number; y: number }[];
   kaiser: { M: number; beta: number; w: number[] }[];
   firwin: { numtaps: number; cutoff: number; h: number[] }[];
   cases: ResampleCase[];
+  rates: (ResampleCase & { rate: number })[];
 }
 
 /**
  * resamplePoly emulates scipy's float32 arithmetic (Math.fround on every product and sum), so its output is
  * bit-identical; the 1e-6 tolerance is the float32 contract, the exact check guards the emulation.
  */
-function expectResample(actual: Float32Array, expected: number[], what: string): void {
+function expectResample(actual: Float32Array, y: F32, what: string): void {
+  const expected = fromBase64(y.f32, "f32");
   expect(actual.length, `${what} length`).toBe(expected.length);
   let mismatches = 0;
   expected.forEach((v, i) => {
@@ -273,7 +288,8 @@ describe("parity with valence/perception/audio_features.py", () => {
       const x = c.dtype === "float64" && i % 2 ? Float64Array.from(raw) : raw;
       const what = `mean_power[${i}] ${c.dtype} n=${x.length}`;
       const p = meanPower(x);
-      expectClose(p, c.p, 1e-15, what); // pairwise summation reproduced: same float64 result
+      expectClose(p, c.p, 1e-15, what);
+      expect(p, `${what}: not bit-identical (numpy pairwise summation)`).toBe(c.p);
       expectClose(powerToDb(p), c.db, 1e-12, what);
       expectClose(powerToDb(p, 94.0), c.db94, 1e-12, what);
     });
@@ -291,11 +307,12 @@ describe("parity with valence/perception/audio_features.py", () => {
         const what = `smoother[${i}] step ${k}`;
         if (s.op === "reset") sm.reset();
         else {
-          expectClose(sm.update(s.p!), s.out!, 1e-12, what);
+          expect(sm.update(s.p!), what).toBe(s.out!); // same float64 operations: bit-identical
+          // log10: V8's fdlibm and the C library can differ in the last bit
           expectClose(sm.db(), s.db!, 1e-12, what);
           expectClose(sm.db(94.0), s.db94!, 1e-12, what);
         }
-        expectClose(sm.value, s.value, 1e-12, what);
+        expect(sm.value, what).toBe(s.value);
       });
     });
     fx.smoother_invalid.forEach((c) => {
@@ -321,8 +338,8 @@ describe("parity with valence/perception/audio_features.py", () => {
       c.steps.forEach((s, k) => {
         const what = `laughter[${i}] step ${k} t=${s.t}`;
         const [laugh, speech, onset] = tr.update(s.scores, s.t);
-        expectClose(laugh, s.laugh, 0, what);
-        expectClose(speech, s.speech, 0, what);
+        expect(laugh, what).toBe(s.laugh); // Object.is: NaN and the sign of zero too
+        expect(speech, what).toBe(s.speech);
         expect(onset, what).toBe(s.onset);
         expect(tr.active, what).toBe(s.active);
         if (s.take !== undefined) expect(tr.takeOnsets(), what).toBe(s.take);
@@ -364,6 +381,14 @@ describe("parity with scipy.signal.resample_poly", () => {
     fx.cases.forEach((c, i) => {
       const x = block(c.x);
       expectResample(resamplePoly(x, c.up, c.down), c.y, `case ${i} (${c.up}/${c.down}, n=${x.length})`);
+    });
+  });
+
+  it(`short blocks at other rates (${fx.rates.map((c) => c.rate).join(", ")} Hz)`, () => {
+    fx.rates.forEach((c) => {
+      const x = block(c.x);
+      expectResample(resampleTo16k(x, c.rate), c.y, `${c.rate} Hz via resampleTo16k (n=${x.length})`);
+      expectResample(resamplePoly(x, c.up, c.down), c.y, `${c.rate} Hz (${c.up}/${c.down})`);
     });
   });
 

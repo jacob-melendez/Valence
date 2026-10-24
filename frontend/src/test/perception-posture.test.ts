@@ -512,6 +512,25 @@ describe("PostureTracker state and validation", () => {
     expect(b.shoulderWidth).toBe(SHOULDER_W);
   });
 
+  it("reads null as NaN, like numpy reads None (not as Number(null) = 0)", () => {
+    const [xy, conf] = pose({ headDrop: 0.3 });
+    const nullXy: (number | null)[] = Array.from(xy);
+    const nullConf: (number | null)[] = Array.from(conf);
+    const nanXy = Float64Array.from(xy);
+    const nanConf = Float64Array.from(conf);
+    nullXy[1] = null; // nose y
+    nanXy[1] = NaN;
+    nullConf[4] = null; // right ear: invalid even at minConf 0, as NaN >= 0 is false
+    nanConf[4] = NaN;
+    const a = new PostureTracker({ minConf: 0.0 });
+    const b = new PostureTracker({ minConf: 0.0 });
+    for (let i = 0; i < 3; i++) {
+      const state = a.update(nullXy, nullConf, i / 10);
+      expect(state).toEqual(b.update(nanXy, nanConf, i / 10));
+      expect(state.headDrop).toBeNaN();
+    }
+  });
+
   it.each([[51, 17], [32, 16], [34, 16], [34, 18], [17, 17]])("rejects %i coordinates with %i confidences", (nXy, nConf) => {
     expect(() => new PostureTracker().update(new Float64Array(nXy), new Float64Array(nConf).fill(1), 0.0)).toThrow();
   });
@@ -549,6 +568,38 @@ describe("PostureTracker timing edges", () => {
   });
 });
 
+describe("PostureTracker shoulder width: numpy's fused ddot norm", () => {
+  /** Only the given keypoints, each at conf 0.9. */
+  function bare(points: Record<number, Pt>): Pose {
+    const xy = new Float64Array(34);
+    const conf = new Float64Array(17);
+    for (const [k, [px, py]] of Object.entries(points)) {
+      xy[2 * Number(k)] = px;
+      xy[2 * Number(k) + 1] = py;
+      conf[Number(k)] = 0.9;
+    }
+    return [xy, conf];
+  }
+
+  // np.linalg.norm(v) is sqrt(v.dot(v)), a BLAS ddot that fuses the multiply-add: sqrt(fma(dy, dy, dx * dx)). For
+  // (150, 97.9) that is 1 ulp shorter than sqrt(dx * dx + dy * dy), for (150, 88.9) 1 ulp longer (values from Python).
+  it.each([
+    [150.0, 97.9, 179.12121594049097, false],
+    [150.0, 88.9, 174.36516280495943, true],
+  ])("width of (%s, %s) is %s: exact radius and jump-gate ties count: %s", (a, b, width, counts) => {
+    expect(Math.sqrt(a * a + b * b)).not.toBe(width);
+    const tracker = new PostureTracker({ emaAlpha: 1.0, hihHoldS: 0.0 });
+    // The ear (the only head point) is exactly half the unfused norm from each wrist; the radius is half the fused one.
+    const tie = bare({ 3: [0, 0], 5: [a, b], 6: [0, 0], 9: [a / 2, -b / 2], 10: [-a / 2, -b / 2] });
+    const hands = tracker.update(...tie, 0.0);
+    expect(tracker.shoulderWidth).toBe(width);
+    expect(hands.headInHands).toBe(counts);
+    // Both shoulders move exactly (a, b): one unfused norm against a jump gate of one fused shoulder width.
+    const moved = tracker.update(...bare({ 5: [2 * a, 2 * b], 6: [a, b] }), 0.1);
+    expect(Number.isNaN(moved.motion)).toBe(!counts);
+  });
+});
+
 describe("PostureTracker slump vs keyboard gaze", () => {
   it("does not call keyboard gaze a slump", () => {
     const states = run(calibrated(), 20.1, 30.1, 10, { headDrop: 0.45, earDrop: 0.7 }); // nose 0.64x, ears ~0.97x
@@ -582,8 +633,8 @@ interface PostureCase {
   name: string;
   params: Record<string, number>;
   t: number[];
-  xy: number[][];
-  conf: number[][];
+  xy: (number | null)[][]; // null = Python None (numpy reads NaN)
+  conf: (number | null)[][];
   slump: boolean[];
   head_in_hands: boolean[];
   motion: number[];
@@ -643,6 +694,8 @@ describe("PostureTracker parity with valence/perception/posture.py", () => {
   describe.each(PARTS)("%s", (part) => {
     const fixture = loadFixture<PostureFixture>(part);
 
+    // Bit-exact (tolerance 0): the port reproduces numpy's float64 arithmetic step for step, including np.mean's
+    // pairwise sum and np.linalg.norm's fused BLAS ddot (gen_posture.py refuses to run where ddot is unfused).
     it.each(fixture.cases.map((c) => [c.name, c] as const))("replays %s", (_name, c) => {
       const tracker = new PostureTracker(options(c.params));
       expect(c.t.length).toBeGreaterThan(100);
@@ -652,15 +705,15 @@ describe("PostureTracker parity with valence/perception/posture.py", () => {
         expect(s.slump, `${at} slump`).toBe(c.slump[i]);
         expect(s.headInHands, `${at} head_in_hands`).toBe(c.head_in_hands[i]);
         expect(s.calibrated, `${at} calibrated`).toBe(c.calibrated[i]);
-        expectClose(s.motion, c.motion[i]!, 1e-9, `${at} motion`);
-        expectClose(s.headDrop, c.head_drop[i]!, 1e-9, `${at} head_drop`);
-        expectClose(tracker.shoulderWidth, c.shoulder_width[i]!, 1e-9, `${at} shoulder_width`);
+        expectClose(s.motion, c.motion[i]!, 0, `${at} motion`);
+        expectClose(s.headDrop, c.head_drop[i]!, 0, `${at} head_drop`);
+        expectClose(tracker.shoulderWidth, c.shoulder_width[i]!, 0, `${at} shoulder_width`);
         for (const [actual, expected, what] of [
           [tracker.baseline, c.baseline[i] ?? null, "baseline"],
           [tracker.earBaseline, c.ear_baseline[i] ?? null, "ear_baseline"],
         ] as const) {
           if (expected === null) expect(actual, `${at} ${what}`).toBeNull();
-          else expectClose(actual ?? NaN, expected, 1e-9, `${at} ${what}`);
+          else expectClose(actual ?? NaN, expected, 0, `${at} ${what}`);
         }
       }
     });
