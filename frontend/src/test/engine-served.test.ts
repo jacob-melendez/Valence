@@ -33,6 +33,7 @@ import {
   loadServed,
   npArgmax,
   oodBand,
+  parsePythonJson,
   softmax,
 } from "@/engine/served";
 import { PersonSmoother, type PersonSmootherOptions } from "@/engine/smoother";
@@ -765,6 +766,95 @@ describe("runtime replay through served predictor and smoother", () => {
   });
 });
 
+// ---------- malformed model files ----------
+
+describe("served predictor on malformed model files", () => {
+  it("parses JSON like Python's json.loads, NaN / Infinity / -Infinity included", () => {
+    // json.loads on each input (Python 3.12): value, or null where it raises JSONDecodeError
+    const cases: [string, unknown][] = [
+      ['{"a": [NaN, Infinity, -Infinity]}', { a: [NaN, Infinity, -Infinity] }],
+      ['{"k":-Infinity }', { k: -Infinity }],
+      ['["NaN", "x\\"NaN", "Infinity"]', ["NaN", 'x"NaN', "Infinity"]],
+      ["[-NaN]", null],
+      ["[+Infinity]", null],
+      ["[nan]", null],
+      ["[Infinityx]", null],
+      ["[NaN1]", null],
+      ["{NaN: 1}", null],
+      ["\ufeff{}", null],
+    ];
+    for (const [text, want] of cases) {
+      if (want === null) expect(() => parsePythonJson(text), text).toThrow();
+      else expect(parsePythonJson(text), text).toEqual(want);
+    }
+  });
+
+  it("raises on clip bounds Python cannot use instead of clipping to NaN", () => {
+    // Python (load_served + predict_vector on a copy of artifacts/ with one bound changed):
+    // face_now [null, 1] -> TypeError at the first predict; db_room_now [null, hi] -> TypeError in __init__;
+    // db_room_now 5.0 -> TypeError (not subscriptable); [1.0] -> IndexError; "ab" -> TypeError
+    const core = artifactsOf("core");
+    const bounds = core.clipBounds as Record<string, unknown>;
+    const variants: [string, unknown][] = [
+      ["face_now", [null, 1.0]],
+      ["db_room_now", [null, 70.0]],
+      ["slump_now", [null, 1.0]],
+      ["db_room_now", 5.0],
+      ["db_room_now", [1.0]],
+      ["db_room_now", "ab"],
+      ["db_room_now", { 0: 1, 1: 2 }],
+    ];
+    for (const [feature, b] of variants) {
+      const clipBounds = { ...bounds, [feature]: b } as unknown as ClipBounds;
+      expect(
+        () => new ServedPredictor({ ...core, clipBounds }),
+        `${feature} ${JSON.stringify(b)}`,
+      ).toThrow();
+    }
+    expect(
+      () => new ServedPredictor({ ...core, clipBounds: [] as unknown as ClipBounds }),
+    ).toThrow();
+    // a bool is a number to numpy (True -> 1.0), and extra entries past [0], [1] are ignored
+    const ok = new ServedPredictor({
+      ...core,
+      clipBounds: { ...bounds, db_room_now: [false, true, "x"] } as unknown as ClipBounds,
+    });
+    const i = FEATURE_NAMES.indexOf("db_room_now");
+    expect([ok.lo[i], ok.hi[i]]).toEqual([0, 1]);
+  });
+
+  it("reads temperatures with float() semantics: a missing or null one raises", () => {
+    // Python float(meta["temperatures"]["m2"]) for each stored value; null = raises (KeyError / TypeError)
+    const core = artifactsOf("core");
+    const cases: [unknown, number | null][] = [
+      ["1.25", 1.25],
+      [" 2 ", 2.0],
+      [true, 1.0],
+      ["1_0", 10.0],
+      ["inf", Infinity],
+      ["-Infinity", -Infinity],
+      [3, 3],
+      [null, null],
+      [undefined, null],
+      ["", null],
+      ["1__0", null],
+      ["0x10", null],
+      [[1.5], null],
+    ];
+    for (const [t, want] of cases) {
+      const temperatures: Record<string, unknown> = { ...core.meta.temperatures };
+      if (t === undefined) delete temperatures["m2"];
+      else temperatures["m2"] = t;
+      const meta = { ...core.meta, temperatures } as unknown as ServedMeta;
+      const build = () => new ServedPredictor({ ...core, meta });
+      if (want === null) expect(build, JSON.stringify(t)).toThrow();
+      else expect(build().t2, JSON.stringify(t)).toBe(want);
+    }
+    const noTemps = { ...core.meta, temperatures: undefined } as unknown as ServedMeta;
+    expect(() => new ServedPredictor({ ...core, meta: noTemps })).toThrow(/temperatures/);
+  });
+});
+
 // ---------- loadServed ----------
 
 describe("load served", () => {
@@ -815,6 +905,66 @@ describe("load served", () => {
     const spa = { status: 200, body: "<!doctype html><html></html>" };
     expect(await loadServed("/models/core/", stub({ "/models/core/m2.txt": spa }))).toBeNull();
     expect(await loadServed("/models/core/", stub(), "all")).toBeNull();
+  });
+
+  it("reads Python's NaN / Infinity JSON tokens in clip_bounds.json like json.loads", async () => {
+    // Python: clip_bounds.json written by json.dumps with db_room_now = [-inf, inf] and laugh_cnt_15m =
+    // [0.0, inf]; load_served + predict_vector on models case 0 with both features set to 1e6
+    // -> Focused 0.7441824396965814, neither feature clipped nor OOD (the unmodified files flag db_room_now
+    // and give 0.7430864246904249).
+    const clip = artifactJson<Record<string, unknown>>("clip_bounds.json");
+    clip["db_room_now"] = ["@NINF@", "@INF@"];
+    clip["laugh_cnt_15m"] = [0.0, "@INF@"];
+    const body = JSON.stringify(clip, null, 1)
+      .replaceAll('"@NINF@"', "-Infinity")
+      .replaceAll('"@INF@"', "Infinity");
+    expect(() => JSON.parse(body)).toThrow(); // what a plain JSON.parse loader would do
+    const sp = await loadServed(
+      "/models/core/",
+      stub({ "/models/core/clip_bounds.json": { status: 200, body } }),
+    );
+    if (sp === null) throw new Error("loadServed returned null");
+    const c = models.sets[0]?.cases[0] as ModelCase;
+    expect(c.name).toBe("focused/t003/p1");
+    const x = nn(c.x);
+    const db = FEATURE_NAMES.indexOf("db_room_now");
+    const laugh = FEATURE_NAMES.indexOf("laugh_cnt_15m");
+    x[db] = 1e6;
+    x[laugh] = 1e6;
+    expect([sp.lo[db], sp.hi[db], sp.oodLo[db], sp.oodHi[db]]).toEqual([
+      -Infinity,
+      Infinity,
+      -Infinity,
+      Infinity,
+    ]);
+    const tr = sp.trace(x, c.tod_h);
+    expect([tr.xc[db], tr.xc[laugh]]).toEqual([1e6, 1e6]);
+    expect(tr.ood).toEqual(["db_slope_5m", "db_slope_15m", "lux_slope_5m", "lux_slope_15m"]);
+    expect(tr.output.label).toBe("Focused");
+    expect(Math.abs(tr.output.confidence - 0.7441824396965814)).toBeLessThan(1e-12);
+    expect(tr.output.raw_override).toBe(false);
+    const plain = SERVED.core.predictVector(x, c.tod_h);
+    expect(plain.ood_features).toContain("db_room_now");
+    expect(Math.abs(plain.confidence - 0.7430864246904249)).toBeLessThan(1e-12);
+  });
+
+  it("rejects a model_meta.json with a BOM or bad UTF-8, as Path.read_text + json.loads do", async () => {
+    const meta = artifactText("model_meta.json");
+    await expect(
+      loadServed(
+        "/models/core/",
+        stub({ "/models/core/model_meta.json": { status: 200, body: `\ufeff${meta}` } }),
+      ),
+    ).rejects.toThrow();
+    const bad = (url: string) =>
+      url.endsWith("clip_bounds.json")
+        ? Promise.resolve({
+            ok: true,
+            status: 200,
+            arrayBuffer: async () => new Uint8Array([0x7b, 0xff, 0x7d]).buffer,
+          })
+        : stub()(url);
+    await expect(loadServed("/models/core/", bad)).rejects.toThrow();
   });
 
   it("fails loudly on a missing clip_bounds.json or a server error", async () => {

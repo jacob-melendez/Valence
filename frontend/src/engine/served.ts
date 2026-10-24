@@ -202,6 +202,48 @@ function asFloat(v: number | null | undefined): number {
   return v === null || v === undefined ? NaN : v;
 }
 
+/** Python float() literal syntax (ASCII digits; single underscores between digits). */
+const PY_FLOAT_RE =
+  /^[+-]?(?:(?:\d(?:_?\d)*)?\.\d(?:_?\d)*|\d(?:_?\d)*\.?)(?:[eE][+-]?\d(?:_?\d)*)?$/;
+const PY_FLOAT_SPECIAL_RE = /^[+-]?(?:inf|infinity|nan)$/i;
+
+/**
+ * Python `float(v)` for a value read from JSON (valence/models/served.py:75 `float(meta["temperatures"]["m2"])`).
+ * Missing (undefined), null, objects and malformed strings raise, as KeyError / TypeError / ValueError do in
+ * Python. JS Number() would turn them into NaN or 0 and every prediction would silently go NaN.
+ */
+function pyFloat(v: unknown, what: string): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (PY_FLOAT_SPECIAL_RE.test(s))
+      return /nan/i.test(s) ? NaN : s.startsWith("-") ? -Infinity : Infinity;
+    if (PY_FLOAT_RE.test(s)) return Number(s.replaceAll("_", ""));
+    throw new Error(`served predictor: ${what}: could not convert string to float: '${v}'`);
+  }
+  throw new TypeError(
+    `served predictor: ${what} must be a real number, not ${v === undefined ? "missing" : typeof v}`,
+  );
+}
+
+/**
+ * One entry of a clip_bounds.json pair as numpy reads it. Python builds `np.array` over all 123 bounds, so a
+ * null turns the array into dtype=object and ood_band (math.isfinite) or the first np.clip raises a
+ * TypeError; a bool is 1.0 / 0.0. Only numbers and bools are accepted here.
+ */
+function clipBound(v: unknown, what: string): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  throw new TypeError(
+    `served predictor: ${what} must be a real number, not ${v === null ? "null" : typeof v}`,
+  );
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 // ---------- OOD bands ----------
 
 /** Values outside the returned band count as out of distribution (valence/models/served.py:48 ood_band). */
@@ -259,8 +301,11 @@ export class ServedPredictor implements Predictor {
     this.modelId = "m2_lgbm@" + sha256Hex(m2Bytes).slice(0, 8);
     this.m2 = parseLightGBMText(asText(a.m2));
     this.m0 = parseLightGBMText(asText(a.m0));
-    this.t2 = Number(meta.temperatures.m2);
-    this.t0 = Number(meta.temperatures.m0);
+    // float(meta["temperatures"]["m2"]): a missing or null temperature raises instead of giving NaN / 0
+    const temps: unknown = (meta as { temperatures?: unknown }).temperatures;
+    if (!isPlainObject(temps)) fail("model_meta.json has no temperatures object");
+    this.t2 = pyFloat(temps["m2"], "temperatures.m2");
+    this.t0 = pyFloat(temps["m0"], "temperatures.m0");
     this.cols2 = Object.freeze([...meta.feature_sets.m2]);
     this.cols0 = Object.freeze([...meta.feature_sets.m0]);
     this.idx2 = Int32Array.from(this.cols2, featureIndex); // throws on an unknown name, like the KeyError
@@ -274,7 +319,9 @@ export class ServedPredictor implements Predictor {
     if (this.m2.numFeatures !== this.cols2.length || this.m0.numFeatures !== this.cols0.length)
       fail("model widths do not match meta feature_sets");
 
-    const clip = a.clipBounds;
+    const clip: unknown = a.clipBounds;
+    // clip.get(...) needs a dict (a JSON list or null raises AttributeError in Python)
+    if (!isPlainObject(clip)) fail("clip_bounds.json must be an object of feature -> [p1, p99]");
     this.lo = new Float64Array(N_FEATURES);
     this.hi = new Float64Array(N_FEATURES);
     this.oodLo = new Float64Array(N_FEATURES);
@@ -282,11 +329,14 @@ export class ServedPredictor implements Predictor {
     this.oodUsed = new Uint8Array(N_FEATURES);
     const used = new Set([...this.cols2, ...this.cols0]);
     FEATURE_NAMES.forEach((n, i) => {
-      // clip.get(n, [-inf, inf])[0], [1]; a JSON null reads as NaN (np.array of floats), a short pair throws
-      const b = Object.hasOwn(clip, n) ? clip[n] : undefined;
-      if (b !== undefined && b.length < 2) fail(`clip bounds of ${n} need two values`);
-      const lo = b === undefined ? -Infinity : asFloat(b[0]);
-      const hi = b === undefined ? Infinity : asFloat(b[1]);
+      // clip.get(n, [-inf, inf])[0], [1]. Python raises on anything but a list of >= 2 real numbers: a short
+      // list (IndexError), a scalar (not subscriptable), a null entry (object array: TypeError at load or first
+      // predict). Number(null) / undefined would instead clip silently to NaN.
+      const b: unknown = Object.hasOwn(clip, n) ? clip[n] : undefined;
+      if (b !== undefined && !(Array.isArray(b) && b.length >= 2))
+        fail(`clip bounds of ${n} must be a list of two numbers`);
+      const lo = b === undefined ? -Infinity : clipBound(b[0], `clip bounds of ${n}`);
+      const hi = b === undefined ? Infinity : clipBound(b[1], `clip bounds of ${n}`);
       this.lo[i] = lo;
       this.hi[i] = hi;
       const [bl, bh] = oodBand(n, lo, hi);
@@ -490,6 +540,70 @@ export interface FetchResponseLike {
 }
 export type FetchLike = (url: string) => Promise<FetchResponseLike>;
 
+const PY_JSON_NAN = "\u0000\u0001py-json:NaN";
+const PY_JSON_INF = "\u0000\u0001py-json:Infinity";
+const PY_JSON_NINF = "\u0000\u0001py-json:-Infinity";
+const PY_JSON_TOKENS: readonly (readonly [string, string])[] = [
+  ["-Infinity", PY_JSON_NINF],
+  ["Infinity", PY_JSON_INF],
+  ["NaN", PY_JSON_NAN],
+];
+
+/**
+ * Python's `json.loads` (served.py:82, :164) for the model JSON files. Two differences from JSON.parse:
+ * - it accepts the bare tokens `NaN`, `Infinity` and `-Infinity` (what json.dumps writes for non-finite
+ *   floats, e.g. a clip bound of a feature with infinite values): JSON.parse would reject the whole file;
+ * - it rejects a leading BOM ("Unexpected UTF-8 BOM"), which the caller keeps in the text for that reason.
+ * The tokens are swapped for sentinel strings outside string literals, then mapped back by the reviver; a
+ * malformed neighbour ("NaN1", "-NaN", "nan") still fails, as in Python, and so does a token used as a key.
+ */
+export function parsePythonJson(text: string): unknown {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    if (inString) {
+      out += ch;
+      if (ch === "\\") {
+        out += text[i + 1] ?? "";
+        i += 2;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i++;
+      continue;
+    }
+    const tok = PY_JSON_TOKENS.find(([t]) => text.startsWith(t, i));
+    if (tok !== undefined) {
+      out += JSON.stringify(tok[1]);
+      i += tok[0].length;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return JSON.parse(out, (key, v: unknown) => {
+    if (key === PY_JSON_NAN || key === PY_JSON_INF || key === PY_JSON_NINF)
+      throw new SyntaxError("Expecting property name enclosed in double quotes");
+    if (v === PY_JSON_NAN) return NaN;
+    if (v === PY_JSON_INF) return Infinity;
+    if (v === PY_JSON_NINF) return -Infinity;
+    return v;
+  });
+}
+
+/** Path.read_text() for a JSON file: strict UTF-8 (UnicodeDecodeError on bad bytes), a BOM kept as text. */
+function readJsonText(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
 /** A static host's SPA fallback answers a missing file with index.html (status 200): treat it as missing. */
 function looksLikeHtml(bytes: Uint8Array): boolean {
   for (const b of bytes) {
@@ -516,6 +630,8 @@ function looksLikeHtml(bytes: Uint8Array): boolean {
  * model_meta.json, m2.txt or m0.txt is missing (404 / 410 / SPA fallback page) or, when `stateSet` is given,
  * the meta's state_set differs from it (Python always passes Settings.state_set; null skips the check). A
  * missing clip_bounds.json next to present models is an error, as in Python. Other HTTP errors throw.
+ * The two JSON files are read like Path.read_text + json.loads (strict UTF-8, NaN / Infinity tokens accepted,
+ * a BOM rejected: parsePythonJson).
  */
 export async function loadServed(
   baseUrl = "/models/core/",
@@ -541,10 +657,12 @@ export async function loadServed(
     fetchBytes("m0.txt"),
   ]);
   if (metaBytes === null || m2 === null || m0 === null) return null;
-  const meta = JSON.parse(asText(metaBytes)) as ServedMeta;
+  const meta = parsePythonJson(readJsonText(metaBytes)) as ServedMeta;
+  // meta.get("state_set"): a JSON list or null raises AttributeError in Python
+  if (!isPlainObject(meta)) fail("model_meta.json must be an object");
   if (stateSet !== null && meta.state_set !== stateSet) return null;
   const clipBytes = await fetchBytes("clip_bounds.json");
   if (clipBytes === null) fail(`models found under ${base} but no clip_bounds.json next to them`);
-  const clipBounds = JSON.parse(asText(clipBytes)) as ClipBounds;
+  const clipBounds = parsePythonJson(readJsonText(clipBytes)) as ClipBounds;
   return new ServedPredictor({ m2, m0, meta, clipBounds });
 }
