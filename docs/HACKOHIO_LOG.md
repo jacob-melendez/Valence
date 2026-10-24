@@ -210,6 +210,45 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
 - **Web Worker:** moving MediaPipe to a worker cut main-thread long tasks from 158 to 1.
 - **Next:** the whole console running on real perception with fake media files.
 
+### 18:00 — Glue reviewed and hardened; hosted landing; real browser cues
+
+**Cloud A (web):**
+- **Hosted landing** (`fa02cf9`). A bare visit to the hosted site opens on the camera-free tour, with a welcome
+  banner that offers "Use my camera (on-device)". Localhost keeps the operator defaults.
+- **Docs:** the pitch draft with the continuation disclosure, a 3-minute demo script and the Devpost text
+  (`docs/HACKOHIO_PITCH.md`), and `docs/WEB_ENGINE.md`.
+- **Reproducibility** (`c8b9f69`). Every golden expectation in the engine tests now comes from a generator in the
+  repo (`scripts/golden_runtime/`; `check.py` compares 32/32).
+- **Glue review** (39 agents, three lenses: lifecycle, privacy, robustness). Every finding was adversarially
+  verified: 31 confirmed, 5 rejected. All 31 are fixed and were re-verified independently, plus 3 small
+  regressions caught in a second round (`e0526ba`). The ones that mattered:
+  - the kill switch failed if pressed while the camera permission prompt was open, and quick Stop/Start sequences
+    could leave a camera stream live for the life of the tab;
+  - Pause kept the camera and mic open while the UI said "sensing suspended";
+  - the "camera-free" tour and `?perception=mock` still asked for camera permission on load;
+  - tracking parameters such as `?utm_source=` sent hosted visitors to the operator's mock;
+  - "SEALED" was hard-coded. It now shows only when the served CSP really has `connect-src 'self'` (a HEAD check).
+  - `check-static` now also catches CSP violations from workers and worklets, a visible error box, and any camera
+    call (`--forbid-media`).
+
+  894 frontend tests pass (33 new). The tour, mock-perception and hosted `?utm_source` production checks are all
+  clean.
+
+**Cloud B (emotion):**
+- A second verification pass on the spec and the model card.
+- **First real browser cues:** Cloud C's two CC BY clips, run through the real in-browser perception. Per-tick cues
+  on neutral faces are much steadier than in the simulator, so the simulated within-state noise is pessimistic.
+  Between-state differences remain unmeasured. The map reads Focused or Calm on them, never a negative state.
+
+**Cloud C (perception):**
+- **The whole console on real perception** with fake media files: every panel fills in, 0 off-origin requests,
+  0 CSP violations.
+- **15-minute soak:** 6.7 fps sustained, 5,646 frames decoded against 5,645 purged, 0 violations, no memory-leak
+  trend.
+- **CPU delegate by default.** It matches the native edge to about 1e-4 on identical frames; `?delegate=GPU` is
+  there to try.
+- **Features-only captures** of both clips for Cloud B (`data/browser/`).
+
 ## Generated from git
 
 <!-- hacklog:start -->
