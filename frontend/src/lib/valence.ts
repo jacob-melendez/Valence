@@ -63,6 +63,8 @@ export interface PredictionMsg {
   layers: Layer[]; data_quality: DataQuality;
   explanation: { text: string; source: ExplanationSource; latency_ms?: number };
   source: string; simulated_fields: string[];
+  /** Emotion map (optional, docs/EMOTION_FEATURES.md section 5): present when its models are loaded. */
+  affect?: Affect | null;
 }
 export interface ExplanationMsg {
   type: "explanation"; event_id: string; person_id: number; text: string;
@@ -74,9 +76,17 @@ export interface StatusMsg {
   degraded: string[]; purge_violation: boolean;
 }
 export interface StateInfo { id: string; display: string; tier: string }
+/** An emotion-map state and its valence-arousal anchor (an assumption; docs/EMOTION_FEATURES.md section 4). */
+export interface AffectStateInfo { id: string; display: string; valence: number; arousal: number }
+/** Emotion-map reading for one person (valence/contracts.py Affect): 10-state classifier + valence/arousal regressors. */
+export interface Affect {
+  valence: number; arousal: number; label: string; label_display: string; confidence: number;
+  probabilities: Record<string, number>; model: string;
+}
 export interface HelloMsg {
   type: "hello"; contract_version: string; mode: "live" | "replay" | "hybrid"; room_only: boolean;
   states: StateInfo[]; feature_version: string; frame_w: number; frame_h: number; mirrored: boolean;
+  affect_states?: AffectStateInfo[] | null;
 }
 export interface HeartbeatMsg { type: "heartbeat"; t: number }
 export type ServerMessage =
@@ -171,7 +181,12 @@ export interface ValenceState {
   running: "running" | "paused" | "stopped";
   lastCommand: { text: string; ok: boolean } | null;
   lastMessageAt: number;
+  /** Emotion-map states with their valence-arousal anchors (hello.affect_states); empty without the emotion models. */
+  affectStates: AffectStateInfo[];
+  /** Each person's recent valence-arousal readings (15 minutes), for the affect map's trail. */
+  affectTrail: Record<number, AffectPoint[]>;
 }
+export interface AffectPoint { t: number; valence: number; arousal: number; label: string }
 
 // ---------- Backend URL ----------
 // 127.0.0.1, not localhost: macOS resolves localhost to ::1 first and the API binds IPv4 loopback.
@@ -198,7 +213,7 @@ let state: ValenceState = {
   status: null, retention: null, evalSummary: null,
   states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   sim: { face_occlusion: false, low_light: false }, running: "running",
-  lastCommand: null, lastMessageAt: 0,
+  lastCommand: null, lastMessageAt: 0, affectStates: [], affectTrail: {},
 };
 const listeners = new Set<() => void>();
 function set(patch: Partial<ValenceState>) {
@@ -243,7 +258,8 @@ export function handleMessage(msg: ServerMessage) {
   switch (msg.type) {
     case "hello": {
       const states = validStates(msg.states);
-      return set({ ...(states ? { states } : {}), roomOnly: !!msg.room_only, lastMessageAt: now });
+      const affectStates = Array.isArray(msg.affect_states) ? msg.affect_states : [];
+      return set({ ...(states ? { states } : {}), roomOnly: !!msg.room_only, affectStates, lastMessageAt: now });
     }
     case "heartbeat":
       return set({ lastMessageAt: now });
@@ -271,10 +287,16 @@ export function handleMessage(msg: ServerMessage) {
       const llm = state.llm[pid];
       let nextLlm = state.llm;
       if (llm && llm.label_display !== label) { nextLlm = { ...state.llm }; delete nextLlm[pid]; } // label changed
+      const a = msg.affect;
+      const trail = a && Number.isFinite(a.valence) && Number.isFinite(a.arousal)
+        ? { ...state.affectTrail, [pid]: [...(state.affectTrail[pid] ?? []).filter((x) => x.t >= msg.t - HISTORY_WINDOW_S),
+          { t: msg.t, valence: a.valence, arousal: a.arousal, label: a.label }] }
+        : state.affectTrail;
       return set({
         predictions: { ...state.predictions, [pid]: msg },
         llm: nextLlm,
         history: pushHistory({ t: msg.t, person_id: pid, label: msg.label, confidence: msg.confidence }),
+        affectTrail: trail,
         lastMessageAt: now,
       });
     }
@@ -366,13 +388,14 @@ function resetData() {
   set({
     persons: [], mirrored: false, frameW: 0, frameH: 0, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
     states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
+    affectStates: [], affectTrail: {},
   });
 }
 
 /** The backend forgot its people (demo reset, mode or source change): drop their cards, boxes and narrator text. */
 function clearPeople(history = false) {
   recentEvents = {};
-  set({ persons: [], vectors: {}, predictions: {}, llm: {}, ...(history ? { history: [] } : {}) });
+  set({ persons: [], vectors: {}, predictions: {}, llm: {}, affectTrail: {}, ...(history ? { history: [] } : {}) });
 }
 
 // ---------- Mock engine ----------
@@ -760,6 +783,43 @@ function startBrowser() {
   void browser.start();
 }
 function stopBrowser() { browser?.stop(); browser = null; }
+
+// ---------- Self-report capture (real-data evaluation of the emotion map) ----------
+// docs/EMOTION_FEATURES.md section 6: one JSON line per tap with the tapped valence/arousal and the emotion model's
+// input vector at that moment. Kept in this tab's memory until downloaded; never media, never a transcript.
+export interface SelfReportTap {
+  t: number; session_id: string; person_id: number; valence: number; arousal: number; feature_version: string;
+  features: Record<string, number | null>; label?: string;
+}
+type FeatureProvider = (personId: number) => { feature_version: string; features: Record<string, number | null> } | null;
+let featureProvider: FeatureProvider | null = null;
+const selfReports: SelfReportTap[] = [];
+const selfReportListeners = new Set<() => void>();
+let selfReportSession = "";
+/** The in-browser engine registers how to read a person's current model inputs. */
+export function setFeatureProvider(p: FeatureProvider | null) { featureProvider = p; }
+export const getSelfReports = (): readonly SelfReportTap[] => selfReports;
+export function onSelfReports(l: () => void): () => void { selfReportListeners.add(l); return () => { selfReportListeners.delete(l); }; }
+function newSessionId(now: Date) {
+  const day = now.toISOString().slice(0, 10);
+  const rnd = Math.random().toString(36).slice(2, 6);
+  return `sr-${day}-${rnd}`;
+}
+/** Record one tap; returns false when no feature vector is available for that person yet. */
+export function recordSelfReport(personId: number, valence: number, arousal: number, label?: string): boolean {
+  const f = featureProvider?.(personId);
+  if (!f) return false;
+  const now = Date.now();
+  if (!selfReportSession) selfReportSession = newSessionId(new Date(now));
+  const clip = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 1000) / 1000;
+  selfReports.push({ t: now / 1000, session_id: selfReportSession, person_id: personId, valence: clip(valence), arousal: clip(arousal),
+    feature_version: f.feature_version, features: f.features, ...(label ? { label } : {}) });
+  selfReportListeners.forEach((l) => l());
+  return true;
+}
+/** The taps as JSONL (what valence/eval/self_report.py reads). */
+export const selfReportsJsonl = () => selfReports.map((r) => JSON.stringify(r)).join("\n") + (selfReports.length ? "\n" : "");
+export function clearSelfReports() { selfReports.length = 0; selfReportSession = ""; selfReportListeners.forEach((l) => l()); }
 
 // ---------- Public API ----------
 export function setSource(source: Source, baseUrl = state.baseUrl) {

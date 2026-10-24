@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
-  shownExplanation, stateName, useValence,
+  shownExplanation, stateName, useValence, clearSelfReports, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream } from "@/lib/browser-source";
@@ -741,6 +741,141 @@ export function Evaluation() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Emotion map (valence × arousal) ----------
+const PERSON_TRAIL = ["var(--primary)", "var(--state-focused)", "var(--state-happy)"];
+const QUADRANTS = [
+  { x: 92, y: 9, label: "excited · happy", anchor: "end" },
+  { x: 8, y: 9, label: "stressed · tense", anchor: "start" },
+  { x: 8, y: 95, label: "tired · bored", anchor: "start" },
+  { x: 92, y: 95, label: "calm · content", anchor: "end" },
+] as const;
+/** Valence -1..1 → x 0..100, arousal -1..1 → y 100..0. */
+const vaX = (v: number) => 50 + Math.max(-1, Math.min(1, v)) * 46;
+const vaY = (a: number) => 50 - Math.max(-1, Math.min(1, a)) * 46;
+
+export function AffectMap() {
+  const s = useValence();
+  const people = Object.keys(s.affectTrail).map(Number).sort((a, b) => a - b);
+  const latest = people.map((pid) => ({ pid, pred: s.predictions[pid], pt: s.affectTrail[pid]?.at(-1) }));
+  return (
+    <div className="panel" data-testid="affect-map">
+      <div className="panel-title">Emotion map · valence × arousal</div>
+      {!s.affectStates.length && !people.length ? (
+        <p className="text-sm text-muted-foreground">
+          The emotion map (10 states on a valence–arousal plane) appears when the emotion-v1 models are loaded,
+          in the in-browser source.
+        </p>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-[minmax(0,22rem)_1fr]">
+          <svg viewBox="0 0 100 100" className="aspect-square w-full rounded-md border bg-input/20" role="img" aria-label="Valence-arousal plane">
+            <line x1="50" y1="2" x2="50" y2="98" stroke="currentColor" strokeOpacity="0.25" strokeWidth="0.3" />
+            <line x1="2" y1="50" x2="98" y2="50" stroke="currentColor" strokeOpacity="0.25" strokeWidth="0.3" />
+            <text x="97" y="48" fontSize="3" textAnchor="end" fill="currentColor" opacity="0.6">valence +</text>
+            <text x="52" y="5" fontSize="3" fill="currentColor" opacity="0.6">arousal +</text>
+            {QUADRANTS.map((q) => <text key={q.label} x={q.x} y={q.y} fontSize="2.8" textAnchor={q.anchor} fill="currentColor" opacity="0.35">{q.label}</text>)}
+            {s.affectStates.map((a) => (
+              <g key={a.id} opacity="0.55">
+                <circle cx={vaX(a.valence)} cy={vaY(a.arousal)} r="1" fill={stateColor(a.id, "currentColor")} />
+                <text x={vaX(a.valence) + 1.6} y={vaY(a.arousal) + 1} fontSize="2.6" fill="currentColor">{a.display.split(" /")[0]}</text>
+              </g>
+            ))}
+            {people.map((pid, i) => {
+              const trail = s.affectTrail[pid] ?? [];
+              const color = PERSON_TRAIL[i % PERSON_TRAIL.length];
+              const last = trail.at(-1);
+              return (
+                <g key={pid}>
+                  <polyline points={trail.map((p) => `${vaX(p.valence)},${vaY(p.arousal)}`).join(" ")} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.6" />
+                  {last && <circle cx={vaX(last.valence)} cy={vaY(last.arousal)} r="2.2" fill={color} stroke="var(--background)" strokeWidth="0.5" />}
+                  {last && <text x={vaX(last.valence)} y={vaY(last.arousal) - 3} fontSize="3" textAnchor="middle" fill={color} fontWeight="bold">#{pid}</text>}
+                </g>
+              );
+            })}
+          </svg>
+          <div className="space-y-3">
+            {latest.map(({ pid, pred, pt }) => {
+              const a = pred?.affect;
+              return (
+                <div key={pid} className="rounded-md border p-3">
+                  <div className="font-mono text-xs text-muted-foreground">Person #{pid}</div>
+                  <div className="text-xl font-semibold">{a?.label_display ?? pt?.label ?? "—"} <span className="font-mono text-sm text-muted-foreground">{pct(a?.confidence)}</span></div>
+                  <div className="font-mono text-sm">valence {fmt(pt?.valence, 2)} · arousal {fmt(pt?.arousal, 2)}</div>
+                  {a?.model && <div className="font-mono text-xs text-muted-foreground">{a.model}</div>}
+                </div>
+              );
+            })}
+            <p className="text-xs text-muted-foreground">
+              State positions are assumed anchors (docs/EMOTION_FEATURES.md); Frustrated, Tense and Anxious share a
+              region and are told apart by context, not by valence–arousal. Trained on simulated sessions.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Self-report (consented, real-data evaluation) ----------
+const SELF_REPORT_EVERY_S = 120;
+export function SelfReport() {
+  const s = useValence();
+  const [taps, setTaps] = useState(getSelfReports().length);
+  const [last, setLast] = useState<{ v: number; a: number; at: number } | null>(null);
+  const [note, setNote] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const ids = [...new Set([...s.persons.map((p) => p.id), ...Object.keys(s.predictions).map(Number)])].sort((a, b) => a - b);
+  const [pid, setPid] = useState<number | null>(null);
+  const person = pid !== null && ids.includes(pid) ? pid : (ids[0] ?? null);
+  useEffect(() => onSelfReports(() => setTaps(getSelfReports().length)), []);
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  if (s.source !== "browser") return null;
+  const since = last ? Math.floor((now - last.at) / 1000) : null;
+  const due = since === null || since >= SELF_REPORT_EVERY_S;
+  const onTap = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const v = ((e.clientX - r.left) / r.width) * 2 - 1, a = 1 - ((e.clientY - r.top) / r.height) * 2;
+    if (person === null) { setNote("No person in view yet."); return; }
+    if (recordSelfReport(person, v, a)) { setLast({ v, a, at: Date.now() }); setNote(""); }
+    else setNote("No model input yet for this person (the window is still filling).");
+  };
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([selfReportsJsonl()], { type: "application/x-ndjson" }));
+    const el = document.createElement("a");
+    el.href = url; el.download = `valence-self-report-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.jsonl`;
+    el.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  return (
+    <div className={`panel ${due ? "ring-2 ring-primary" : ""}`} data-testid="self-report">
+      <div className="panel-title">Self-report · how do you feel?</div>
+      <p className="mb-2 text-sm text-muted-foreground">
+        Every 2 minutes, tap how you feel: left–right is unpleasant–pleasant, bottom–top is low–high energy. Each tap
+        stores only the tap and the model's numeric inputs (no image, no audio), in this tab, until you download it.
+      </p>
+      {ids.length > 1 && (
+        <div className="mb-2 flex gap-1 font-mono text-xs">
+          {ids.map((id) => <button key={id} onClick={() => setPid(id)} className={`rounded border px-2 py-1 ${person === id ? "bg-primary text-primary-foreground" : ""}`}>#{id}</button>)}
+        </div>
+      )}
+      <svg viewBox="0 0 100 100" onClick={onTap} className="aspect-square w-full cursor-crosshair rounded-md border bg-input/20" role="img" aria-label="Tap your valence and arousal">
+        <line x1="50" y1="0" x2="50" y2="100" stroke="currentColor" strokeOpacity="0.25" strokeWidth="0.3" />
+        <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" strokeOpacity="0.25" strokeWidth="0.3" />
+        <text x="3" y="53" fontSize="3.5" fill="currentColor" opacity="0.6">unpleasant</text>
+        <text x="97" y="53" fontSize="3.5" textAnchor="end" fill="currentColor" opacity="0.6">pleasant</text>
+        <text x="50" y="5" fontSize="3.5" textAnchor="middle" fill="currentColor" opacity="0.6">high energy</text>
+        <text x="50" y="98" fontSize="3.5" textAnchor="middle" fill="currentColor" opacity="0.6">low energy</text>
+        {last && <circle cx={(last.v + 1) * 50} cy={(1 - last.a) * 50} r="2.5" fill="var(--primary)" />}
+      </svg>
+      <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-xs">
+        <span>{taps} tap{taps === 1 ? "" : "s"}</span>
+        <span className="text-muted-foreground">{since === null ? "tap now" : due ? "tap now" : `next in ${SELF_REPORT_EVERY_S - since} s`}</span>
+        <button onClick={download} disabled={!taps} className="ml-auto rounded border px-2 py-1 hover:bg-accent disabled:opacity-40">Download JSONL</button>
+        <button onClick={() => { clearSelfReports(); setLast(null); }} disabled={!taps} className="rounded border px-2 py-1 hover:bg-accent disabled:opacity-40">Clear</button>
+      </div>
+      {note && <p className="mt-1 text-xs text-warn">{note}</p>}
     </div>
   );
 }

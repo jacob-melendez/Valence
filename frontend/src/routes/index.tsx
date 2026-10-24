@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { boot, useValence } from "@/lib/valence";
 import {
-  CameraView, Controls, Evaluation, Governance, Header, PersonCard, Retention, RoomBaselineCard, SourceControls, StateVectors,
-  SystemStatus, Timeline,
+  AffectMap, CameraView, Controls, Evaluation, Governance, Header, PersonCard, Retention, RoomBaselineCard, SelfReport, SourceControls,
+  StateVectors, SystemStatus, Timeline,
 } from "@/components/console/panels";
 import { PanelBoundary } from "@/components/console/PanelBoundary";
 
@@ -40,9 +40,11 @@ function Index() {
             {preds.length === 0 && <div className="panel text-xl text-muted-foreground">Waiting for predictions…</div>}
             {preds.map((p) => <PanelBoundary key={p.person_id} name={`Person #${p.person_id}`}><PersonCard p={p} /></PanelBoundary>)}
           </div>
+          <PanelBoundary name="Emotion map"><AffectMap /></PanelBoundary>
           <PanelBoundary name="Timeline"><Timeline /></PanelBoundary>
         </div>
         <aside className="space-y-5">
+          <PanelBoundary name="Self-report"><SelfReport /></PanelBoundary>
           <PanelBoundary name="Governance"><Governance /></PanelBoundary>
           <PanelBoundary name="System status"><SystemStatus /></PanelBoundary>
           <PanelBoundary name="State vector"><StateVectors /></PanelBoundary>
