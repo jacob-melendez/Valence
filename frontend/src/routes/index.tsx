@@ -26,11 +26,13 @@ function Index() {
   const s = useValence();
   const preds = Object.values(s.predictions).sort((a, b) => a.person_id - b.person_id);
   return (
-    <div className="min-h-screen">
+    // On phones the operator panels (source, room baseline) move below the readings so a visitor sees the person
+    // card and the emotion map first; the kill switch (Controls) stays near the top. Desktop order is unchanged.
+    <div className="flex min-h-screen flex-col">
       <PanelBoundary name="Header"><Header /></PanelBoundary>
       <PanelBoundary name="Welcome"><Welcome /></PanelBoundary>
       <PanelBoundary name="Controls"><Controls /></PanelBoundary>
-      <section className="grid gap-5 px-6 pt-5 lg:grid-cols-2" aria-label="Operator">
+      <section className="order-last grid gap-5 px-6 pb-6 lg:order-none lg:grid-cols-2 lg:pb-0 lg:pt-5" aria-label="Operator">
         <PanelBoundary name="Source"><SourceControls /></PanelBoundary>
         <PanelBoundary name="Room baseline"><RoomBaselineCard /></PanelBoundary>
       </section>

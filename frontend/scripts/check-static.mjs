@@ -112,7 +112,11 @@ const browser = await chromium.launch({
       ]
     : HOSTNAME ? [`--host-resolver-rules=MAP ${HOSTNAME} 127.0.0.1`] : [],
 });
-const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+// --mobile: an iPhone-sized viewport (390x844, touch, DPR 3) to check the layout judges see on a phone.
+const MOBILE = args.includes("--mobile");
+const context = await browser.newContext(
+  MOBILE ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true } : { viewport: { width: 1440, height: 1000 } },
+);
 if (FAKE) await context.grantPermissions(["camera", "microphone"], { origin });
 const page = await context.newPage();
 const offOrigin = [],
