@@ -10,7 +10,8 @@
  *
  * Robustness: no camera or no mic runs the other alone; a tab in the background pauses video (browsers throttle its
  * timers and may stop decoding) while audio continues; a track that ends (permission revoked, device unplugged) stops
- * its loop and is reported in status().degraded. WebGPU/WebGL problems fall back to the CPU delegate.
+ * its loop and is reported in status().degraded. Models run on the CPU delegate by default; a GPU delegate (opt-in)
+ * that fails to start falls back to CPU.
  */
 import { AudioPipeline } from "./audio";
 import { MicTap, VideoFrames } from "./capture";
@@ -43,7 +44,19 @@ const BROWSER: PerceptionDeps = {
   micTap: (track, url, onChunk) => new MicTap(track, url, onChunk),
   hidden: () => typeof document !== "undefined" && document.hidden,
 };
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/**
+ * Readable text for a failure. MediaPipe's script loader rejects with the <script> element's error Event when a WASM
+ * loader file cannot be loaded (404, offline, CSP), which String() turns into "[object Event]".
+ */
+export function message(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof Event !== "undefined" && e instanceof Event) {
+    if (typeof ErrorEvent !== "undefined" && e instanceof ErrorEvent && e.message) return e.message;
+    const src = (e.target as { src?: unknown } | null)?.src;
+    return typeof src === "string" && src ? `could not load ${src}` : `${e.type} event`;
+  }
+  return String(e);
+}
 
 class BrowserPerception implements Perception {
   private readonly obsHub = new Hub<Obs>();
@@ -402,7 +415,7 @@ function urlDelegate(): PerceptionOptions["delegate"] | undefined {
 
 export function createPerception(opts: PerceptionOptions = {}, deps?: Partial<PerceptionDeps>): Perception {
   const delegate = opts.delegate ?? urlDelegate() ?? "CPU";
-  const p = new BrowserPerception({ ...opts, ...(delegate ? { delegate } : {}) }, { ...BROWSER, ...deps });
+  const p = new BrowserPerception({ ...opts, delegate }, { ...BROWSER, ...deps });
   // DevTools handle for the real-camera check (frontend/e2e/REAL_CAMERA.md): status, counters and the latest
   // observations, all scalars; no frame or sample is reachable from it.
   (globalThis as { __valencePerception?: unknown }).__valencePerception = {

@@ -2,7 +2,8 @@
  * Video perception: one camera frame in, one VideoObs out. Port of valence/perception/video.py `VideoPerceiver`.
  *
  * Per call (10 Hz): pose every time (PoseLandmarker lite + a simple tracker, standing in for YOLO-pose + ByteTrack);
- * gestures on even and face landmarks on odd iterations (5 Hz each); background lux at 1 Hz. Faces: one full-frame
+ * gestures on even iterations (5 Hz); face landmarks on odd ones (5 Hz, the Python cadence) or, with `faceEveryFrame`
+ * (createPerception's default), on every one; background lux at 1 Hz. Faces: one full-frame
  * FaceLandmarker pass, matched to people by the pose nose; anyone left unmatched gets a second try on a head crop.
  * Output is scalars, booleans and normalized boxes only; the frame belongs to the caller (closed right after), the
  * luminance and crop copies are wiped by the PixelReader, and nothing image-shaped is kept here. Display ids are
@@ -33,9 +34,10 @@ export const LUX_PERIOD_S = 1.0;
 export const FACE_CROP_SCALE = 2.2;
 export const FACE_CROP_PX = 256;
 /**
- * A face seen on the previous (odd) iteration still counts as visible. At the edge's 10 Hz that is 2.25 face-pass
- * intervals; on a slower device the hold stretches to 2.25 measured intervals (`faceHoldS`), otherwise a face would
- * drop out between passes below ~4.5 fps. Identical to Python at 10 Hz and above.
+ * A face seen within the last FACE_HOLD_S still counts as visible. At the edge's cadence (faces every other frame at
+ * 10 Hz) that is 2.25 face-pass intervals; when passes come slower than every 0.2 s the hold stretches to 2.25
+ * measured intervals (`faceHoldS`), otherwise a face would drop out between passes (below ~4.5 fps at the Python
+ * cadence). Identical to Python at 10 Hz and above.
  */
 export const FACE_HOLD_S = 0.45;
 export const FACE_HOLD_PASSES = 2.25;
@@ -102,9 +104,9 @@ export interface VisionPipelineOptions {
   /** Ignore people shorter than this share of the frame height (settings.min_box_height = 0.25). */
   minPersonH?: number;
   /**
-   * Run the face pass on every frame instead of every other one (the Python edge's cadence, the default). Doubles
-   * the face rate for the emotion cues' blink detector (docs/EMOTION_FEATURES.md 1.3 wants >= 15 face frames/s), at
-   * the cost of one more model per even frame.
+   * Run the face pass on every frame instead of every other one (the Python edge's cadence, this class's default;
+   * createPerception turns it on). Doubles the face rate for the emotion cues' blink detector
+   * (docs/EMOTION_FEATURES.md 1.3 wants >= 15 face frames/s), at the cost of one more model per even frame.
    */
   faceEveryFrame?: boolean;
 }
@@ -202,7 +204,7 @@ export class VisionPipeline {
     return Math.max(FACE_HOLD_S, FACE_HOLD_PASSES * this.facePassInterval);
   }
 
-  /** VIDEO mode needs strictly increasing millisecond timestamps per task. */
+  /** VIDEO mode (pose, gestures) needs strictly increasing ms timestamps per task; IMAGE-mode faces ignore it. */
   private ts(task: keyof VisionPipeline["lastTs"], t: number): number {
     this.lastTs[task] = Math.max(Math.floor(t * 1000), this.lastTs[task] + 1);
     return this.lastTs[task];

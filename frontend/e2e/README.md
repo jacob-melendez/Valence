@@ -17,15 +17,24 @@ node e2e/run.mjs                          # one person, 25 s, CSP from the brief
 node e2e/run.mjs --scenario two           # two people side by side
 node e2e/run.mjs --scenario roll_cw       # portrait rotated 15 degrees clockwise (head roll sign check)
 node e2e/run.mjs --csp deploy             # the CSP the Cloudflare deploy writes (scripts/security-headers.mjs)
-node e2e/run.mjs --delegate CPU           # force the CPU delegate
+node e2e/run.mjs --delegate GPU           # the GPU delegate (on headless Chromium's software WebGL: < 1 fps, fails)
 node e2e/run.mjs --deny camera            # the user refuses the camera (getUserMedia: NotAllowedError): audio alone
 node e2e/run.mjs --deny mic               # the user refuses the mic: video alone
 node e2e/run.mjs --python-cadence         # faces on every other frame, as the Python edge
+node e2e/run.mjs --main-thread            # no Web Worker: the video models on the page's main thread
+node e2e/run.mjs --no-build               # reuse e2e/dist (rebuild after changing src/perception)
 ```
 
 `run.mjs` makes sure the MediaPipe assets exist (`scripts/mediapipe-assets.mjs`), builds the media with
 `make_media.py` (repo venv: numpy, Pillow, imageio-ffmpeg) if `.media/` is missing, builds this standalone page with
 `vite.config.ts` (it bundles only the perception module, not the console) and serves it with the CSP header.
+
+From a fresh clone it needs, besides `npm install`:
+- **Playwright and its Chromium**, which are not frontend dependencies: `npm i --no-save playwright` then
+  `npx playwright install chromium` (or a global install on `NODE_PATH`);
+- the first time, the repo's `.venv` with **imageio-ffmpeg** (not in `requirements.txt`): `.venv/bin/pip install
+  imageio-ffmpeg`;
+- internet access the first time, for the MediaPipe models.
 
 The page under test is `index.html` + `harness.ts`: it opens the camera and mic with `openMediaStream()` exactly as
 the console does, starts `createPerception()`, and exposes compact summaries on `window.__e2e`.
@@ -48,7 +57,7 @@ few pixels, two people side by side (the right one mirrored), and the one-person
 
 ```
 npm run build && node scripts/check-static.mjs --path "/?source=browser" --fake-video e2e/.media/one.y4m \
-  --fake-audio e2e/.media/speech.wav --wait 45000 --expect "Person #1" --full --screenshot out.png
+  --fake-audio e2e/.media/speech.wav --wait 45000 --expect "Top drivers by layer" --full --screenshot out.png
 ```
 
 `console-in-browser.jpg` is that run (15:14 ET, Oct 24): the portrait tracked as Person #1, a prediction with its

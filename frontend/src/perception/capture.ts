@@ -107,14 +107,6 @@ export class VideoFrames {
     }
   }
 
-  get width(): number {
-    return this.video?.videoWidth ?? 0;
-  }
-
-  get height(): number {
-    return this.video?.videoHeight ?? 0;
-  }
-
   get live(): boolean {
     return this.track.readyState === "live";
   }
@@ -152,10 +144,6 @@ export class MicTap {
     private readonly workletUrl: string,
     private readonly onChunk: (chunk: Float32Array, sampleRate: number) => void,
   ) {}
-
-  get sampleRate(): number {
-    return this.ctx?.sampleRate ?? 0;
-  }
 
   /** "running", or "suspended" while the browser waits for a user gesture to allow audio. */
   get state(): AudioContextState | "closed" {

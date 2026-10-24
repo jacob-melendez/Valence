@@ -144,6 +144,20 @@ describe("createPerception orchestration", () => {
     p.stop();
   });
 
+  it("explains load failures that arrive as DOM Events (MediaPipe's script loader), not as [object Event]", async () => {
+    const { message } = await import("@/perception/perception");
+    const script = document.createElement("script");
+    script.src = "http://localhost/mediapipe/wasm/audio_wasm_internal.js";
+    const ev = new Event("error");
+    Object.defineProperty(ev, "target", { value: script });
+    expect(message(ev)).toBe("could not load http://localhost/mediapipe/wasm/audio_wasm_internal.js");
+    expect(message(new Event("abort"))).toBe("abort event");
+    expect(message(new Error("boom"))).toBe("boom");
+    const { deps } = harness({ visionFails: true });
+    const p = createPerception({}, { ...deps, audioModels: () => Promise.reject(ev) });
+    await expect(p.start(stream(track("video"), track("audio")))).rejects.toThrow(/microphone: could not load .*audio_wasm/);
+  });
+
   it("refuses a stream without live tracks", async () => {
     const { deps } = harness();
     await expect(createPerception({}, deps).start(stream())).rejects.toThrow(/live camera or mic/);

@@ -23,10 +23,10 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
               │                                                                                     │
               │      video.ts (port of VideoPerceiver.process):                                     │
               │        PoseLandmarker lite ─► COCO-17 (coco.ts) ─► IoU tracker ─► DisplayIdMapper (ids.ts)
-              │        ─► PostureTracker (posture.ts): slump, head in hands, motion
+              │        ─► One Euro (smoothing.ts) ─► PostureTracker (posture.ts): slump, head in hands, motion
               │        even frames: GestureRecognizer ─► Closed_Fist / curl fallback ─► assignHands ─► FistTracker
-              │        odd frames:  FaceLandmarker ─► assignFaces ─► FaceValenceCalibrator + FaceCueTracker
-              │                     (head crop retry for unmatched people)
+              │        every frame: FaceLandmarker ─► assignFaces ─► FaceValenceCalibrator + FaceCueTracker
+              │                     (head crop retry for unmatched people; odd frames only with faceEveryFrame: false)
               │        1 Hz: strided luminance (luma.ts, OpenCV BGR2GRAY) ─► backgroundStats ─► LuxEstimator
               │      bitmap closed, pixel copies wiped ─► VideoObs ─────────────────────────────────┘
               │
@@ -46,6 +46,7 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 | `faceCues.ts` | emotion-v1 face cues (brow, eye openness, frown, smile, head yaw/pitch, blinks) | `valence/features/face_cues.py`, `docs/EMOTION_FEATURES.md` |
 | `resample.ts`, `assign.ts`, `luma.ts` | scipy `resample_poly` and `linear_sum_assignment`, OpenCV `BGR2GRAY` | scipy, OpenCV |
 | `coco.ts`, `tracker.ts` | BlazePose -> COCO-17 and a simple tracker, standing in for YOLO-pose + ByteTrack | — |
+| `smoothing.ts` | One Euro keypoint filter for posture (BlazePose jitters where YOLO does not) | — |
 | `models.ts`, `visionHost.ts`, `vision.worker.ts`, `capture.ts`, `media.ts` | MediaPipe loading, the worker, frame and mic capture, getUserMedia | — |
 | `mock.ts` | deterministic observations without a camera | — |
 
@@ -70,11 +71,14 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 - **Pose.** PoseLandmarker lite + an IoU tracker replace YOLO26n-pose + ByteTrack. BlazePose `visibility` is used as
   keypoint confidence; it is 0 outside the frame and for hips and legs, which BlazePose extrapolates with visibility
   ~1. Detection and presence thresholds are 0.4, YOLO's `conf`.
+- **Posture.** BlazePose keypoints jitter where YOLO's do not, so posture runs on One Euro-smoothed keypoints and
+  motion is measured on the shoulders only (`smoothing.ts`; Python: raw keypoints, COCO 5-12).
 - **Faces.** FaceLandmarker in IMAGE mode as on the edge, up to 3 faces, plus the transformation matrix for head
   pose; on every frame by default (Python: every other frame, still available as `faceEveryFrame: false`), because
   the emotion cues' blink detector needs the face rate (`status().face_hz` reports it). Head yaw and pitch are not
   taken from the head-crop retry (its matrix is in the crop's own camera); roll is.
-- **Face hold.** 0.45 s, i.e. 2.25 face passes at 10 Hz, stretched to 2.25 measured passes on slower devices.
+- **Face hold.** 0.45 s as on the edge (2.25 face passes at its every-other-frame cadence at 10 Hz); when face passes
+  come slower than every 0.2 s (a slow device), it stretches to 2.25 measured pass intervals.
 - **Workers and delegates.** The video models run in a Web Worker, on MediaPipe's CPU delegate by default. On
   identical frames that matches the native edge to ~1e-4. `?delegate=GPU` on the page URL tries the GPU instead.
 - **Not included.** No compliment keywords, no lux or SPL calibration (the uncalibrated defaults, as on a fresh
@@ -82,9 +86,11 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 
 ## Tests
 
-- `src/test/perception-*.test.ts` (vitest): unit tests plus **parity** against the Python functions on shared inputs.
-  The fixtures are written by `scripts/export_perception_fixtures.py`; the generators are in
-  `src/test/perception-fixtures/gen_*.py`.
+- `src/test/perception-*.test.ts` (vitest; `npx vitest run src/test/perception-*.test.ts` from `frontend/` after
+  `npm install`): unit tests plus **parity** against the Python functions on shared inputs. The fixtures are
+  committed; `scripts/export_perception_fixtures.py` rewrites them (repo venv with numpy, scipy and OpenCV) from the
+  generators in `src/test/perception-fixtures/gen_*.py`.
 - `e2e/run-all.mjs`: headless Chromium with a fake camera and mic, behind the strict CSP. It checks that faces are
-  detected, observations flow, nothing leaves the origin and nothing violates the CSP. See `e2e/README.md`.
+  detected, observations flow, nothing leaves the origin and nothing violates the CSP. See `e2e/README.md` (it needs
+  Playwright, which is not a frontend dependency).
 - `e2e/REAL_CAMERA.md`: the checklist for a real camera after deploy.

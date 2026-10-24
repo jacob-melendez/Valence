@@ -1,7 +1,8 @@
 /**
  * Loads the MediaPipe Tasks models from the site's own origin (`assetBase`, filled by scripts/mediapipe-assets.mjs):
  * WASM from `<assetBase>wasm/`, models from `<assetBase>models/`. The packages are imported lazily, so the mock and
- * the console never download them. GPU delegate first, CPU if the GPU path fails to start.
+ * the console never download them. The caller names the delegate (createPerception: CPU unless GPU is asked for);
+ * a GPU path that fails to start falls back to CPU. Without one, `autoDelegate` picks.
  *
  * Model settings follow valence/perception/video.py and audio.py: GestureRecognizer with up to 8 hands and every
  * canned gesture's score (so Closed_Fist is there even when it is not the top gesture), FaceLandmarker with
@@ -21,6 +22,7 @@ type Source = TexImageSource;
 /** What the video pipeline needs from MediaPipe (an interface, so tests can mock it). */
 export interface VisionModels {
   pose(image: Source, tsMs: number): PoseLandmarkerResult;
+  /** IMAGE mode: `tsMs` is not used by MediaPipe (the pipeline's test fakes record it). */
   faces(image: Source, tsMs: number): FaceLandmarkerResult;
   faceCrop(image: Source): FaceLandmarkerResult;
   gestures(image: Source, tsMs: number): GestureRecognizerResult;
@@ -45,7 +47,7 @@ const join = (base: string, rel: string) => `${base.endsWith("/") ? base : `${ba
 /**
  * "GPU" unless WebGL is software-rendered (SwiftShader, llvmpipe: headless browsers, VMs, GPU blocklists), where
  * MediaPipe's GPU path runs ~10x slower than its CPU (XNNPACK) path: measured in headless Chromium, pose 660 ms vs
- * 68 ms per frame.
+ * 68 ms per frame. Only consulted when the caller names no delegate; an explicit "GPU" runs on software WebGL too.
  */
 export function autoDelegate(): Delegate {
   try {
@@ -148,7 +150,7 @@ export async function loadAudioModels(assetBase: string): Promise<AudioModels> {
   };
 }
 
-/** Bytes fetched over the network for assets under `assetBase` (0 for HTTP-cache hits). */
+/** Bytes this thread fetched over the network for assets under `assetBase` (0 for HTTP-cache hits; not a worker's). */
 export function assetDownloadBytes(assetBase: string): number {
   if (typeof performance === "undefined" || !performance.getEntriesByType) return 0;
   const prefix = new URL(join(assetBase, ""), globalThis.location?.href ?? "http://localhost/").href;

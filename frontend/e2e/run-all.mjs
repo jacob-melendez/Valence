@@ -2,7 +2,7 @@
 // 15 degrees clockwise must read ~30 degrees more roll than rotated counterclockwise) and two tracked people with a
 // face each in the two-person scene. Exit 1 if anything fails. Writes .out/summary.json.
 //
-//   node e2e/run-all.mjs [--seconds 25] [--csp task|deploy]
+//   node e2e/run-all.mjs [--seconds 25] [--csp task|deploy] [--delegate GPU|CPU]
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";

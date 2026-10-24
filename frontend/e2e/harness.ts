@@ -1,8 +1,8 @@
 /**
  * Perception end-to-end harness page: opens the (fake) camera and mic like the console does, runs the real
  * createPerception(), and exposes compact summaries on window.__e2e for frontend/e2e/run.mjs. Query parameters:
- * delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face cadence), record=1 (keep every observation as an
- * obs_to_dict line), mock=1 (createMockPerception instead).
+ * delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face cadence), worker=0 (video models on the main thread),
+ * record=1 (keep every observation as an obs_to_dict line), mock=1 (createMockPerception instead).
  */
 import {
   createMockPerception, createPerception, obsToDict, openMediaStream, type Obs, type PerceptionOptions,

@@ -75,15 +75,6 @@ export function pyMax(a: number, b: number): number {
   return b > a ? b : a;
 }
 
-/** statistics.median: the middle value, or the mean of the two middle values. */
-export function median(values: readonly number[]): number {
-  const s = [...values].sort((a, b) => a - b);
-  const n = s.length;
-  if (!n) throw new Error("median of an empty list");
-  const mid = n >> 1;
-  return n % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
-}
-
 /**
  * Samples kept sorted by binary insertion, so the running median is O(1) instead of a sort per update (Python
  * re-sorts in statistics.median every time; the value is the same).

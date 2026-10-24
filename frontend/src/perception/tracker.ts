@@ -32,10 +32,6 @@ export class IouTracker {
     readonly maxLostS = 6.0,
   ) {}
 
-  reset(): void {
-    this.tracks = [];
-  }
-
   /** Feed one frame's boxes (pixels) at time `t`; returns a tracker id per box, in input order. */
   update(boxes: readonly BoxPx[], t: number): number[] {
     this.tracks = this.tracks.filter((tr) => t - tr.lastT <= this.maxLostS);

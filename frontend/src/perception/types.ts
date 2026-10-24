@@ -142,7 +142,10 @@ export interface PerceptionStatus {
   audio_ms: number;
   /** From start() to the first observation, ms; null until then. */
   load_ms: number | null;
-  /** Bytes of models and WASM fetched for this session (0 when served from the HTTP cache or a mock). */
+  /**
+   * Bytes of models and WASM the page fetched itself (0 when served from the HTTP cache or a mock). With the vision
+   * worker (the default) that is the audio side only: the worker's downloads are not in the page's resource timeline.
+   */
   download_bytes: number;
   /** Human-readable reasons the output is partial, e.g. "no microphone", "tab hidden: video paused". */
   degraded: string[];
@@ -165,8 +168,8 @@ export interface PerceptionOptions {
   /**
    * MediaPipe delegate. Default "CPU": on identical frames the CPU path matches the Python edge to ~1e-4
    * (blendshapes, valence, head pose), while the GPU path is unmeasured on real hardware and drifted 100-300x more on
-   * software WebGL. "GPU" (also `?delegate=GPU` on the page URL) falls back to "CPU" if it fails to start, or when
-   * WebGL is software-rendered.
+   * software WebGL. "GPU" (also `?delegate=GPU` on the page URL) falls back to "CPU" if it fails to start; on
+   * software-rendered WebGL it runs, but far slower than CPU (headless Chromium: under 1 fps).
    */
   delegate?: "GPU" | "CPU";
   /** dB SPL = dBFS + this (Python default spl_offset_db = 94, uncalibrated). */

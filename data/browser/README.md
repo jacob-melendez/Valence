@@ -32,7 +32,7 @@ without a GPU (blink counts depend on the face rate):
 
 | File | Video obs | Rate (= face passes/s) | Face visible | Blinks | Spread (pstdev) of brow / eye / smile / yaw / pitch |
 |---|---|---|---|---|---|
-| `female.jsonl` | 909 in 132 s | 6.9 Hz | 97% | 22 | 0.14 / 0.14 / 0.15 / 12.4° / 10.5° |
+| `female.jsonl` | 909 in 132 s | 6.9 Hz | 97% | 22 | 0.14 / 0.14 / 0.14 / 12.4° / 10.5° |
 | `male.jsonl` | 900 in 132 s | 6.8 Hz | 96% | 20 | 0.11 / 0.13 / 0.20 / 16.9° / 6.5° |
 
 (The people in the clips deliberately turn and nod their heads, so the yaw and pitch spreads are larger than at a

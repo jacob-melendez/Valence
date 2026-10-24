@@ -18,8 +18,4 @@ export class Hub<T> {
       }
     }
   }
-
-  clear(): void {
-    this.listeners.clear();
-  }
 }

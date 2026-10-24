@@ -45,14 +45,13 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   }
   if (msg.kind === "frame") {
     const { bitmap } = msg;
-    const t0 = performance.now();
     derived = 0;
     try {
       if (!pipeline) throw new Error("vision worker not initialised");
       const obs = pipeline.process({ image: bitmap, width: bitmap.width, height: bitmap.height }, msg.t, msg.wall, msg.seq,
         msg.decoded);
       bitmap.close();
-      post({ kind: "obs", id: msg.id, obs, ms: performance.now() - t0, derived });
+      post({ kind: "obs", id: msg.id, obs, derived });
     } catch (err) {
       bitmap.close();
       post({ kind: "frame-error", id: msg.id, message: err instanceof Error ? err.message : String(err), derived });

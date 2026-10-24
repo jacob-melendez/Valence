@@ -18,7 +18,7 @@ export type WorkerReply =
   | { kind: "started" }
   | { kind: "ready"; delegate: Delegate }
   | { kind: "error"; message: string }
-  | { kind: "obs"; id: number; obs: VideoObs; ms: number; derived: number }
+  | { kind: "obs"; id: number; obs: VideoObs; derived: number }
   | { kind: "frame-error"; id: number; message: string; derived: number };
 
 export interface VisionBackendOptions {
@@ -130,7 +130,7 @@ export async function workerBackend(opts: VisionBackendOptions, timeoutMs = 6000
   };
 }
 
-/** Worker when the browser supports it (Worker, OffscreenCanvas 2D and WebGL), else inline. */
+/** Worker when the browser has Worker, OffscreenCanvas and createImageBitmap (and the worker starts), else inline. */
 export async function createVisionBackend(opts: VisionBackendOptions & { worker?: boolean }): Promise<VisionBackend> {
   const canWorker = typeof Worker !== "undefined" && typeof OffscreenCanvas !== "undefined"
     && typeof createImageBitmap !== "undefined";

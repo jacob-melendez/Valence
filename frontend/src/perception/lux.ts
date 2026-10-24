@@ -6,8 +6,8 @@
  * single frame and mapped to lux with a log-linear model. Only scalars leave this module: the decimated luminance
  * copy is zero-filled before backgroundStats returns, and no frame, thumbnail or frame difference is ever kept.
  *
- * Not ported: `LuxModel.fit` (the least-squares calibration fit runs offline in scripts/calibrate_lux.py; the browser
- * only loads its result with `LuxModel.fromDict`).
+ * Not ported: `LuxModel.fit` (the least-squares calibration fit runs offline in scripts/calibrate_lux.py;
+ * `LuxModel.fromDict` can load its result, though the browser runs on the uncalibrated defaults).
  */
 
 export const CLIP_LO = 5;

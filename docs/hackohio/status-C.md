@@ -13,11 +13,14 @@ Newest entry last.
 | A `type` tag on each observation | The same key `obs_to_dict` writes, so TypeScript gets a discriminated union and recordings parse as-is. |
 | `audio_blocks_purged` counts ~100 ms raw mic buffers | Same meaning as the Python edge, where the gate counts each capture part. 1 s blocks and resampled copies count under `derived_purged`. |
 | Model and WASM files self-hosted, never committed | `frontend/scripts/mediapipe-assets.mjs` (prebuild and predev) copies the WASM from `node_modules` and downloads the four models from Google's model bucket with pinned SHA-256s (the files `scripts/download_models.sh` gives the Python edge). The Cloudflare build (`npm install && npm run build`) has internet access; the browser never contacts Google. |
-| CPU delegate by default (15:55) | On identical frames the CPU path matches the native edge to ~1e-4. The GPU path is unmeasured on real hardware and drifted 100–300x more on software WebGL. `?delegate=GPU` tries it (falling back to CPU on failure or software WebGL, where it is also ~10x slower: pose 660 vs 68 ms per frame). |
+| CPU delegate by default (15:55) | On identical frames the CPU path matches the native edge to ~1e-4. The GPU path is unmeasured on real hardware and drifted 100–300x more on software WebGL. `?delegate=GPU` tries it, falling back to CPU only if it fails to start; on software WebGL it runs, ~10x slower (pose 660 vs 68 ms per frame). |
+| Faces on every frame by default (14:50) | The emotion cues' blink detector needs the face rate: 7.2 fps with 7.2 face passes/s, against 8.4 fps with 4.2 at the Python cadence (`faceEveryFrame: false`); 22 and 24 blinks instead of 13 and 15 on the two real-person clips (`data/browser`). `status().face_hz` reports the rate. |
+| Faces in IMAGE mode, as on the edge (15:40) | VIDEO mode was bit-identical wherever the detector fired and only added a stale ghost face about once per 2000 frames. The head-crop retry gives no yaw/pitch (its matrix is in the crop's own camera), only roll. |
 | Video models in a Web Worker | MediaPipe takes 10-100 ms per frame; in a worker the console's main thread stays free. Main-thread fallback where workers can't run it. |
 | Pose: PoseLandmarker lite + a simple IoU tracker | Stands in for YOLO26n-pose + ByteTrack (track buffer 6 s, as `bytetrack_valence.yaml`). BlazePose landmarks 0,2,5,7,8,11-16,23-28 map to COCO 0-16; confidence = BlazePose visibility, 0 outside the frame. The person box is the landmarks' extent with the top raised above the eyes. |
 | Pose detection and presence thresholds 0.4 | The Python edge's YOLO person threshold. MediaPipe's default 0.5 found one of the two people in the two-person scene (15/15 frames); 0.4, 0.3 and 0.2 all find both. |
-| Hips, knees, ankles (COCO 11-16) never confident | BlazePose always predicts a whole body: on the waist-up portrait it put the hips at 72% of the frame height with visibility 1.00 (knees 0.5-0.6, ankles 0.3). YOLO at a desk gives hidden hips low confidence, and of the Python rules only motion reads them (COCO 5-12), so motion is measured on shoulders, elbows and wrists. |
+| Hips, knees, ankles (COCO 11-16) never confident | BlazePose always predicts a whole body: on the waist-up portrait it put the hips at 72% of the frame height with visibility 1.00 (knees 0.5-0.6, ankles 0.3). YOLO at a desk gives hidden hips low confidence, and of the Python rules only motion reads them (COCO 5-12), which leaves shoulders, elbows and wrists. |
+| Posture on One Euro-smoothed keypoints, motion on the shoulders only (14:00) | BlazePose keypoints jitter (white noise) where YOLO's do not: raw, motion read 0.46 sw/s on a still scene against YOLO's 0.026. Smoothed shoulders read 1.3x YOLO on still and drifting scenes and keep 0.93x of real motion (`smoothing.ts`). |
 | Confidence thresholds 0.3 / 0.5 / 0.6 kept | BlazePose visibility on the e2e scenes: nose, eyes, ears, shoulders 1.00; elbows 0.6-0.8; partly hidden wrists 0.45-0.8 (YOLO usually reports 0.8-0.95 for visible wrists, so a wrist near 0.5 may miss the hand assignment: on the real-camera checklist). |
 | `frontend/package-lock.json` re-synced | `npm ci` failed on the committed lock (ajv 6/8 entries missing). `npm install` fixed it while adding MediaPipe; `bun.lock` got the two MediaPipe entries by hand (bun can't reach the private registry its lock names for `@lovable.dev/vite-tanstack-config`). |
 
@@ -85,7 +88,7 @@ Audio: 22-35 ms per 1 s block (48 kHz -> 16 kHz resample + YAMNet). Load = `star
 server, 4-core container without a GPU (CPU delegate, chosen automatically on SwiftShader).
 
 - Download per first visit (simd variants, one copy each): vision WASM 11.2 MB + loader 0.3 MB, audio WASM 6.3 MB,
-  models 21.3 MB (face 3.8, pose 5.8, gestures 8.4, YAMNet 4.1); the e2e server sends `no-store`, so it re-serves
+  models 22.0 MB (face 3.8, pose 5.8, gestures 8.4, YAMNet 4.1); the e2e server sends `no-store`, so it re-serves
   the vision WASM per task (4x).
 - Fixed on the way: in a module worker MediaPipe's loader is an ES module, imported once per URL, so the second
   task found no `ModuleFactory` and the worker fell back to the main thread; each task now gets its own loader URL.
@@ -222,3 +225,22 @@ Chromium process's RSS sampled every 30 s.
 - **Main thread:** 3 long tasks, 234 ms in total.
 - **Memory:** total Chromium RSS moved in a sawtooth between 1.60 and 1.65 GB and fell back after each collection
   (at 4.5 and 12 min). No leak trend.
+
+### 17:45 — check-in: review pass, clearer load errors
+
+- **Health.** No fixture drift. The frontend suite passes (862 tests) and the build passes. `e2e/run-all.mjs`: all
+  six scenarios pass at 4.5–6.8 fps (worker/CPU), 0 off-origin requests, 0 CSP violations; the roll-sign and
+  two-people cross checks hold.
+- **Fresh-eyes review** of docs against code (a separate agent):
+  - Fixed several docs that still said GPU is the default or that GPU falls back to CPU on software WebGL. An explicit
+    GPU request runs on GPU (headless: 0.5 fps), so the default stays CPU.
+  - Also fixed docs that described faces on odd frames only and motion on elbows and wrists.
+  - `download_bytes` counts only the page's own fetches: 10.7 MB with the worker, against ~40 MB served.
+  - Models are 22.0 MB. Added "from a fresh clone" setup steps to the e2e README.
+  - Removed six unused members (tsc clean).
+- **Load errors (Cloud A's report).** A WASM loader that fails to load used to surface as `[object Event]`. It now
+  reads `could not load <url>`, with a test.
+- **Restart (Cloud A's question).** `stop()` then `start(freshStream)` is safe: every per-run object (frame source,
+  mic tap, pipelines, trackers, calibrators) and the counters start fresh, and a late report from the old run cannot
+  land in the new one.
+- **Docs.** `e2e/README.md`'s console check now expects "Top drivers by layer" (Cloud A's request).

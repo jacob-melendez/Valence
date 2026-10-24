@@ -209,7 +209,7 @@ const checks = {
 const report = {
   scenario: TAG,
   csp: CSP,
-  delegate_requested: DELEGATE || "default (GPU, CPU fallback)",
+  delegate_requested: DELEGATE || "default (CPU)",
   seconds: SECONDS,
   checks,
   ok: Object.values(checks).every(Boolean),

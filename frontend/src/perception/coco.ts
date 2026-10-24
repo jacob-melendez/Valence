@@ -9,7 +9,8 @@
  * - the hips, knees and ankles (COCO 11-16) get confidence 0. On an upper-body view BlazePose squeezes the lower body
  *   into the frame with visibility ~1.0 (the e2e portrait, cut at the waist: hips at 72% of the frame height,
  *   visibility 1.00), while at a desk YOLO gives hidden hips a low confidence. Of the Python rules only motion reads
- *   them (COCO 5-12), so motion is measured on the shoulders, elbows and wrists.
+ *   them (COCO 5-12), so they would leave it the shoulders, elbows and wrists (video.ts narrows it to the shoulders:
+ *   smoothing.ts).
  * Measured on the e2e scenes: head and shoulders 1.0; elbows 0.6-0.8 and wrists 0.45-0.8 when partly visible.
  */
 
