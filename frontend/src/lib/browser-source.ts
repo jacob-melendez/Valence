@@ -18,6 +18,7 @@ export interface AudioObsLike { t: number; wall: number; db_spl: number }
 export type ObsLike = VideoObsLike | AudioObsLike;
 export const isVideo = (o: ObsLike): o is VideoObsLike => "persons" in o;
 
+export interface AuditInfo { entries: number; head: string; verified: boolean }
 export interface PerceptionCounters {
   frames_decoded: number; frames_purged: number; audio_blocks_purged: number;
   transcripts_purged?: number; violations?: number; live_raw_buffers?: number; fps?: number;
@@ -56,6 +57,10 @@ export interface BrowserEngine {
   audit?(action: string): void;
   /** The emotion model's current input for a person (self-report capture), when the emotion map is loaded. */
   latestInputs?(personId: number): { feature_version: string; features: Record<string, number | null> } | null;
+  /** The in-memory audit chain: entries, head hash and whether every hash recomputes. */
+  auditInfo?(): AuditInfo;
+  /** The audit log as the desktop backend's JSONL file (verifiable with scripts/audit_verify.py). */
+  auditJsonl?(): string;
 }
 
 export interface BrowserSourceDeps {
@@ -79,7 +84,7 @@ export interface BrowserSourceDeps {
 }
 
 /** status() of this source: the backend's StatusMsg plus the browser-only fields the console shows. */
-export type BrowserStatus = StatusMsg & { face_hz?: number; video_backend?: string | null; sealed?: boolean; loading?: string };
+export type BrowserStatus = StatusMsg & { face_hz?: number; video_backend?: string | null; sealed?: boolean; loading?: string; audit?: AuditInfo };
 
 // ---------- Shared camera stream (the preview reuses it instead of opening the camera twice) ----------
 let stream: MediaStream | null = null;
@@ -305,6 +310,17 @@ export class BrowserSource {
   }
 
   /** The emotion model's current input for a person (for the self-report capture); none while paused or stopped. */
+  /** The audit chain's state (checked at most every 5 s: verify recomputes every hash). */
+  auditInfo(): AuditInfo | null {
+    const e = this.engine;
+    if (!e?.auditInfo) return null;
+    const t = this.now();
+    if (!this.auditCache || t - this.auditCache.at >= 5000) this.auditCache = { at: t, info: e.auditInfo() };
+    return this.auditCache.info;
+  }
+  auditJsonl(): string | null { return this.engine?.auditJsonl?.() ?? null; }
+  private auditCache: { at: number; info: AuditInfo } | null = null;
+
   latestInputs(personId: number) { return this.running === "running" ? this.engine?.latestInputs?.(personId) ?? null : null; }
 
   private tick() {
@@ -358,6 +374,7 @@ export class BrowserSource {
       ...(this.tour ? {} : { face_hz: r1(ps?.face_hz ?? ps?.fps ?? c?.fps), video_backend: ps?.video_backend ?? null }),
       ...(this.sealed === null ? {} : { sealed: this.sealed }),
       ...(loading ? { loading } : {}),
+      ...(() => { const a = this.auditInfo(); return a ? { audit: a } : {}; })(),
       loop_latency_ms: Math.round(this.loopLatency * 10) / 10,
       // The LLM narrator is desktop-only; the browser always uses the template explanation.
       narrator: "template", offline: false, uptime_s: Math.round((t - this.startedAt) / 1000),

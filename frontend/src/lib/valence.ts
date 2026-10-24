@@ -816,6 +816,23 @@ function startBrowser() {
 }
 function stopBrowser() { browser?.stop(); browser = null; setFeatureProvider(null); }
 
+// ---------- Audit log download (in-browser source) ----------
+/**
+ * Save the in-browser audit chain as the desktop backend's JSONL file. It holds labels, confidences, layer sums and
+ * operator actions (never media); `python scripts/audit_verify.py FILE --head <head>` verifies it offline.
+ */
+export function downloadAuditLog(): boolean {
+  const text = browser?.auditJsonl();
+  if (!text) return false;
+  const url = URL.createObjectURL(new Blob([text], { type: "application/x-ndjson" }));
+  const el = document.createElement("a");
+  el.href = url;
+  el.download = `valence-audit-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jsonl`;
+  el.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
 // ---------- Self-report capture (real-data evaluation of the emotion map) ----------
 // docs/EMOTION_FEATURES.md section 6: one JSON line per tap with the tapped valence/arousal and the emotion model's
 // input vector at that moment. Kept in this tab's memory until downloaded; never media, never a transcript.

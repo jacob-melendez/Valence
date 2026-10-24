@@ -135,6 +135,9 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
     baseline: (): RoomBaseline => runtime.aggregator.baseline.snapshot(),
     resetPeople: (keepRoom = true) => { runtime.resetPeople(keepRoom); inputs.clear(); },
     audit: (action: string) => runtime.recordAudit("operator", { action }),
+    auditInfo: () => ({ entries: runtime.audit.length, head: runtime.audit.lastHash, verified: runtime.audit.verify()[0] }),
+    // The exact text of the desktop's var/audit/<session>.jsonl: scripts/audit_verify.py verifies it offline.
+    auditJsonl: () => runtime.audit.toJsonl(),
     latestInputs(personId: number) {
       const x = inputs.get(personId);
       if (!x || !emotion) return null;

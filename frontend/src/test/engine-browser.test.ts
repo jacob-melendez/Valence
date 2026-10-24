@@ -106,6 +106,33 @@ describe("browser engine glue (served predictor + runtime + emotion map)", () =>
     expect(ops.slice(-2)).toEqual([{ action: "reset", keep_room: false }, { action: "control_stop" }]);
   });
 
+  it("exports the audit chain as the desktop's JSONL (what scripts/audit_verify.py checks)", async () => {
+    const engine = await createBrowserEngine({ fetchFn: stubFetch(FILES), tz: "UTC" });
+    vi.useFakeTimers();
+    let mono = 1000, wall = 1792850400;
+    const perception = createMockPerception({ people: 1, seed: 7, clock: { now: () => mono, wall: () => wall } });
+    perception.onObservation((o) => { engine.push(o); });
+    await perception.start(null);
+    for (let s = 0; s < 8; s++) {
+      for (let k = 0; k < 50; k++) { mono += 0.1; wall += 0.1; await vi.advanceTimersByTimeAsync(100); }
+      engine.tick(wall, mono, perception.counters());
+    }
+    perception.stop();
+    engine.audit?.("control_pause");
+    const info = engine.auditInfo?.();
+    type Line = { hash: string; kind: string; payload: unknown; prev: string; seq: number; ts: number };
+    const lines = (engine.auditJsonl?.() ?? "").trim().split("\n").map((l) => JSON.parse(l) as Line);
+    expect(info?.verified).toBe(true);
+    expect(lines).toHaveLength(info?.entries ?? -1);
+    expect(lines.at(-1)?.hash).toBe(info?.head);
+    expect(lines.at(-1)?.payload).toEqual({ action: "control_pause" });
+    // json.dumps(entry, sort_keys=True): keys in sorted order, prev chains to the previous hash
+    lines.forEach((e, i) => {
+      expect(Object.keys(e)).toEqual(["hash", "kind", "payload", "prev", "seq", "ts"]);
+      expect(e.prev).toBe(i === 0 ? "0".repeat(64) : lines[i - 1]?.hash);
+    });
+  });
+
   it("runs without the emotion map when its files are missing", async () => {
     const engine = await createBrowserEngine({ fetchFn: stubFetch({ "/models/core/": ARTIFACTS }), tz: "UTC" });
     expect(engine.emotion).toBeNull();

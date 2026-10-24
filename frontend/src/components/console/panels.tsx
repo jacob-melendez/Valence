@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, STALE_BUILD, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, isMockPerception, provenanceBadges, sendCommand, setSource,
-  shownExplanation, stateName, useValence, clearSelfReports, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
+  shownExplanation, stateName, useValence, clearSelfReports, downloadAuditLog, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream, type BrowserStatus } from "@/lib/browser-source";
@@ -319,6 +319,23 @@ export function CameraView() {
 }
 
 // ---------- Governance ----------
+/** In-browser source: the audit chain held in this tab, recomputed every few seconds, and its export. */
+function AuditChainLine() {
+  const a = (useValence().status as { audit?: { entries: number; head: string; verified: boolean } } | null)?.audit;
+  if (!a) return null;
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 font-mono text-xs" data-testid="audit-chain">
+      <span className="text-muted-foreground">audit chain</span>
+      <span>{a.entries} entries</span>
+      <span className="text-muted-foreground" title={a.head}>head {a.head.slice(0, 16)}</span>
+      <span className={a.verified ? "text-ok" : "text-destructive"}>{a.verified ? "verified ✓" : "BROKEN ✗"}</span>
+      <button onClick={() => downloadAuditLog()} disabled={!a.entries} className="ml-auto rounded border px-2 py-1 hover:bg-accent disabled:opacity-40"
+        title={`Labels, confidences, layer sums and operator actions only. Verify offline: python scripts/audit_verify.py FILE --head ${a.head.slice(0, 16)}`}>
+        Download audit log
+      </button>
+    </div>
+  );
+}
 export function Governance() {
   const s = useValence();
   const ref = useRef<HTMLDivElement>(null);
@@ -344,6 +361,7 @@ export function Governance() {
         {" · "}purge gap: <span className={(g?.purge_gap ?? 0) > 2 ? "text-destructive" : "text-ok"}>{g?.purge_gap ?? "—"}</span>
         {" · "}live raw buffers: <span className="text-ok">{g?.live_raw_buffers ?? "—"}</span>
       </div>
+      {s.source === "browser" && <AuditChainLine />}
       <div ref={ref} className="h-52 overflow-y-auto rounded-md bg-terminal p-3 font-mono text-[13px] leading-relaxed text-ok">
         {s.govLog.length === 0 && <div className="text-muted-foreground">waiting for governance events…</div>}
         {s.govLog.map((m, i) => (

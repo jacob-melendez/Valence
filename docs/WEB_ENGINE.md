@@ -85,6 +85,20 @@ Reruns are byte-identical: the timezone is UTC, the clocks are fixed and gzip us
 when the simulator or scenarios change, so rerun the exporters after any change under `valence/` or `scenarios/` and
 check `git diff`.
 
+## Audit log: verifiable across languages
+
+In browser mode the governance panel shows the tab's audit chain: the number of entries, the head hash, and whether
+every hash recomputes. **Download audit log** saves it as the desktop backend's JSONL. The file holds labels,
+confidences, layer sums and operator actions, never media. The desktop's own verifier checks it offline:
+
+```
+python scripts/audit_verify.py valence-audit-<time>.jsonl --head <first 16 hex of the head>
+```
+
+Checked on a 40-tick export from the TypeScript engine:
+- the untouched file: "15 entries checked, chain intact";
+- the same file with one confidence edited: "line 5: seq 4: hash mismatch (the entry was edited)", exit code 1.
+
 ## Known differences and limits
 
 - **Last-bit math.** V8's `Math.sin/cos/log2/log10/pow/exp` can differ from glibc and from numpy's SIMD kernels in
