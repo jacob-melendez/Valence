@@ -513,7 +513,7 @@ The weakest is **Confused**, mistaken for Focused (14%) and Anxious (9%).
   its windows are predicted inside the region and 86% of those on the right state. They are
   told apart mostly by the face cues (brow lowering and frown for Tense, the forced smile over lowered brows for
   Frustrated, blink rate and glancing around for Anxious, a hidden face and a lowered head for Overwhelmed; the
-  face-only model's F1 on these four is 0.67, 0.72, 0.50, 0.63 against 0.40, 0.48, 0.40, 0.42 for context only),
+  face-only model's F1 is Frustrated 0.67, Tense 0.72, Anxious 0.50, Overwhelmed 0.63; context only 0.40, 0.48, 0.40, 0.42 in the same order),
   with context adding the rest (fists and a loud room, a quiet room, head in hands); not by valence–arousal:
   their anchors are within 0.3 of each other on each axis.
 - Masked frustration still reads as Collaborative 12% of the time: the forced smile shows in `smile` as

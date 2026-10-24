@@ -219,8 +219,8 @@ def render() -> str:
         f"  its windows are predicted inside the region and {reg['exact_within_region']:.0%} of those on the right state. They are",
         "  told apart mostly by the face cues (brow lowering and frown for Tense, the forced smile over lowered brows for",
         "  Frustrated, blink rate and glancing around for Anxious, a hidden face and a lowered head for Overwhelmed; the",
-        f"  face-only model's F1 on these four is {', '.join(f'{face_f1[s]:.2f}' for s in REGION)} against "
-        f"{', '.join(f'{ctx_f1[s]:.2f}' for s in REGION)} for context only),",
+        "  face-only model's F1 is " + ", ".join(f"{NICE.get(s, s)} {face_f1[s]:.2f}" for s in REGION)
+        + "; context only " + ", ".join(f"{ctx_f1[s]:.2f}" for s in REGION) + " in the same order),",
         "  with context adding the rest (fists and a loud room, a quiet room, head in hands); not by valence–arousal:",
         "  their anchors are within 0.3 of each other on each axis.",
         f"- Masked frustration still reads as Collaborative {fru_col:.0%} of the time: the forced smile shows in `smile` as",
