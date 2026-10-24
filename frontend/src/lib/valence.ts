@@ -778,6 +778,14 @@ const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: st
 };
 /** `?perception=mock` uses the mock perception (no camera, no mic); the default is the real MediaPipe module. */
 export const isMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
+/** `?speed=N` (1..60) replays the tour N times faster than real time; 10 by default. */
+export const getTourSpeed = (): number => tourSpeed();
+const tourSpeed = (): number => {
+  try {
+    const v = Number(new URLSearchParams(window.location.search).get("speed"));
+    return Number.isFinite(v) && v >= 1 && v <= 60 ? v : 10;
+  } catch { return 10; }
+};
 let browser: BrowserSource | null = null;
 /** The in-browser source's input: live camera + mic, or the scripted emotion tour (no camera; ?demo=tour). */
 let browserMode: "live" | "tour" = "live";
@@ -789,7 +797,7 @@ function startBrowser() {
   // Callbacks count only while this instance is the current source (a stopped one may still settle a prompt).
   const current = () => state.source === "browser" && browser === src;
   const src: BrowserSource = new BrowserSource({
-    mode, tourSpeed: 10, needsMedia: !mockPerception, cspSealed: () => cspSealed(),
+    mode, tourSpeed: tourSpeed(), needsMedia: !mockPerception, cspSealed: () => cspSealed(),
     createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine({ tour: mode === "tour" }),
     createPerception: async () => {
       const m = await loadOptional(perceptionModule, "The browser perception module");

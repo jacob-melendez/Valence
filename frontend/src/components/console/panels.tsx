@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, STALE_BUILD, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, isMockPerception, provenanceBadges, sendCommand, setSource,
-  shownExplanation, stateName, useValence, clearSelfReports, downloadAuditLog, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
+  shownExplanation, stateName, useValence, clearSelfReports, downloadAuditLog, getTourSpeed, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream, type BrowserStatus } from "@/lib/browser-source";
@@ -144,7 +144,7 @@ export function SourceControls() {
           <Btn small tone="primary" active={getBrowserMode() === "live"} onClick={() => startBrowserSource("live")}>● Live (camera + mic)</Btn>
           <Btn small active={getBrowserMode() === "tour"} onClick={() => startBrowserSource("tour")}>▶ Tour · 10 states · no camera</Btn>
           <span className="text-xs text-muted-foreground">
-            {getBrowserMode() === "tour" ? "scripted simulated session, 10× speed" : `camera ${s.status?.camera ? "on" : "off"} · mic ${s.status?.mic ? "on" : "off"} · ${fmt(s.status?.fps, 1)} fps`}
+            {getBrowserMode() === "tour" ? `scripted simulated session, ${getTourSpeed()}× speed` : `camera ${s.status?.camera ? "on" : "off"} · mic ${s.status?.mic ? "on" : "off"} · ${fmt(s.status?.fps, 1)} fps`}
           </span>
         </div>
         {errors}
@@ -949,7 +949,7 @@ export function Welcome() {
   const halted = s.running === "paused" ? "Paused" : "Stopped";
   const now = s.running !== "running" ? (tour ? `${halted}: press Start to resume the tour.` : `${halted}: camera and microphone are released. Press Start to resume.`)
     : st?.loading ? `${tour ? "Loading the tour" : "Starting"}: ${st.loading}…`
-    : tour ? "Now playing: a scripted, simulated session walking through the 10 states at 10× speed (no camera)."
+    : tour ? `Now playing: a scripted, simulated session walking through the 10 states at ${getTourSpeed()}× speed (no camera).`
     : s.edgeError && !devices ? "Not running: see the error in the Source panel below."
     : isMockPerception() ? "Now running on the mock perception (no camera or microphone; for testing)."
     : devices ? `Now running on your ${devices}. The first minute warms up the window and your neutral face baseline.`
