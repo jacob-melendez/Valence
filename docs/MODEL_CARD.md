@@ -467,6 +467,14 @@ Reading:
 - **Calibration** is good in distribution (ECE 0.007); it degrades under shift (§9.4).
 - Warm-up: macro-F1 0.658 with ≤ 1 min of history, 0.692 at 1–5 min, 0.690 at 5–15 min.
 
+![Emotion map on held-out simulated sessions](../artifacts/emotion/figs/affect_map.png)
+
+*Hollow: assumed anchors. Filled: mean served map position per true state, ±1 SD shaded
+(`scripts/emotion_figures.py`).* The probability-weighted position is pulled toward the centre whenever the
+classifier is unsure, so every state's mean sits inside its anchor: Bored and Exhausted read about 0.2–0.35 higher
+in arousal than their anchors, Calm about 0.25, and the four negative, high-arousal states overlap in one cloud.
+A point on the map is a hedged summary, not a measurement.
+
 **Per-state F1** (full / face only): Collaborative 0.84 / 0.77, Tense 0.79 / 0.74, Frustrated 0.76 / 0.71,
 Exhausted 0.75 / 0.64, Overwhelmed 0.68 / 0.64, Focused 0.68 / 0.60, Calm 0.67 / 0.57, Anxious 0.62 / 0.52,
 Bored 0.61 / 0.56, **Confused 0.48 / 0.46** (weakest: the brow-lowering cue overlaps Focused and Tense, and Confused
