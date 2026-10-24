@@ -520,6 +520,12 @@ replay scenarios for the four new states (`scenarios/` is outside this track); `
 (the 31 cues → Facial Surface). As with M2, the attributions explain the model, which learned the simulator's
 assumptions; they are not evidence about a person.
 
+What the classifier leans on (mean |TreeSHAP| over all classes, 3 000 test windows): the 94 context features carry
+46% of the attribution, the 31 new cues 31% and the 7 face-valence features 23%. Top inputs: `face_now`,
+`face_mean_1m`, `motion_now`, `hours_since_break`, `blink_rate_1m`, `pitch_mean_1m`, `brow_mean_1m`. For Confused
+the brow-lowering features dominate after face valence (`brow_mean_1m`, `brow_now`, `brow_mean_5m`, `brow_max_1m`),
+which is why it blurs into Focused and Tense, the other states with lowered brows.
+
 ### 9.4 Robustness (`robustness.json`, 60 fresh simulated sessions)
 
 | Condition | Macro-F1 | ECE | Valence MAE | Arousal MAE |
