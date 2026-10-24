@@ -222,7 +222,7 @@ export type { AuditEntry, AuditPayload, PyJson, PyJsonDumpsOptions, PyObject } f
 
 // ---------- Runtime ----------
 
-export { Runtime } from "./runtime";
+export { Runtime, ScenarioSource } from "./runtime";
 export type {
   LatestPerson,
   NarratorLike,

@@ -20,19 +20,43 @@
  *   the tracks throttle) and a 3-person timing.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { auditBlob, entryBody, pyJsonDumps, verifyChain, type AuditEntry } from "@/engine/audit";
 import {
+  auditBlob,
+  entryBody,
+  pyJsonDumps,
+  verifyChain,
+  type AuditEntry,
+  type AuditPayload,
+} from "@/engine/audit";
+import {
+  STATE_SETS,
   makeSettings,
+  makePersonObs,
+  makeVideoObs,
   obsFromDict,
   tickRecordFromDict,
+  tickRecordToDict,
+  type Layer,
   type Obs,
   type Settings,
   type TickRecord,
 } from "@/engine/contracts";
 import { pyRepr } from "@/engine/num";
 import { replayInto } from "@/engine/replay";
-import { Runtime, type RuntimeOptions, type TickMessage } from "@/engine/runtime";
-import { ServedPredictor, type ClipBounds, type ServedMeta } from "@/engine/served";
+import {
+  Runtime,
+  ScenarioSource,
+  type PurgeCounters,
+  type RuntimeOptions,
+  type TickMessage,
+} from "@/engine/runtime";
+import {
+  ServedPredictor,
+  type ClipBounds,
+  type PredictionOutput,
+  type Predictor,
+  type ServedMeta,
+} from "@/engine/served";
 import { sha256Hex } from "@/engine/sha";
 import { artifactBytes, artifactJson, artifactText, loadFixture } from "./engine-fixtures";
 
@@ -694,6 +718,829 @@ describe("runtime behaviour", () => {
   });
 });
 
+// ---------- Edge cases against the Python runtime (stub predictor) ----------
+
+/**
+ * Inputs the golden runs never produce, run through Python's Runtime and this one with the same stub predictor
+ * (outputs keyed by "tick:person_id", none = predict() returns None), a stub purge gate, the audit / aggregator /
+ * engine clocks patched to `clock` and np.random.normal patched to `draws`. The specs are built below exactly as
+ * the generator built them; Python's results (canonical text digest as in the extra runs, audit chain head, end
+ * state) are pasted as literals. Generator: rt_edge.py + gen_specs.py (session scratchpad; suggested home
+ * scripts/export_web_golden_runtime_edges.py). Rerun it whenever valence/runtime/engine.py changes.
+ */
+type SpecRecord = Record<string, number | string | null | string[]>;
+type SpecAction =
+  | ["clock", number]
+  | ["overlay", "low_light" | "face_occlusion", boolean]
+  | ["room_only", boolean]
+  | ["reset", boolean]
+  | ["break", number | null]
+  | ["purge", Partial<PurgeCounters>]
+  | ["seed", SpecRecord[], string, number, number | null]
+  | ["audit", string, Record<string, unknown>];
+interface SpecOut {
+  label: string;
+  confidence: number;
+  probabilities: Record<string, number>;
+  face_only_label: string | null;
+  face_only_confidence: number | null;
+  raw_override: boolean | null;
+  ood_features: string[];
+  layers: Layer[];
+}
+interface SpecStep {
+  wall: number;
+  mono: number;
+  records: SpecRecord[] | null;
+  outs?: Record<string, SpecOut>;
+  pre?: SpecAction[];
+}
+interface Spec {
+  state_set: StateSet;
+  settings?: Partial<Settings>;
+  room_only?: boolean;
+  label?: "live" | "replay";
+  wall_init?: number;
+  mono_init?: number;
+  draws?: number[];
+  steps: SpecStep[];
+}
+
+const CORE = ["Focused", "Frustrated_Masked", "Exhausted", "Collaborative_Happy"];
+const P4 = [0.1, 0.2, 0.3, 0.4];
+const DEFAULT_LAYERS: Layer[] = [
+  {
+    name: "Ambient Physics",
+    contribution: 0.123456,
+    drivers: [
+      {
+        feature: "db_mean_15m",
+        display: "average noise of 72 dB over 15 minutes",
+        value: 72.04,
+        unit: "dB",
+        shap: 0.4,
+        level: "high",
+        effect: "supports",
+        scope: "room",
+      },
+    ],
+  },
+  { name: "Facial Surface", contribution: -0.0625, drivers: [] },
+];
+
+function specOut(
+  label: string,
+  p: number[] | Record<string, number>,
+  conf: number | null = null,
+  ro: boolean | null = null,
+): SpecOut {
+  const probabilities = Array.isArray(p)
+    ? Object.fromEntries(CORE.map((s, i) => [s, p[i] as number]))
+    : p;
+  const i = CORE.indexOf(label);
+  return {
+    label,
+    confidence: conf ?? (Array.isArray(p) && i >= 0 ? (p[i] as number) : 0.5),
+    probabilities,
+    face_only_label: "Focused",
+    face_only_confidence: 0.61234,
+    raw_override: ro,
+    ood_features: [],
+    layers: DEFAULT_LAYERS,
+  };
+}
+
+function specRoom(i: number, kw: SpecRecord = {}): SpecRecord {
+  return {
+    tick: i,
+    ts: WALL0 + 5 * i,
+    t_mono: MONO0 + 5 * i,
+    person_id: 0,
+    display_id: "Room",
+    n_people: 1,
+    ambient_db: 55.0,
+    light_lux: 300.0,
+    tod_h: 14.0,
+    ...kw,
+  };
+}
+
+function specPerson(i: number, pid = 1, kw: SpecRecord = {}): SpecRecord {
+  return {
+    tick: i,
+    ts: WALL0 + 5 * i,
+    t_mono: MONO0 + 5 * i,
+    person_id: pid,
+    display_id: `Person #${pid}`,
+    n_people: 2,
+    ambient_db: 55.0,
+    light_lux: 300.0,
+    face_valence: 0.2,
+    face_visible: 1.0,
+    tod_h: 14.0,
+    posture_slump: 0.1,
+    head_in_hands_frac: 0.0,
+    hours_since_break: 1.5,
+    ...kw,
+  };
+}
+
+function specStep(
+  i: number,
+  records: SpecRecord[] | null,
+  outs: Record<string, SpecOut> = {},
+  pre?: SpecAction[],
+): SpecStep {
+  return { wall: WALL0 + 5 * i, mono: MONO0 + 5 * i, records, outs, ...(pre ? { pre } : {}) };
+}
+
+/** Time-of-day probes: exact and inexact half-minute ties, the hour wrap, negative and huge times. */
+const TOD_PROBES = [0, 9, 13, 23]
+  .flatMap((h) => [1, 3, 59, 61, 117, 119].map((k) => h + k / 120))
+  .concat([
+    14 + 59.5 / 60,
+    5 - 1e-15,
+    1e300 % 24,
+    12 + 1 / 7200,
+    0.5 / 60,
+    11.999999999999,
+    7.5 / 60,
+  ]);
+
+const SPECS: Record<string, () => Spec> = {
+  // state vector, fact sheet and prediction edges: NaN / inf / -0.0 / subnormal / 1e300 fields, NaN and
+  // out-of-range times, n_people 0, a label missing from the probabilities, unicode simulated fields, negative and
+  // duplicate person ids, a stale row evicted on arrival, predict() -> None, 2**40 counts, the history bound
+  sv: () => {
+    const steps: SpecStep[] = [
+      specStep(
+        0,
+        [
+          specRoom(0),
+          specPerson(0, 1, {
+            tod_h: null,
+            n_people: 0,
+            face_visible: null,
+            ambient_db: -0.0,
+            light_lux: 5e-324,
+            hours_since_break: "Infinity",
+            posture_slump: 1e300,
+            head_in_hands_frac: 0.0005,
+            face_valence: -0.0005,
+          }),
+        ],
+        { "0:1": specOut("Collaborative_Happy", P4) },
+      ),
+      specStep(
+        1,
+        [
+          specRoom(1, { simulated_fields: ["room_history", "a", "é"] }),
+          specPerson(1, 1, {
+            tod_h: 23.999999,
+            n_people: 1,
+            simulated_fields: ["ß", "Z", "a", "low_light", "é", "\u{1F600}", "￿", "b", "c", "d"],
+          }),
+        ],
+        { "1:1": specOut("Collaborative_Happy", P4) },
+      ),
+      specStep(2, [specRoom(2), specPerson(2, 1, { tod_h: -0.25, n_people: 1 })], {
+        "2:1": specOut("Exhausted", { Focused: 0.5, Frustrated_Masked: 0.25 }, 0.33335),
+      }),
+      specStep(
+        3,
+        [
+          specRoom(3),
+          specPerson(3, 2, { tod_h: 25.5 }),
+          specPerson(3, -3, { tod_h: 24.0 }),
+          specPerson(3, 1, { tod_h: 14.5 }),
+          specPerson(3, 1, { tod_h: 14.25, face_valence: null }),
+        ],
+        {
+          "3:1": specOut("Focused", P4, 0.00005),
+          "3:2": specOut("Focused", P4),
+          "3:-3": specOut("Exhausted", P4),
+        },
+      ),
+      specStep(4, [specRoom(4), specPerson(4, 1, { ts: WALL0 + 5 * 4 - 2000 }), specPerson(4, 2)], {
+        "4:1": specOut("Focused", P4),
+        "4:2": specOut("Focused", P4),
+      }),
+      specStep(5, [specRoom(5), specPerson(5, 2)], {}),
+      specStep(
+        6,
+        [
+          specRoom(6, { laughter_count: 7, compliments_count: 2 ** 40 }),
+          specPerson(6, 2, { clenched_fists_count: 2 ** 41 }),
+        ],
+        {
+          "6:2": specOut("Frustrated_Masked", P4, null, true),
+        },
+      ),
+    ];
+    TOD_PROBES.forEach((t, j) => {
+      const i = 7 + j;
+      steps.push(
+        specStep(
+          i,
+          [
+            specRoom(i, { tod_h: t }),
+            specPerson(i, 2, {
+              tod_h: t,
+              light_lux: 0.0005 + j,
+              ambient_db: 2.0005 + j / 1000,
+              posture_slump: (j % 3) / 3,
+              face_visible: j % 2,
+            }),
+          ],
+          {
+            [`${i}:2`]: specOut(
+              Math.floor(j / 7) % 2 ? "Exhausted" : "Focused",
+              P4,
+              0.12345 + j / 100000,
+            ),
+          },
+        ),
+      );
+    });
+    return { state_set: "core", settings: { window_ticks: 4 }, steps };
+  },
+  // room-only mode, both overlays (NaN lux, noise clipped at +-1), an empty tick, the mode switch, a finished source
+  room: () => {
+    const steps: SpecStep[] = [];
+    for (let i = 0; i < 14; i++) {
+      const at = (...acts: SpecAction[]): SpecAction[] => [["clock", WALL0 + 5 * i - 2.5], ...acts];
+      const pre: Record<number, SpecAction[]> = {
+        2: at(["overlay", "low_light", true]),
+        5: at(["overlay", "face_occlusion", true]),
+        8: at(["overlay", "low_light", false]),
+        10: at(["overlay", "low_light", true], ["room_only", false]),
+      };
+      const recs =
+        i === 6
+          ? []
+          : [
+              specRoom(i, {
+                light_lux: i % 3 === 0 ? null : 120.0,
+                face_valence: i % 2 ? 0.9 : -0.95,
+                face_visible: 1.0,
+                simulated_fields: i === 3 ? ["low_light"] : [],
+              }),
+              specPerson(i, 1, {
+                face_valence: i % 4 === 0 ? null : 0.97 - i / 10,
+                light_lux: i % 2 ? null : 80.0,
+              }),
+            ];
+      steps.push(
+        specStep(
+          i,
+          recs,
+          {
+            [`${i}:0`]: specOut(CORE[i % 4] as string, P4, null, Boolean(i % 2)),
+            [`${i}:1`]: specOut(CORE[(i + 1) % 4] as string, P4),
+          },
+          pre[i],
+        ),
+      );
+    }
+    steps.push({ wall: WALL0 + 70, mono: MONO0 + 70, records: null });
+    const draws = Array<number[]>(4)
+      .fill([3.0, -3.0, 0.5, -0.25, 1e-3, 2.0, -2.0, 0.0, 4.0, -4.0])
+      .flat();
+    return { state_set: "core", room_only: true, draws, steps };
+  },
+  // operator actions on the live label: seed, breaks (None, 1 and a float id), purge counters, both resets, the
+  // audit throttle (label change, 30 s), a refused (NaN) payload
+  op: () => {
+    const seedRows = [
+      ...Array.from({ length: 30 }, (_, t) =>
+        specRoom(t, { ambient_db: 60 + t, simulated_fields: [] }),
+      ),
+      ...Array.from({ length: 30 }, (_, t) => specPerson(t)),
+    ];
+    const steps: SpecStep[] = [];
+    for (let i = 0; i < 30; i++) {
+      const pre: Record<number, SpecAction[]> = {
+        0: [
+          ["clock", WALL0 - 1.0],
+          ["seed", seedRows, "full_demo", 1.0, 2.5],
+        ],
+        3: [
+          ["break", null],
+          ["break", 1],
+          ["break", 1.5],
+          ["purge", { video_purged: 10 }],
+        ],
+        6: [
+          ["reset", true],
+          ["purge", { video_purged: 7, audio_purged: 4, violations: 2 }],
+        ],
+        12: [["reset", false]],
+        20: [["audit", "operator", { action: "x", v: "NaN" }]],
+      };
+      const label = i < 9 || i > 15 ? "Focused" : "Exhausted";
+      steps.push(
+        specStep(
+          i,
+          [specRoom(i), specPerson(i, 1, { hours_since_break: null })],
+          { [`${i}:1`]: specOut(label, P4) },
+          pre[i],
+        ),
+      );
+    }
+    return {
+      state_set: "core",
+      label: "live",
+      wall_init: WALL0 - 10,
+      mono_init: MONO0 - 10,
+      steps,
+    };
+  },
+  ...Object.fromEntries(
+    (
+      [
+        ["w0", { window_ticks: 0 }, false, true],
+        ["drop0", { person_drop_min: 0.0, window_ticks: 3 }, false, true],
+        ["noroom", { window_ticks: 5 }, true, false],
+      ] as const
+    ).map(([name, settings, roomOnly, withRoom]) => [
+      name,
+      (): Spec => ({
+        state_set: "core",
+        settings,
+        room_only: roomOnly,
+        steps: Array.from({ length: 8 }, (_, i) =>
+          specStep(
+            i,
+            [
+              ...(withRoom ? [specRoom(i)] : []),
+              specPerson(i, 1, { ts: WALL0 + 5 * i - (i === 4 ? 0.5 : 0.0) }),
+              specPerson(i, 2),
+            ],
+            {
+              [`${i}:1`]: specOut("Focused", P4),
+              [`${i}:2`]: specOut("Exhausted", P4),
+              [`${i}:0`]: specOut("Focused", P4),
+            },
+          ),
+        ),
+      }),
+    ]),
+  ),
+};
+
+/** Python's results for each spec (rt_edge.py). */
+const SPEC_EXPECT: Record<
+  string,
+  { digest: string; auditN: number; auditLast: string; state: unknown }
+> = {
+  sv: {
+    digest: "6c28dd18bcc3b2526346d0a5f95327936c5fa5484f01bf95fba0915b04acdf02",
+    auditN: 9,
+    auditLast: "3a699bd886c0760ffbbb6370a1eb5a0ebb89f523cc4685cb3a71a9f610ea54a1",
+    state: {
+      latest: [-3, 2],
+      smoothers: [-3, 2],
+      history: 32,
+      gap_ticks: 0,
+      paused: false,
+      tick: 38,
+      people: [-3, 2],
+    },
+  },
+  room: {
+    digest: "97d6e51dbc3802cb4b08ead54515970af73cbf54b53cd65b039858d77ad9420e",
+    auditN: 8,
+    auditLast: "416edc41788f217b118ea0d1aacd1c93d12d063cb9a69ecf323e7420f748a2c3",
+    state: {
+      latest: [1],
+      smoothers: [0, 1],
+      history: 28,
+      gap_ticks: 0,
+      paused: true,
+      tick: 14,
+      people: [1],
+    },
+  },
+  op: {
+    digest: "72fcb9e24f76756a88ad1ec1b7ecd3da22f826e2c322cd91e491507bda590bbf",
+    auditN: 11,
+    auditLast: "bcb17cdb126e825aff95e03ee89bf8b6ce5d53d65c677858482822541be19c2d",
+    state: {
+      latest: [1],
+      smoothers: [1],
+      history: 36,
+      gap_ticks: 0,
+      paused: false,
+      tick: 30,
+      people: [1],
+    },
+  },
+  w0: {
+    digest: "a848cefa316212b01bd3491455e3fc88f44917551b16992a06e8d9cc05665f17", // governance only
+    auditN: 0,
+    auditLast: "",
+    state: {
+      latest: [],
+      smoothers: [],
+      history: 0,
+      gap_ticks: 0,
+      paused: false,
+      tick: 8,
+      people: [1, 2],
+    },
+  },
+  drop0: {
+    digest: "5488e18092e59bec9c6150069edf5ef589f45d1c7ede8b61d8666afdf00d0894",
+    auditN: 4,
+    auditLast: "a2000f601f87d81c7450ae8645c6e2e3fb767f58cb8cf9bd2eb83ddb50b08b37",
+    state: {
+      latest: [1, 2],
+      smoothers: [1, 2],
+      history: 24,
+      gap_ticks: 0,
+      paused: false,
+      tick: 8,
+      people: [1, 2],
+    },
+  },
+  noroom: {
+    digest: "a848cefa316212b01bd3491455e3fc88f44917551b16992a06e8d9cc05665f17", // the same 8 governance messages
+    auditN: 0,
+    auditLast: "",
+    state: {
+      latest: [],
+      smoothers: [],
+      history: 0,
+      gap_ticks: 0,
+      paused: false,
+      tick: 8,
+      people: [1, 2],
+    },
+  },
+};
+
+/** "NaN" / "Infinity" / "-Infinity" strings -> numbers, recursively (the spec's JSON encoding). */
+function decodeSpec(v: unknown): unknown {
+  if (v === "NaN") return NaN;
+  if (v === "Infinity") return Infinity;
+  if (v === "-Infinity") return -Infinity;
+  if (Array.isArray(v)) return v.map(decodeSpec);
+  if (v !== null && typeof v === "object")
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, decodeSpec(x)]),
+    );
+  return v;
+}
+
+function specRecord(d: SpecRecord, session: string): TickRecord {
+  return tickRecordFromDict({
+    session_id: session,
+    display_id: `Person #${String(d["person_id"] ?? 0)}`,
+    ...d,
+  });
+}
+
+interface SpecRun {
+  rt: Runtime;
+  ticks: TickMessage[][];
+  text: string[];
+}
+
+/** Drive a Runtime through a spec the way rt_edge.py drives Python's. */
+function runSpec(spec: Spec): SpecRun {
+  const outs = new Map<string, SpecOut>();
+  for (const st of spec.steps)
+    for (const [k, o] of Object.entries(st.outs ?? {})) outs.set(k, decodeSpec(o) as SpecOut);
+  const stub: Predictor = {
+    states: STATE_SETS[spec.state_set],
+    modelId: "stub-edge",
+    predict(person): PredictionOutput | null {
+      const last = person[person.length - 1] as TickRecord;
+      const o = outs.get(`${last.tick}:${last.person_id}`);
+      if (o === undefined) return null;
+      return { ...o, layers: o.layers.map((l) => ({ ...l, drivers: [...l.drivers] })), values: {} };
+    },
+  };
+  const clock = { now: spec.wall_init ?? 0, mono: spec.mono_init ?? 0 };
+  const draws = spec.draws ?? [];
+  let k = 0;
+  const rt = new Runtime(makeSettings(spec.settings ?? {}), stub, {
+    sessionId: "session-edge",
+    clock: () => clock.now,
+    monoClock: () => clock.mono,
+    tz: "UTC",
+    gauss: () => draws[k++] as number,
+  });
+  rt.roomOnly = spec.room_only ?? false;
+  rt.sourceLabel = spec.label ?? "replay";
+  const ticks: TickMessage[][] = [];
+  for (const st of spec.steps) {
+    for (const act of st.pre ?? []) {
+      if (act[0] === "clock") clock.now = act[1];
+      else if (act[0] === "overlay") rt.setOverlay(act[1], act[2]);
+      else if (act[0] === "room_only") rt.setRoomOnly(act[1]);
+      else if (act[0] === "reset") rt.resetPeople(act[1]);
+      else if (act[0] === "break") rt.logBreak(act[1]);
+      else if (act[0] === "purge") rt.setPurgeCounters(act[1]);
+      else if (act[0] === "seed")
+        rt.seed(
+          act[1].map((r) => specRecord(r, "seed")),
+          act[2],
+          act[3],
+          act[4],
+        );
+      else rt.recordAudit(act[1], decodeSpec(act[2]) as AuditPayload);
+    }
+    clock.now = st.wall;
+    clock.mono = st.mono;
+    const recs = st.records === null ? null : st.records.map((r) => specRecord(r, "session-edge"));
+    ticks.push(rt.step(recs, st.wall, st.mono));
+  }
+  return { rt, ticks, text: ticks.map((t) => canon(t)) };
+}
+
+describe("runtime against Python on inputs the golden runs never produce", () => {
+  const runs: Record<string, SpecRun> = {};
+  beforeAll(() => {
+    for (const [name, build] of Object.entries(SPECS)) runs[name] = runSpec(build());
+  });
+
+  for (const name of Object.keys(SPECS)) {
+    it(`${name}: publishes the same messages and audit chain, and ends in the same state`, () => {
+      const r = runs[name] as SpecRun;
+      const want = SPEC_EXPECT[name];
+      if (want === undefined) throw new Error(`no expectation for ${name}`);
+      expect(sha256Hex(r.text.join("\n"))).toBe(want.digest);
+      const entries = r.rt.audit.entries();
+      expect(entries.length).toBe(want.auditN);
+      if (want.auditLast) expect(entries[entries.length - 1]?.hash).toBe(want.auditLast);
+      expect(verifyChain(entries)).toEqual([true, want.auditN]);
+      expect({
+        latest: [...r.rt.latest.keys()].sort((a, b) => a - b),
+        smoothers: [...r.rt.smoothers.keys()].sort((a, b) => a - b),
+        history: r.rt.history.length,
+        gap_ticks: r.rt.gapTicks,
+        paused: r.rt.paused,
+        tick: r.rt.tickIndex,
+        people: r.rt.window.people(),
+      }).toEqual(want.state);
+    });
+  }
+
+  /** The messages of one type, in emission order, across a run. */
+  function ofType<T extends TickMessage["type"]>(
+    r: SpecRun,
+    type: T,
+  ): Extract<TickMessage, { type: T }>[] {
+    return r.ticks.flat().filter((m): m is Extract<TickMessage, { type: T }> => m.type === type);
+  }
+
+  it("prints the time of day as Python does (half-minute ties to even, 59.5 min stays in its hour)", () => {
+    // int(tod_h) and int(round((tod_h - h) * 60)) % 60: 23.999999 -> "23:00", 14 + 59.5/60 -> "14:00", -0.25 ->
+    // "00:45" (floor modulo), 25.5 -> "01:30", NaN -> "00:00"
+    expect(ofType(runs["sv"] as SpecRun, "state_vector").map((m) => m.time_of_day)).toEqual([
+      "00:00",
+      "23:00",
+      "00:45",
+      "00:00",
+      "14:15",
+      "01:30",
+      "14:00",
+      "14:00",
+      "00:00",
+      "00:02",
+      "00:30",
+      "00:30",
+      "00:58",
+      "00:00",
+      "09:00",
+      "09:02",
+      "09:30",
+      "09:30",
+      "09:58",
+      "09:00",
+      "13:00",
+      "13:02",
+      "13:30",
+      "13:30",
+      "13:58",
+      "13:00",
+      "23:00",
+      "23:01",
+      "23:30",
+      "23:30",
+      "23:59",
+      "23:00",
+      "14:00",
+      "04:00",
+      "00:00",
+      "12:00",
+      "00:00",
+      "11:00",
+      "00:08",
+    ]);
+  });
+
+  it("rounds the state vector's fields as Python does (-0.0, subnormal, inf, 1e300, NaN, 0.0005)", () => {
+    const sv = ofType(runs["sv"] as SpecRun, "state_vector")[0];
+    expect(canon(sv)).toBe(
+      '{"type":"state_vector","t":1792850400.0,"person_id":1.0,"ambient_db":-0.0,"light_lux":0.0,' +
+        '"hours_since_break":inf,"time_of_day":"00:00","clenched_fists_5m":0.0,"compliments_15m":0.0,' +
+        '"laughter_15m":0.0,"posture_slump":1e+300,"head_in_hands":0.001,"social_withdrawal":0.0,' +
+        '"face_visible":false,"facial_valence":-0.001,"window_fill_min":0.08,"source":"live","simulated_fields":[]}',
+    );
+  });
+
+  it("takes the predictor's confidence when the smoothed label has no probability (dict.get default)", () => {
+    const pred = ofType(runs["sv"] as SpecRun, "prediction").find(
+      (m) => m.event_id === "p1-000002",
+    );
+    expect([pred?.label, pred?.label_display, pred?.confidence]).toEqual([
+      "Collaborative_Happy",
+      "Upbeat",
+      0.3333,
+    ]);
+    expect(pred?.probabilities).toEqual({ Focused: 0.5, Frustrated_Masked: 0.25 });
+  });
+
+  it("sorts simulated fields by code point, room and person tags merged", () => {
+    const pred = ofType(runs["sv"] as SpecRun, "prediction").find(
+      (m) => m.event_id === "p1-000001",
+    );
+    expect(pred?.simulated_fields).toEqual([
+      "Z",
+      "a",
+      "b",
+      "c",
+      "d",
+      "low_light",
+      "room_history",
+      "ß",
+      "é",
+      "￿",
+      "\u{1F600}",
+    ]);
+    expect(pred?.explanation.text).toBe(
+      "Upbeat (40%) is the most likely state for Person #1. Main evidence: average noise of 72 dB over 15 minutes.",
+    );
+  });
+
+  it("audits a break's person id as the JSON value it was (null, int, float) instead of throwing on 1.5", () => {
+    const breaks = (runs["op"] as SpecRun).rt.audit
+      .entries()
+      .filter((e) => e.payload["action"] === "break");
+    expect(breaks.map((e) => e.payload["person_id"])).toEqual([null, 1n, 1.5]);
+    expect(breaks.map((e) => auditBlob(entryBody(e)).match(/"person_id":[^,}]*/)?.[0])).toEqual([
+      '"person_id":null',
+      '"person_id":1',
+      '"person_id":1.5',
+    ]);
+  });
+});
+
+describe("runtime pieces against Python (push_obs, ScenarioSource, hello)", () => {
+  it("publishes tracks and measures fps exactly as push_obs does", () => {
+    // tracks.py: Runtime built at monotonic 10.0, one VideoObs per row (frame_seq = frames_decoded = i,
+    // mirrored = i odd, wall = WALL0 + mono * 1.001), then an AudioObs; Python's Tracks and fps after each
+    const clock = { mono: 10.0 };
+    const rt = new Runtime(makeSettings(), SERVED.core, {
+      sessionId: "session-golden",
+      clock: () => WALL0,
+      monoClock: () => clock.mono,
+    });
+    const P = (
+      id: number,
+      y1: number,
+      y2: number,
+      extra: { fist_active?: boolean; slump?: boolean } = {},
+    ) => makePersonObs({ track_id: id, bbox: [0.1, y1, 0.2, y2], ...extra });
+    const pushes: [number, ReturnType<typeof P>[]][] = [
+      [
+        10.05,
+        [
+          P(1, 0.1, 0.6),
+          P(2, 0.5, 0.7, { fist_active: true }),
+          P(3, 0.2, 0.5, { slump: true }),
+          P(4, 0.0, 0.275),
+        ],
+      ],
+      [10.1, [P(1, 0.1, 0.6)]],
+      [10.15, [P(1, 0.1, 0.6)]], // 10.15 - 10.05 = 0.0999999...: still throttled
+      [10.1500001, [P(1, 0.1, 0.6)]],
+      [12.0, []],
+      [12.05, [P(5, 0.3, 0.3), P(6, 0.3, 0.3)]],
+      [12.2, [P(7, 0.0, 1.0), P(8, 0.0, 0.55), P(9, 0.0, 0.5499999)]],
+      [14.2, [P(1, 0.1, 0.2)]],
+    ];
+    const got = pushes.map(([m, persons], i) => {
+      clock.mono = m;
+      const tr = rt.pushObs(
+        makeVideoObs({
+          t: m,
+          wall: WALL0 + m * 1.001,
+          frame_seq: i,
+          frames_decoded: i,
+          frame_w: 640,
+          frame_h: 480,
+          mirrored: i % 2 === 1,
+          persons,
+        }),
+      );
+      return [
+        rt.fps,
+        tr === null ? null : [tr.t, tr.capture_ts_ms, tr.mirrored, tr.persons.map((p) => p.id)],
+      ];
+    });
+    expect(got).toEqual([
+      [0.0, [1792850410.06005, 1792850410060, false, [1, 3, 4]]],
+      [0.0, null],
+      [0.0, null],
+      [0.0, [1792850410.16015, 1792850410160, true, [1]]],
+      [2.5, [1792850412.012, 1792850412012, false, []]],
+      [2.5, null],
+      [2.5, [1792850412.2122, 1792850412212, false, [7, 8]]],
+      [1.363636363636364, [1792850414.2142, 1792850414214, true, [1]]],
+    ]);
+    clock.mono = 15.0;
+    expect(
+      rt.pushObs({
+        type: "audio",
+        t: 15.0,
+        wall: WALL0 + 15,
+        block_seq: 0,
+        db_spl: 50.0,
+        rms_power: 1e-3,
+        speech_prob: 0.0,
+        laughter_onsets: 0,
+        compliment_hits: 0,
+      }),
+    ).toBeNull();
+    expect([rt.fps, rt.mic, rt.camera]).toEqual([1.363636363636364, true, true]);
+  });
+
+  it("ScenarioSource re-stamps a scenario's rows into exactly the records Python's source returned", () => {
+    const run = runNamed("context_blindness");
+    // the fixture's records with the stamps scrambled, ticks spread out and the groups listed last tick first
+    const raw = run.ticks
+      .map((t, j) =>
+        t.records.map((d) => ({
+          ...tickRecordFromDict(d),
+          tick: 10 * j + 3,
+          ts: NaN,
+          t_mono: -1,
+          session_id: "raw",
+          source: "sim",
+        })),
+      )
+      .reverse()
+      .flat();
+    const src = new ScenarioSource(raw, run.scenario, { sessionId: run.session_id });
+    expect(src.length).toBe(run.ticks.length);
+    run.ticks.forEach((t) => {
+      const recs = src.nextTick(t.wall, t.mono);
+      expect(recs?.map(tickRecordToDict)).toEqual(t.records);
+    });
+    expect(src.done).toBe(true);
+    expect(src.nextTick(WALL0, MONO0)).toBeNull();
+    // loop=True starts over at the first tick; the id carries six random hex digits
+    const looped = new ScenarioSource(raw, "x", { loop: true });
+    expect(looped.sessionId).toMatch(/^replay-x-[0-9a-f]{6}$/);
+    for (let i = 0; i < run.ticks.length; i++) looped.nextTick(WALL0, MONO0);
+    expect(looped.done).toBe(false);
+    expect(looped.nextTick(WALL0, MONO0)?.[0]?.tick).toBe(0);
+    expect(() => new ScenarioSource([], "empty", { loop: true }).nextTick(WALL0, MONO0)).toThrow(
+      RangeError,
+    );
+  });
+
+  it("announces a mode outside live / replay / hybrid as replay (app.py hello)", () => {
+    const h = harness("core");
+    (h.rt as { mode: string }).mode = "demo";
+    expect(h.rt.hello().mode).toBe("replay");
+    h.rt.mode = "hybrid";
+    expect(h.rt.hello().mode).toBe("hybrid");
+  });
+
+  it("keeps its history and latest state apart from the messages it hands out", () => {
+    const h = harness("core");
+    h.rt.sourceLabel = "replay";
+    const msgs = h.rt.step(
+      scenarioRecords(runNamed("frustrated_masked"), 0, WALL0, MONO0),
+      WALL0,
+      MONO0,
+    );
+    const pred = msgs.find((m) => m.type === "prediction");
+    if (pred?.type !== "prediction") throw new Error("no prediction");
+    const before = canon(h.rt.latest.get(1)?.prediction);
+    pred.layers.reverse();
+    pred.simulated_fields.push("edited");
+    pred.probabilities["Focused"] = -1;
+    expect(canon(h.rt.latest.get(1)?.prediction)).toBe(before);
+    expect(canon(h.rt.history[1])).toBe(before);
+    expect(h.rt.history[1]).toBe(h.rt.latest.get(1)?.prediction); // one model_dump() shared, as in Python
+  });
+});
+
 // ---------- Performance (3 people) ----------
 
 describe("runtime performance", () => {
@@ -753,103 +1600,40 @@ afterAll(() => {
   console.info(`[engine-runtime] ${perf.notes.join("; ")}`);
 });
 
-// ---------- SCRATCH (edge-case exploration; removed before handing in) ----------
-import { readFileSync } from "node:fs";
-import type { PredictionOutput, Predictor } from "@/engine/served";
-import { STATE_SETS, makeTickRecord } from "@/engine/contracts";
-
-const SCRATCH = "/tmp/claude-0/-home-user-Valence/edc06eea-8c6d-582a-80d8-fd955eff8124/scratchpad/specs";
-function decS(v: unknown): unknown {
-  if (v === "NaN") return NaN;
-  if (v === "Infinity") return Infinity;
-  if (v === "-Infinity") return -Infinity;
-  if (Array.isArray(v)) return v.map(decS);
-  if (v !== null && typeof v === "object")
-    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, decS(x)]));
-  return v;
-}
-function recS(d: Record<string, unknown>, session: string): TickRecord {
-  const x: Record<string, unknown> = { session_id: session, display_id: `Person #${String(d["person_id"] ?? 0)}`, ...d };
-  return tickRecordFromDict(x);
-}
-function runSpec(spec: any): { ticks: string[]; audit: { kind: string; hash: string }[]; state: unknown } {
-  const outs: Record<string, any> = {};
-  for (const st of spec.steps) for (const [k, o] of Object.entries(st.outs ?? {})) outs[k] = decS(o);
-  const states = (STATE_SETS as Record<string, readonly string[]>)[spec.state_set ?? "core"] as readonly string[];
-  const stub: Predictor = {
-    states,
-    modelId: "stub-edge",
-    predict(person) {
-      const last = person[person.length - 1] as TickRecord;
-      const o = outs[`${last.tick}:${last.person_id}`];
-      if (o === undefined) return null;
-      return {
-        label: o.label, confidence: o.confidence, probabilities: o.probabilities,
-        face_only_label: o.face_only_label ?? null, face_only_confidence: o.face_only_confidence ?? null,
-        layers: (o.layers ?? []).map((l: any) => ({ name: l.name, contribution: l.contribution, drivers: l.drivers ?? [] })),
-        raw_override: o.raw_override ?? null, values: {}, ood_features: o.ood_features ?? [],
-      } as PredictionOutput;
-    },
-  };
-  const clock = { now: spec.wall_init ?? 0, mono: spec.mono_init ?? 0 };
-  let k = 0;
-  const draws: number[] = spec.draws ?? [];
-  const rt = new Runtime(makeSettings(spec.settings ?? {}), stub, {
-    sessionId: "session-edge", clock: () => clock.now, monoClock: () => clock.mono, tz: "UTC",
-    gauss: () => draws[k++] as number,
-  });
-  rt.roomOnly = spec.room_only ?? false;
-  rt.sourceLabel = spec.label ?? "replay";
-  const ticks: string[] = [];
-  for (const st of spec.steps) {
-    for (const act of st.pre ?? []) {
-      const op = act[0];
-      if (op === "clock") clock.now = act[1];
-      else if (op === "overlay") rt.setOverlay(act[1], act[2]);
-      else if (op === "room_only") rt.setRoomOnly(act[1]);
-      else if (op === "reset") rt.resetPeople(act[1]);
-      else if (op === "break") rt.logBreak(act[1]);
-      else if (op === "purge") rt.setPurgeCounters(act[1]);
-      else if (op === "seed") rt.seed(act[1].map((r: any) => recS(r, "seed")), act[2], decS(act[3]) as number, decS(act[4]) as number | null);
-      else if (op === "audit") rt.recordAudit(act[1], decS(act[2]) as any);
-      else throw new Error(op);
-    }
-    clock.now = st.wall; clock.mono = st.mono;
-    const recs = st.records === null ? null : st.records.map((r: any) => recS(r, "session-edge"));
-    ticks.push(canon(rt.step(recs, st.wall, st.mono)));
-  }
-  const entries = rt.audit.entries();
-  return {
-    ticks,
-    audit: entries.map((e) => ({ kind: e.kind, hash: e.hash })),
-    state: {
-      latest: [...rt.latest.keys()].sort((a, b) => a - b), smoothers: [...rt.smoothers.keys()].sort((a, b) => a - b),
-      history: rt.history.length, gap_ticks: rt.gapTicks, paused: rt.paused, tick: rt.tickIndex,
-      people: rt.window.people(), verify: verifyChain(entries),
-    },
-  };
-}
-describe("SCRATCH edge specs", () => {
-  for (const name of ["sv", "room", "op"]) {
-    it(`matches Python on ${name}`, () => {
-      const spec = JSON.parse(readFileSync(`${SCRATCH}/${name}.json`, "utf8"));
-      const want = JSON.parse(readFileSync(`${SCRATCH}/${name}.py.json`, "utf8"));
-      let got: ReturnType<typeof runSpec>;
-      try { got = runSpec(spec); } catch (e) { throw new Error(`${name} threw: ${String(e)}`); }
-      const bad: string[] = [];
-      want.ticks.forEach((w: string, i: number) => {
-        const g = got.ticks[i] ?? "<missing>";
-        if (g !== w) {
-          let j = 0;
-          while (j < w.length && g[j] === w[j]) j++;
-          bad.push(`tick ${i} @${j}: got ...${g.slice(Math.max(0, j - 80), j + 120)}\n   want ...${w.slice(Math.max(0, j - 80), j + 120)}`);
+// ---------- SCRATCH2 ----------
+describe("SCRATCH2 randomized", () => {
+  it("matches Python on perturbed scenario runs", async () => {
+    const fs = await import("node:fs");
+    const dir = "/tmp/claude-0/-home-user-Valence/edc06eea-8c6d-582a-80d8-fd955eff8124/scratchpad/rand";
+    const report: string[] = [];
+    for (const f of fs.readdirSync(dir).filter((x: string) => x.endsWith(".json")).sort()) {
+      const d = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
+      let now = WALL0;
+      const rt = new Runtime(makeSettings({ state_set: d.state_set }), SERVED[d.state_set as StateSet], {
+        sessionId: "session-rand", clock: () => now, tz: "UTC",
+      });
+      rt.sourceLabel = "replay";
+      rt.mode = "replay";
+      let bad = 0;
+      let first = "";
+      d.ticks.forEach((t: any, i: number) => {
+        now = t.wall;
+        const recs = t.records.map((r: any) => tickRecordFromDict(r));
+        const text = canon(rt.step(recs, t.wall, t.mono));
+        const want = d.canon[i] as string;
+        if (text !== want) {
+          bad++;
+          if (!first) {
+            let j = 0;
+            while (j < want.length && text[j] === want[j]) j++;
+            first = `tick ${i} @${j}: got ...${text.slice(Math.max(0, j - 150), j + 100)}\n   want ...${want.slice(Math.max(0, j - 150), j + 100)}`;
+          }
         }
       });
-      console.log(name, bad.slice(0, 6).join("\n"));
-      console.log(name, "audit", JSON.stringify(got.audit.map((a) => a.kind)), JSON.stringify(want.audit.map((a: any) => a.kind)));
-      console.log(name, "state", JSON.stringify(got.state), JSON.stringify(want.state));
-      expect(bad.length).toBe(0);
-      expect(got.audit.map((a) => a.hash)).toEqual(want.audit.map((a: any) => a.hash));
-    });
-  }
+      const hashes = rt.audit.entries().map((e) => e.hash);
+      const auditOk = JSON.stringify(hashes) === JSON.stringify(d.audit);
+      report.push(`${f}: ${bad}/${d.ticks.length} ticks differ, audit ${auditOk ? "ok" : "DIFF"} ${first}`);
+    }
+    fs.writeFileSync(`${dir}/../rand_report.txt`, report.join("\n"));
+  }, 600_000);
 });

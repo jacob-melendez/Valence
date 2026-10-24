@@ -9,10 +9,12 @@
  * throttled 'prediction' entry in the hash-chained audit log.
  *
  * Python's Runtime pulls records from a TickSource inside step(); here the caller hands them in
- * (`step(records, wall, mono)`, e.g. a scenario replay) or lets the runtime flush its own Aggregator
+ * (`step(records, wall, mono)`, e.g. from a ScenarioSource) or lets the runtime flush its own Aggregator
  * (`stepLive`, the LiveSource). The ticker thread, the event bus and the narrator HTTP client have no
  * counterpart: step() returns the messages it published, in emission order (governance, then per target
- * state_vector and prediction), and `onMessage` sees each one as it is published.
+ * state_vector and prediction), and `onMessage` sees each one as it is published. Python's ticker logs a failed
+ * step and keeps ticking; step() throws to its caller (state as far as the step got, as in Python), whose timer
+ * should catch and carry on the same way.
  *
  * The purge gate lives in perception (frontend/src/perception), so its cumulative counters come in through
  * setPurgeCounters / setFramesDecoded; left alone they stay 0, which is what a scenario replay reports.
@@ -223,6 +225,86 @@ function dumpLayers(layers: readonly Layer[]): Layer[] {
       scope: d.scope,
     })),
   }));
+}
+
+// ---------- Scenario source ----------
+
+/** uuid.uuid4().hex[:6]: six random lowercase hex digits. */
+function randomHex6(random: () => number): string {
+  let s = "";
+  for (let i = 0; i < 6; i++) s += Math.floor(random() * 16).toString(16);
+  return s;
+}
+
+/**
+ * valence/runtime/engine.py:74 ScenarioSource: plays a rendered scenario one tick at a time, re-stamped to the
+ * current clock. Feed it to the runtime as `rt.step(src.nextTick(wall, mono), wall, mono)`; null means the
+ * scenario finished (step then pauses).
+ *
+ * `rows` are the scenario's TickRecords in any order: they are grouped by `tick` ascending (pandas
+ * groupby("tick", sort=True), which drops a NaN tick), each group keeping the rows' own order (room row first
+ * in rendered scenarios). Each returned record is a fresh copy whose tick is the group's index, ts/t_mono the
+ * clock, session_id this source's, source "replay"; every other field is the row's.
+ */
+export class ScenarioSource {
+  readonly label = "replay" as const;
+  readonly name: string;
+  loop: boolean;
+  /** Python: f"replay-{name}-{uuid4().hex[:6]}"; tests pin it with opts.sessionId. */
+  sessionId: string;
+  private readonly ticks: TickRecord[][];
+  private i = 0;
+
+  constructor(
+    rows: readonly TickRecord[],
+    name: string,
+    opts: { loop?: boolean; sessionId?: string; random?: () => number } = {},
+  ) {
+    this.name = name;
+    this.loop = opts.loop ?? false;
+    this.sessionId = opts.sessionId ?? `replay-${name}-${randomHex6(opts.random ?? Math.random)}`;
+    const groups = new Map<number, TickRecord[]>();
+    for (const r of rows) {
+      if (isnan(r.tick)) continue;
+      const key = r.tick + 0; // -0.0 and 0 are one group
+      const g = groups.get(key);
+      if (g === undefined) groups.set(key, [r]);
+      else g.push(r);
+    }
+    this.ticks = [...groups.keys()].sort((a, b) => a - b).map((k) => groups.get(k) as TickRecord[]);
+  }
+
+  /** Ticks in the scenario. */
+  get length(): number {
+    return this.ticks.length;
+  }
+
+  /** valence/runtime/engine.py:86 done: every tick played and not looping. */
+  get done(): boolean {
+    return this.i >= this.ticks.length && !this.loop;
+  }
+
+  /** valence/runtime/engine.py:89 next_tick */
+  nextTick(wall: number, mono: number): TickRecord[] | null {
+    if (this.i >= this.ticks.length) {
+      if (!this.loop) return null;
+      this.i = 0;
+    }
+    const g = this.ticks[this.i];
+    // an empty looping scenario: Python's self._ticks[0] raises IndexError
+    if (g === undefined) throw new RangeError("list index out of range");
+    this.i += 1;
+    return g.map((row) =>
+      makeTickRecord({
+        ...row,
+        tick: this.i - 1,
+        ts: wall,
+        t_mono: mono,
+        session_id: this.sessionId,
+        source: "replay",
+      }),
+    );
+  }
 }
 
 // ---------- Runtime ----------
@@ -550,8 +632,9 @@ export class Runtime {
 
   /**
    * valence/runtime/engine.py:303 step, with the tick's records handed in (room row first, as a TickSource
-   * returns them; null = the scenario finished, which pauses). `wall`/`mono` default to the clocks. Returns
-   * every message published, in order.
+   * returns them, e.g. `src.nextTick(wall, mono)` of a ScenarioSource, which re-stamps tick/ts/t_mono as the
+   * eviction rule needs; null = the scenario finished, which pauses). `wall`/`mono` default to the clocks.
+   * Returns every message published, in order.
    */
   step(
     records: readonly TickRecord[] | null,
