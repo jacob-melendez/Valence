@@ -55,6 +55,36 @@ Logging tooling only: this file, `scripts/hack_log.py` (+ test), `make hacklog`,
 is in `docs/HACKOHIO_PLAN.md`. One more pre-event commit pins the baseline commit in the script and this file; the
 generated log lists it, marked as before the window.
 
+### 10:00 — Event start
+
+The event window is 10:00 ET Oct 24 → 10:00 ET Oct 25 (7:00 → 7:00 PT). The baseline tag `hackohio-2026-baseline`
+is pushed and points at `cc28be9`.
+
+### 12:20 — Three cloud sessions, ownership fixed
+
+The work runs as three cloud sessions on `claude/happy-ride-7w3ng3`, so progress can be followed from a phone:
+
+| Session | Track | Owns |
+|---|---|---|
+| **Cloud A** (this log's keeper) | `[web]` engine | `frontend/src/engine/**`, the console source switch and panels, golden exporter, deploy config, this log |
+| **Cloud B** | `[emotion]` emotion map | `valence/{sim,features,models,eval}/**`, `artifacts/emotion/**`, `docs/EMOTION_FEATURES.md` |
+| **Cloud C** | `[web]` browser perception | `frontend/src/perception/**`, `frontend/public/mediapipe/**`, `frontend/e2e/**`, MediaPipe dependencies |
+
+Decisions:
+- **Perception moves from the Mac to the cloud.** It is tested in headless Chromium with a fake camera; real-camera
+  checks happen after deploy.
+- **Hosting is Cloudflare,** the console build's existing target.
+- **The existing 123 features, TickRecord fields and served models are frozen** while Cloud A ports them to
+  TypeScript, so parity can't drift. Cloud B adds its new features in a separate module.
+- **Status files.** B and C write `docs/hackohio/status-{B,C}.md` every ~2 h; this log summarizes them.
+
+Cloud A's code survey, read-only, found:
+- **Port all 123 features**, including the 22 the served model does not use: they feed the room-relative features
+  and the explanations.
+- **The served model splits in three ways.** With missing type None, a NaN input becomes 0.0. TreeSHAP weights paths
+  by row counts.
+- **The display strings use Python's rounding,** which rounds ties to even.
+
 ## Generated from git
 
 <!-- hacklog:start -->
