@@ -65,6 +65,8 @@ export interface PredictionMsg {
   source: string; simulated_fields: string[];
   /** Emotion map (optional, docs/EMOTION_FEATURES.md section 5): present when its models are loaded. */
   affect?: Affect | null;
+  /** The in-browser tour only: the scripted state and its valence/arousal for this tick (simulated ground truth). */
+  truth?: { state: string; valence: number; arousal: number };
 }
 export interface ExplanationMsg {
   type: "explanation"; event_id: string; person_id: number; text: string;
@@ -367,6 +369,7 @@ export function provenanceBadges(s: ValenceState): { label: string; tone: "mock"
   if (s.source === "mock") return [{ label: "MOCK", tone: "mock", title: "Generated in the browser, no backend" }];
   if (s.source === "browser") {
     const sim = [...new Set([...Object.values(s.predictions), ...Object.values(s.vectors)].flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
+    if (browserMode === "tour") return [{ label: "IN-BROWSER · TOUR (SIMULATED)", tone: "warn", title: "A scripted, simulated walk through the 10 states, replayed through the engine in this page (no camera)" }];
     return [{ label: "IN-BROWSER", tone: "live", title: "Camera and mic processed in this page; nothing is recorded or sent" },
       ...(sim.length ? [{ label: `SIMULATED: ${sim.join(", ")}`, tone: "warn" as const, title: "Simulated or operator-set data in the 15-minute window" }] : [])];
   }
@@ -754,7 +757,7 @@ function stopLive() {
 // ---------- In-browser source (Valence Web) ----------
 // The engine glue and the perception module are loaded lazily (and only if present), so the console bundle
 // stays small for the mock and live sources.
-const engineGlue = import.meta.glob<{ createBrowserEngine: () => Promise<BrowserEngine> }>("../engine/browser-engine.ts");
+const engineGlue = import.meta.glob<{ createBrowserEngine: (opts?: { tour?: boolean }) => Promise<BrowserEngine> }>("../engine/browser-engine.ts");
 const perceptionModule = import.meta.glob<{ createPerception?: () => PerceptionLike | Promise<PerceptionLike>; createMockPerception?: () => PerceptionLike | Promise<PerceptionLike> }>("../perception/index.ts");
 const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: string): Promise<T> => {
   const load = Object.values(mods)[0];
@@ -764,9 +767,16 @@ const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: st
 /** `?perception=mock` uses the mock perception (no camera); the default is the real MediaPipe module. */
 const wantMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
 let browser: BrowserSource | null = null;
+/** The in-browser source's input: live camera + mic, or the scripted emotion tour (no camera; ?demo=tour). */
+let browserMode: "live" | "tour" = "live";
+/** Start the in-browser source in a mode (the Source panel's buttons). */
+export function startBrowserSource(mode: "live" | "tour") { browserMode = mode; setSource("browser"); }
+export const getBrowserMode = () => browserMode;
 function startBrowser() {
+  const mode = browserMode;
   browser = new BrowserSource({
-    createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine(),
+    mode, tourSpeed: 10,
+    createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine({ tour: mode === "tour" }),
     createPerception: async () => {
       const m = await loadOptional(perceptionModule, "The browser perception module");
       const make = wantMockPerception() ? m.createMockPerception : m.createPerception ?? m.createMockPerception;
@@ -846,10 +856,14 @@ export function hasApiParam(): boolean {
   if (typeof window === "undefined") return false;
   try { return !!validBase(new URLSearchParams(window.location.search).get("api")); } catch { return false; }
 }
-/** True when the page was opened with `?source=browser` (the hosted Valence Web link). */
+/** True when the page was opened with `?source=browser` or `?demo=tour` (the hosted Valence Web links). */
 export function hasBrowserParam(): boolean {
   if (typeof window === "undefined") return false;
-  try { return new URLSearchParams(window.location.search).get("source") === "browser"; } catch { return false; }
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("demo") === "tour") browserMode = "tour";
+    return q.get("source") === "browser" || q.get("demo") === "tour";
+  } catch { return false; }
 }
 /** Mock by default; `?source=browser` runs the engine in this page; `?api=` connects to that backend right away. */
 export function boot() {

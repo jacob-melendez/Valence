@@ -60,6 +60,9 @@ export interface BrowserSourceDeps {
   onError: (what: "camera" | "mic" | "engine", detail: string) => void;
   now?: () => number; // epoch ms
   mono?: () => number; // ms
+  /** "tour": replay the engine's scripted emotion tour (no camera, no mic), `tourSpeed` times faster than real time. */
+  mode?: "live" | "tour";
+  tourSpeed?: number;
 }
 
 // ---------- Shared camera stream (the preview reuses it instead of opening the camera twice) ----------
@@ -99,10 +102,13 @@ export class BrowserSource {
   private lastVideoAt = 0;
   private lastAudioAt = 0;
   private loopLatency = 0;
+  private tourTicks = 0;
   private roomOnly = false;
   private generation = 0;
   private readonly now: () => number;
   private readonly mono: () => number;
+
+  private get tour() { return this.deps.mode === "tour"; }
 
   constructor(private readonly deps: BrowserSourceDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -116,9 +122,9 @@ export class BrowserSource {
     try { this.engine = await this.deps.createEngine(); } catch (e) { this.deps.onError("engine", String(e)); return; }
     if (gen !== this.generation) return;
     this.deps.emit(this.hello());
-    await this.openSensors(gen);
+    if (!this.tour) await this.openSensors(gen);
     if (gen !== this.generation) return;
-    this.tickTimer = setInterval(() => this.tick(), TICK_MS);
+    this.tickTimer = setInterval(() => this.tick(), this.tour ? TICK_MS / (this.deps.tourSpeed ?? 10) : TICK_MS);
     this.statusTimer = setInterval(() => this.deps.emit(this.status()), 1000);
     this.deps.onBaseline(this.engine.baseline());
   }
@@ -168,7 +174,12 @@ export class BrowserSource {
     const t0 = this.mono();
     const counters = this.perception?.counters() ?? { frames_decoded: 0, frames_purged: 0, audio_blocks_purged: 0 };
     let msgs: ServerMessage[] = [];
-    try { msgs = this.engine.tick(this.now() / 1000, this.mono() / 1000, counters); } catch (e) { this.deps.onError("engine", String(e)); }
+    // The tour runs on a virtual clock (5 s per tick) so the 15-minute window and timeline read like real time.
+    const [wall, mono] = this.tour
+      ? [this.startedAt / 1000 + this.tourTicks * 5, this.tourTicks * 5]
+      : [this.now() / 1000, this.mono() / 1000];
+    this.tourTicks += 1;
+    try { msgs = this.engine.tick(wall, mono, counters); } catch (e) { this.deps.onError("engine", String(e)); }
     this.loopLatency = this.mono() - t0;
     msgs.forEach((m) => this.deps.emit(m));
     this.deps.onBaseline(this.engine.baseline());
@@ -176,7 +187,7 @@ export class BrowserSource {
 
   hello(): HelloMsg {
     const affect = this.engine?.affectStates ?? [];
-    return { type: "hello", contract_version: "1.0.0", mode: "live", room_only: this.roomOnly,
+    return { type: "hello", contract_version: "1.0.0", mode: this.tour ? "replay" : "live", room_only: this.roomOnly,
       states: this.engine?.states ?? [], feature_version: this.engine?.featureVersion ?? "", frame_w: 0, frame_h: 0, mirrored: false,
       ...(affect.length ? { affect_states: affect } : {}) };
   }
@@ -185,11 +196,11 @@ export class BrowserSource {
     const t = this.now(), c = this.perception?.counters(), ps = this.perception?.status?.();
     const camera = this.running === "running" && t - this.lastVideoAt < 3000;
     const mic = this.running === "running" && t - this.lastAudioAt < 3000;
-    const degraded = [...(camera ? [] : ["camera"]), ...(mic ? [] : ["mic"]), ...(ps?.degraded ?? [])];
+    const degraded = this.tour ? [] : [...(camera ? [] : ["camera"]), ...(mic ? [] : ["mic"]), ...(ps?.degraded ?? [])];
     const r1 = (v: number | undefined) => Math.round((v ?? 0) * 10) / 10;
-    return { type: "status", mode: "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
+    return { type: "status", mode: this.tour ? "replay" : "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
       // Face passes per second: blink numbers are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3).
-      face_hz: r1(ps?.face_hz ?? ps?.fps ?? c?.fps), video_backend: ps?.video_backend ?? null,
+      ...(this.tour ? {} : { face_hz: r1(ps?.face_hz ?? ps?.fps ?? c?.fps), video_backend: ps?.video_backend ?? null }),
       loop_latency_ms: Math.round(this.loopLatency * 10) / 10,
       // The LLM narrator is desktop-only; the browser always uses the template explanation.
       narrator: "template", offline: false, uptime_s: Math.round((t - this.startedAt) / 1000),
@@ -202,7 +213,7 @@ export class BrowserSource {
     switch (c.kind) {
       case "control":
         if (c.action === "start" && this.running !== "running") {
-          if (this.running === "stopped") void this.openSensors(this.generation);
+          if (this.running === "stopped" && !this.tour) void this.openSensors(this.generation);
           this.running = "running";
         } else if (c.action === "pause") this.running = "paused";
         else if (c.action === "stop") { this.running = "stopped"; this.closeSensors(); e?.resetPeople(); }

@@ -13,8 +13,9 @@ import { ROOM, makeSettings, stateInfos, type Obs, type TickRecord } from "./con
 import { computeEmotion } from "./emotion-features";
 import { emotionInput, loadEmotionModel, predictEmotion, toAffect, type EmotionModel } from "./emotion-model";
 import { FEATURE_NAMES, featuresFromWindow } from "./features";
-import { Runtime, type OverlayName } from "./runtime";
+import { Runtime, ScenarioSource, type OverlayName } from "./runtime";
 import { loadServed, type FetchLike } from "./served";
+import { loadTour, type Tour } from "./tour";
 
 export interface BrowserEngineOptions {
   /** Where the served models live (scripts/model-files.mjs): "/models/core/" (4 states) or "/models/all/". */
@@ -24,6 +25,12 @@ export interface BrowserEngineOptions {
   fetchFn?: FetchLike;
   /** Time zone for the time of day (undefined = the device's local time, as the desktop edge uses). */
   tz?: string;
+  /**
+   * Replay Cloud B's emotion tour (a simulated 50-minute walk through the 10 states) instead of live sensors:
+   * the camera-free demo. Predictions then carry the scripted truth for the affect map.
+   */
+  tour?: boolean;
+  tourSpeed?: number;
 }
 
 /** The emotion model's input for a person's window, keyed by feature name (null = missing), for self-reports. */
@@ -40,6 +47,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
   latestInputs(personId: number): { feature_version: string; features: Record<string, number | null> } | null;
   runtime: Runtime;
   emotion: EmotionModel | null;
+  tour: Tour | null;
 }> {
   const fetchFn: FetchLike = opts.fetchFn ?? ((url) => globalThis.fetch(url));
   const modelBase = opts.modelBase ?? "/models/core/";
@@ -50,8 +58,15 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
   if (opts.emotionBase !== null) {
     try { emotion = await loadEmotionModel(opts.emotionBase ?? "/models/emotion/", fetchFn); } catch { emotion = null; }
   }
-  const runtime = new Runtime(makeSettings({ mode: "live" }), predictor, opts.tz === undefined ? {} : { tz: opts.tz });
-  runtime.useLive();
+  const runtime = new Runtime(makeSettings({ mode: opts.tour ? "replay" : "live" }), predictor, opts.tz === undefined ? {} : { tz: opts.tz });
+  let tour: Tour | null = null, source: ScenarioSource | null = null;
+  if (opts.tour) {
+    tour = await loadTour(`${(opts.emotionBase ?? "/models/emotion/").replace(/\/?$/, "/")}tour.json.gz`, fetchFn);
+    if (!tour) throw new Error("the emotion tour (tour.json.gz) is not available");
+    source = new ScenarioSource(tour.ticks.flatMap((t) => t.records), "emotion_tour", { loop: true });
+    runtime.useScenario("emotion_tour", opts.tourSpeed ?? 10);
+  } else runtime.useLive();
+  let tourTick = 0;
   const inputs = new Map<number, Float64Array>();
 
   /** valence/models/emotion.py affect_for_window, keeping the input for the self-report capture. */
@@ -68,6 +83,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
   return {
     runtime,
     emotion,
+    tour,
     states: stateInfos(predictor.states),
     featureVersion: predictor.modelId,
     affectStates: emotion ? emotion.meta.states.map((s) => ({ id: s.id, display: s.display, valence: s.valence, arousal: s.arousal })) : [],
@@ -76,6 +92,19 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
       return runtime.pushObs(obs as unknown as Obs) as ServerMessage | null;
     },
     tick(wall: number, mono: number, c: PerceptionCounters) {
+      if (source && tour) {
+        // The tour: the scripted TickRecords, re-stamped to now (ScenarioSource), with the truth attached.
+        const truth = tour.ticks[tourTick % tour.ticks.length];
+        tourTick += 1;
+        const out = runtime.step(source.nextTick(wall, mono), wall, mono);
+        for (const m of out) {
+          if (m.type !== "prediction") continue;
+          const a = affectFor(m.person_id);
+          if (a) (m as { affect?: unknown }).affect = a;
+          if (truth) (m as { truth?: unknown }).truth = { state: truth.true_state, valence: truth.true_valence, arousal: truth.true_arousal };
+        }
+        return out as ServerMessage[];
+      }
       runtime.setPurgeCounters({
         video_purged: c.frames_purged, audio_purged: c.audio_blocks_purged,
         transcripts_purged: c.transcripts_purged ?? 0, violations: c.violations ?? 0, live_raw_buffers: c.live_raw_buffers ?? 0,

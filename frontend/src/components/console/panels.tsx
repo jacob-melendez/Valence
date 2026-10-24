@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
-  shownExplanation, stateName, useValence, clearSelfReports, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
+  shownExplanation, stateName, useValence, clearSelfReports, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg, type StatusMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream } from "@/lib/browser-source";
@@ -139,8 +139,11 @@ export function SourceControls() {
       <div className="panel-title">Source</div>
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2 font-mono text-sm">
-          <span className="rounded-md border border-primary px-3 py-1.5 text-primary">● In-browser (camera + mic)</span>
-          <span className="text-xs text-muted-foreground">camera {s.status?.camera ? "on" : "off"} · mic {s.status?.mic ? "on" : "off"} · {fmt(s.status?.fps, 1)} fps</span>
+          <Btn small tone="primary" active={getBrowserMode() === "live"} onClick={() => startBrowserSource("live")}>● Live (camera + mic)</Btn>
+          <Btn small active={getBrowserMode() === "tour"} onClick={() => startBrowserSource("tour")}>▶ Tour · 10 states · no camera</Btn>
+          <span className="text-xs text-muted-foreground">
+            {getBrowserMode() === "tour" ? "scripted simulated session, 10× speed" : `camera ${s.status?.camera ? "on" : "off"} · mic ${s.status?.mic ? "on" : "off"} · ${fmt(s.status?.fps, 1)} fps`}
+          </span>
         </div>
         {errors}
         <p className="text-sm text-muted-foreground">
@@ -359,8 +362,10 @@ export function SystemStatus() {
       <div className="panel-title">System status</div>
       {!st ? <div className="text-muted-foreground">No status yet</div> : (
         <div className="text-base">
-          {item("Camera", st.camera ? "ON" : "OFF", st.camera)}
-          {item("Microphone", st.mic ? "ON" : "OFF", st.mic)}
+          {inBrowser && getBrowserMode() === "tour" ? item("Camera / mic", "not used (tour)") : <>
+            {item("Camera", st.camera ? "ON" : "OFF", st.camera)}
+            {item("Microphone", st.mic ? "ON" : "OFF", st.mic)}
+          </>}
           {item("Mode", String(st.mode ?? "—").toUpperCase())}
           {item("FPS", fmt(st.fps))}
           {/* Blink rates are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3). */}
@@ -793,8 +798,10 @@ export function AffectMap() {
               const trail = s.affectTrail[pid] ?? [];
               const color = PERSON_TRAIL[i % PERSON_TRAIL.length];
               const last = trail.at(-1);
+              const truth = s.predictions[pid]?.truth;
               return (
                 <g key={pid}>
+                  {truth && <circle cx={vaX(truth.valence)} cy={vaY(truth.arousal)} r="3.2" fill="none" stroke={color} strokeWidth="0.6" strokeDasharray="1 0.8" />}
                   <polyline points={trail.map((p) => `${vaX(p.valence)},${vaY(p.arousal)}`).join(" ")} fill="none" stroke={color} strokeOpacity="0.5" strokeWidth="0.6" />
                   {last && <circle cx={vaX(last.valence)} cy={vaY(last.arousal)} r="2.2" fill={color} stroke="var(--background)" strokeWidth="0.5" />}
                   {last && <text x={vaX(last.valence)} y={vaY(last.arousal) - 3} fontSize="3" textAnchor="middle" fill={color} fontWeight="bold">#{pid}</text>}
@@ -810,6 +817,7 @@ export function AffectMap() {
                   <div className="font-mono text-xs text-muted-foreground">Person #{pid}</div>
                   <div className="text-xl font-semibold">{a?.label_display ?? pt?.label ?? "—"} <span className="font-mono text-sm text-muted-foreground">{pct(a?.confidence)}</span></div>
                   <div className="font-mono text-sm">valence {fmt(pt?.valence, 2)} · arousal {fmt(pt?.arousal, 2)}</div>
+                  {pred?.truth && <div className="font-mono text-xs text-muted-foreground">scripted: {stateName(pred.truth.state)} (dashed ring)</div>}
                   {a?.model && <div className="font-mono text-xs text-muted-foreground">{a.model}</div>}
                 </div>
               );
