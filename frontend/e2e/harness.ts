@@ -15,11 +15,13 @@ interface E2E {
   counters: unknown;
   violations: string[];
   t0: number;
+  /** Main-thread tasks over 50 ms after start(): count and total ms (what the page's UI would feel). */
+  longTasks: { n: number; ms: number; max: number };
 }
 
 const e2e: E2E = {
   ready: false, error: null, media: null, video: [], audio: [], status: null, counters: null, violations: [],
-  t0: performance.now(),
+  t0: performance.now(), longTasks: { n: 0, ms: 0, max: 0 },
 };
 (window as unknown as { __e2e: E2E }).__e2e = e2e;
 document.addEventListener("securitypolicyviolation", (e) => e2e.violations.push(`${e.violatedDirective} ${e.blockedURI}`));
@@ -56,6 +58,7 @@ async function main(): Promise<void> {
   const opts: PerceptionOptions = {};
   const delegate = params.get("delegate");
   if (delegate === "GPU" || delegate === "CPU") opts.delegate = delegate;
+  if (params.get("worker") === "0") opts.worker = false;
   const every = params.get("faceEveryFrame");
   if (every !== null) opts.faceEveryFrame = every !== "0";
   const perception = params.get("mock") ? createMockPerception() : createPerception(opts);
@@ -70,6 +73,17 @@ async function main(): Promise<void> {
   }, 250);
   await perception.start(opened.stream);
   e2e.ready = true;
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        e2e.longTasks.n += 1;
+        e2e.longTasks.ms += e.duration;
+        e2e.longTasks.max = Math.max(e2e.longTasks.max, e.duration);
+      }
+    }).observe({ type: "longtask" });
+  } catch {
+    /* longtask timing unsupported */
+  }
 }
 
 main().catch((e: unknown) => {

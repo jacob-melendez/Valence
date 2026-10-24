@@ -5,7 +5,7 @@
 // download size.
 //
 //   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
-//                    [--audio file.wav] [--python-cadence] [--deny camera|mic] [--no-build] [--headed]
+//                    [--audio file.wav] [--python-cadence] [--main-thread] [--deny camera|mic] [--no-build] [--headed]
 //
 // Run from frontend/. Needs `npm install`, the repo's Python venv (for make_media.py) and Playwright's Chromium
 // (NODE_PATH or /opt/node-tools/node_modules provides `playwright`).
@@ -141,6 +141,7 @@ page.on("worker", (w) => w.on("console", (m) => /Content Security Policy|Refused
 const params = new URLSearchParams();
 if (DELEGATE) params.set("delegate", DELEGATE);
 if (args.includes("--python-cadence")) params.set("faceEveryFrame", "0");
+if (args.includes("--main-thread")) params.set("worker", "0");
 const query = params.size ? `?${params}` : "";
 const resp = await page.goto(`${origin}/${query}`, { waitUntil: "load" });
 const startedAt = Date.now();
@@ -221,6 +222,7 @@ const report = {
     mediapipe_bytes_served: mediapipeBytes,
     mediapipe_files_served: served.filter((s) => s.url.startsWith("/mediapipe/")).map((s) => `${s.url} ${s.bytes}`),
     total_bytes_served: served.reduce((n, s) => n + s.bytes, 0),
+    main_thread_long_tasks: data.longTasks,
   },
   medians: {
     face_valence: median(faces.map((p) => p.valence)),
