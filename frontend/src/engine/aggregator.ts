@@ -9,8 +9,12 @@
  *
  * Synchronous and single-threaded: the Python lock has no counterpart. Arithmetic follows the Python
  * expressions term by term (numpy reductions through num.ts), so records match the reference bit for bit
- * except where a value passes through pow/log10 (the tick Leq and recent_level), which can differ from
- * numpy in the last bit.
+ * except where a value passes through pow/log10/log2 (the tick Leq, recent_level and the lux drift), which can
+ * differ from numpy/libm in the last bit.
+ *
+ * Python semantics are kept where JS differs: truthiness (NaN is true, -0.0 is false), int() truncation,
+ * builtin sum(), and the inputs where Python raises (int(nan), math.log10(0.0), statistics.median of nothing,
+ * a KeyError in _participants, datetime.fromtimestamp(nan)) throw here instead of yielding NaN or -inf.
  */
 import {
   makeTickRecord,
@@ -23,7 +27,7 @@ import {
   type TickRecord,
   type VideoObs,
 } from "./contracts";
-import { isnan, median, npMean, percentileLinear, pyRound, statsMedian } from "./num";
+import { isnan, median, npMean, percentileLinear, pyRound, pySum, statsMedian } from "./num";
 
 export { ROOM };
 
@@ -87,10 +91,40 @@ function sortedStrings(items: Iterable<string>): string[] {
   });
 }
 
+/** Python truthiness of a number (`if x:`): NaN is true, 0.0 and -0.0 are false (JS treats NaN as false). */
+function pyTruthy(x: number): boolean {
+  return x !== 0;
+}
+
+/** Python `int(x)` for a float: truncation toward zero; NaN and +-inf raise (ValueError / OverflowError). */
+function pyInt(x: number): number {
+  if (isnan(x)) throw new RangeError("cannot convert float NaN to integer");
+  if (!Number.isFinite(x)) throw new RangeError("cannot convert float infinity to integer");
+  return Math.trunc(x) + 0; // Python ints have no -0
+}
+
+/** `math.log10(x)`: NaN passes through, x <= 0 raises ValueError (JS would return -inf or NaN). */
+function pyLog10(x: number): number {
+  if (x <= 0) throw new RangeError("math domain error");
+  return Math.log10(x);
+}
+
+/** `math.log2(x)`, raising like pyLog10. */
+function pyLog2(x: number): number {
+  if (x <= 0) throw new RangeError("math domain error");
+  return Math.log2(x);
+}
+
+/** `statistics.median(data)`: raises StatisticsError on no data (num.statsMedian returns NaN instead). */
+function pyStatsMedian(data: readonly number[]): number {
+  if (data.length === 0) throw new RangeError("no median for empty data");
+  return statsMedian(data);
+}
+
 /** `10 * log10(mean(10 ** (db / 10)))`: energy-average level of dB values (aggregator.py:357, :311). */
 function leqOf(db: readonly number[]): number {
   const power = db.map((v) => Math.pow(10.0, v / 10.0));
-  return 10.0 * Math.log10(npMean(power));
+  return 10.0 * pyLog10(npMean(power));
 }
 
 // ---------- Per-tick accumulators ----------
@@ -328,7 +362,7 @@ export class Aggregator {
     this.s = settings;
     this.sessionId = sessionId;
     this.source = source;
-    this.baseline = new RoomBaseline(Math.trunc(settings.room_baseline_s));
+    this.baseline = new RoomBaseline(pyInt(settings.room_baseline_s));
   }
 
   private resetTick(): void {
@@ -444,7 +478,7 @@ export class Aggregator {
     if (isnan(db)) return true;
     if (this.baseline.complete) return db >= this.baseline.dbBase + this.s.near_field_db;
     if (this.blockDb.length < NEAR_FIELD_MIN_BLOCKS) return true;
-    const med = statsMedian(this.blockDb.map(([, v]) => v));
+    const med = pyStatsMedian(this.blockDb.map(([, v]) => v));
     return db >= med + this.s.near_field_db;
   }
 
@@ -452,8 +486,10 @@ export class Aggregator {
 
   /** Start a fresh baseline: `capturing` from the operator, `auto` on a new source (aggregator.py:246). */
   startBaseline(seconds: number | null = null, mode: BaselineMode = "capturing"): BaselineSnapshot {
-    // `int(seconds or self.s.room_baseline_s)`: 0 and None both mean the configured length.
-    this.baseline = new RoomBaseline(Math.trunc(seconds || this.s.room_baseline_s), mode);
+    // `int(seconds or self.s.room_baseline_s)`: None, 0 and -0.0 mean the configured length; NaN is truthy in
+    // Python, so it reaches int() and raises (JS `||` would quietly take the default).
+    const len = seconds === null || !pyTruthy(seconds) ? this.s.room_baseline_s : seconds;
+    this.baseline = new RoomBaseline(pyInt(len), mode);
     return this.baseline.snapshot();
   }
 
@@ -473,13 +509,14 @@ export class Aggregator {
     const last = this.blockDb[this.blockDb.length - 1];
     if (last !== undefined) {
       const tEnd = last[0];
+      // Empty only when a block time is NaN; Python then raises StatisticsError.
       const recent = this.blockDb.filter(([t]) => t >= tEnd - DRIFT_WINDOW_S).map(([, v]) => v);
-      out.drift_db = pyRound(statsMedian(recent) - this.baseline.dbBase, 1);
+      out.drift_db = pyRound(pyStatsMedian(recent) - this.baseline.dbBase, 1);
     }
     const baseLux = this.baseline.luxBase;
     if (this.luxHist.length && baseLux > 0) {
-      const med = statsMedian(this.luxHist.map(([, v]) => v));
-      out.drift_lux_log2 = med > 0 ? pyRound(Math.log2(med / baseLux), 2) : null;
+      const med = pyStatsMedian(this.luxHist.map(([, v]) => v));
+      out.drift_lux_log2 = med > 0 ? pyRound(pyLog2(med / baseLux), 2) : null;
     }
     out.drifted =
       (out.drift_db !== null && Math.abs(out.drift_db) > DRIFT_DB) ||
@@ -574,11 +611,11 @@ export class Aggregator {
   ): void {
     const laughter = opts.laughter ?? 0;
     const compliments = opts.compliments ?? 0;
-    if (laughter) {
+    if (pyTruthy(laughter)) {
       this.laugh += laughter;
       this.simFields.add("laughter_count");
     }
-    if (compliments) {
+    if (pyTruthy(compliments)) {
       this.compl += compliments;
       this.simFields.add("compliments_count");
     }
@@ -693,11 +730,11 @@ export class Aggregator {
     const tallest = pyMax([...meanH.values()], NaN);
     const out = new Set<number>();
     for (const [pid, acc] of this.acc) {
-      if (
-        acc.frames >= this.s.participant_min_presence * this.videoFrames &&
-        (meanH.get(pid) as number) >= this.s.participant_rel_height * tallest
-      )
-        out.add(pid);
+      if (acc.frames < this.s.participant_min_presence * this.videoFrames) continue; // `and` short-circuits
+      const h = meanH.get(pid);
+      // `mean_h[pid]` for an accumulator with no frames (inject() fists with participant_min_presence <= 0)
+      if (h === undefined) throw new Error(`KeyError: ${pid}`);
+      if (h >= this.s.participant_rel_height * tallest) out.add(pid);
     }
     return out;
   }
@@ -735,17 +772,16 @@ export function roomRecord(
   const faces = people.map((p) => p.face_valence).filter((v) => !isnan(v));
   const sim = new Set<string>(simTick);
   for (const p of people) for (const f of p.simulated_fields) sim.add(f);
-  let fists = 0;
-  for (const p of people) fists += p.clenched_fists_count;
   return makeTickRecord({
     ...room,
     person_id: ROOM,
     display_id: "Room",
     simulated_fields: sortedStrings(sim),
-    clenched_fists_count: fists,
+    // builtin sum(): exact for int counts, compensated (3.12) if a count is a float
+    clenched_fists_count: pySum(people.map((p) => p.clenched_fists_count)),
     posture_slump: mean("posture_slump"),
     head_in_hands_frac: mean("head_in_hands_frac"),
-    social_withdrawal_flag: people.some((p) => p.social_withdrawal_flag) ? 1 : 0,
+    social_withdrawal_flag: people.some((p) => pyTruthy(p.social_withdrawal_flag)) ? 1 : 0, // any(): NaN counts
     motion_energy: mean("motion_energy"),
     face_valence: faces.length ? median(faces) : NaN,
     face_visible: people.length ? mean("face_visible") : 0.0,
@@ -801,6 +837,8 @@ function hmsIn(seconds: number, tz: string): [number, number, number] {
  * runtime's local zone (what Python's datetime.fromtimestamp uses).
  */
 export function localTod(wall: number, tz?: string): number {
+  // datetime.fromtimestamp raises ValueError on NaN and OverflowError on +-inf.
+  if (!Number.isFinite(wall)) throw new RangeError(`timestamp ${wall} out of range`);
   const secs = fromtimestampSeconds(wall);
   let h: number;
   let m: number;

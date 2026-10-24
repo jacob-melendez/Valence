@@ -25,12 +25,74 @@ export function restamp<T extends Obs>(obs: T, wall: number, t: number): T {
   return { ...obs, wall, t };
 }
 
-/** Observations of a features-only JSONL recording, in file order (recording.py:24 iter_obs, from text). */
+// ---------- JSONL text ----------
+
+/** Characters Python's `str.isspace()` accepts: what `line.strip()` removes (no U+FEFF, unlike JS trim). */
+const PY_SPACE =
+  "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000";
+const PY_STRIP = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "g");
+
+/** Python `str.strip()` with no arguments. */
+function pyStrip(s: string): string {
+  return s.replace(PY_STRIP, "");
+}
+
+// Stand-ins for json.loads' non-standard literals while JSON.parse runs (a raw NUL cannot occur in a JSON
+// string unescaped, so the escaped form below only collides with a string that itself spells it out).
+const NAN_TOKEN = "\u0000py:NaN";
+const POS_INF_TOKEN = "\u0000py:Infinity";
+const NEG_INF_TOKEN = "\u0000py:-Infinity";
+const LITERALS: readonly [string, string][] = [
+  ["-Infinity", NEG_INF_TOKEN],
+  ["Infinity", POS_INF_TOKEN],
+  ["NaN", NAN_TOKEN],
+];
+
+/**
+ * Python `json.loads(s)`: standard JSON plus the NaN, Infinity and -Infinity literals Python accepts (and
+ * writes when allow_nan is on). Plain JSON.parse first; only text it rejects is rescanned, replacing those
+ * literals outside string values. Python ints beyond 2**53 lose precision here.
+ */
+export function pyJsonLoads(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    if (!/NaN|Infinity/.test(text)) throw err;
+  }
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    if (ch === '"') {
+      const start = i++;
+      while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+      out += text.slice(start, ++i);
+      continue;
+    }
+    const lit = LITERALS.find(([word]) => text.startsWith(word, i));
+    if (lit !== undefined) {
+      out += JSON.stringify(lit[1]);
+      i += lit[0].length;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return JSON.parse(out, (_key, v: unknown) =>
+    v === NAN_TOKEN ? NaN : v === POS_INF_TOKEN ? Infinity : v === NEG_INF_TOKEN ? -Infinity : v,
+  );
+}
+
+/**
+ * Observations of a features-only JSONL recording, in file order (recording.py:24 iter_obs, from text).
+ * Lines split like a text-mode file (universal newlines: \n, \r\n and a lone \r), are stripped with
+ * Python's whitespace set, and parse with json.loads' rules (pyJsonLoads).
+ */
 export function parseJsonl(text: string): Obs[] {
   const out: Obs[] = [];
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (line) out.push(obsFromDict(JSON.parse(line) as Record<string, unknown>));
+  for (const raw of text.split(/\r\n|\r|\n/)) {
+    const line = pyStrip(raw);
+    if (line) out.push(obsFromDict(pyJsonLoads(line) as Record<string, unknown>));
   }
   return out;
 }
@@ -90,6 +152,11 @@ export interface ReplayOptions {
   wall0: number;
   mono0: number;
   settings?: Settings;
+  /**
+   * Tick length in seconds: replay_offline's own `tick_s` argument. Defaults to the settings' tick_s (the
+   * aggregator's when only `aggregator` is given); Python's default is a literal 5.0, the default tick_s.
+   */
+  tickS?: number;
   /** Aggregator session id (Python: the runtime's session id). */
   sessionId?: string;
   /** Record `source` ("replay" for recordings, as Runtime.use_recording sets it). */
@@ -108,7 +175,7 @@ export interface ReplayOptions {
  * (flush(wall, mono, local_tod(wall)), engine.py:71).
  */
 export function replayOffline(obs: Iterable<Obs>, opts: ReplayOptions): ReplayTick[] {
-  const settings = opts.settings ?? DEFAULT_SETTINGS;
+  const settings = opts.settings ?? opts.aggregator?.s ?? DEFAULT_SETTINGS;
   const agg =
     opts.aggregator ??
     new Aggregator(settings, opts.sessionId ?? "replay", opts.source ?? "replay");
@@ -127,7 +194,7 @@ export function replayOffline(obs: Iterable<Obs>, opts: ReplayOptions): ReplayTi
         opts.onTick?.(tick, ticks.length - 1);
       },
     },
-    { wall0: opts.wall0, mono0: opts.mono0, tickS: settings.tick_s },
+    { wall0: opts.wall0, mono0: opts.mono0, tickS: opts.tickS ?? settings.tick_s },
   );
   return ticks;
 }

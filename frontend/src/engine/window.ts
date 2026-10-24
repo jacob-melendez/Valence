@@ -26,6 +26,10 @@ export class RollingWindow {
   append(rec: TickRecord): void {
     let slot = this.slots.get(rec.person_id);
     if (slot === undefined) {
+      // deque(maxlen=...) is built here, on a slot's first row, and rejects a bad length; without the check
+      // a negative maxTicks would loop forever below
+      if (!Number.isInteger(this.maxTicks)) throw new TypeError("an integer is required");
+      if (this.maxTicks < 0) throw new RangeError("maxlen must be non-negative");
       slot = [];
       this.slots.set(rec.person_id, slot);
     }

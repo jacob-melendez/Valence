@@ -7,6 +7,8 @@
  * numbers within 1e-9 (only ambient_db goes through pow/log10, where V8 and numpy may differ in the last bit;
  * every other field is required to be bit-exact). Features at the checkpoints go through features.ts.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { Aggregator, localTod, roomRecord, type RoomFields } from "@/engine/aggregator";
 import {
@@ -20,6 +22,7 @@ import {
   ROOM,
   TICK_FIELDS,
   tickRecordToDict,
+  type Obs,
   type PersonObs,
   type Settings,
   type TickRecord,
@@ -29,7 +32,9 @@ import {
 import { compute, featureIndex, featuresFromWindow } from "@/engine/features";
 import { parseJsonl, replayInto, replayOffline, restamp, type ReplayTick } from "@/engine/replay";
 import { RollingWindow } from "@/engine/window";
-import { loadFixture, nn } from "./engine-fixtures";
+import { pyRepr } from "@/engine/num";
+import { sha256Hex } from "@/engine/sha";
+import { FRONTEND_ROOT, loadFixture, nn } from "./engine-fixtures";
 
 // ---------- Fixture ----------
 
@@ -616,5 +621,560 @@ describe("local time of day", () => {
     expect(localTod(1792850404.9999995, "America/New_York")).toBe(10.001388888888888);
     expect(localTod(1700000000.0, "America/New_York")).toBe(17.22222222222222);
     expect(localTod(1792850400.0, "Asia/Kolkata")).toBe(19.5);
+  });
+});
+
+// ---------- Adversarial parity probes ----------
+//
+// Inputs the golden fixture does not reach: operator actions mid-stream, Python truthiness on NaN and
+// -0.0, int() on the baseline length, inputs where Python raises, and JSONL text quirks. Every literal below
+// was produced by the .venv Python reference (valence/runtime/aggregator.py, recording.py, engine.py).
+
+/** Park-Miller minimal standard generator: exact in doubles (products stay below 2**47), same in Python. */
+class ParkMiller {
+  constructor(private s: number) {}
+  u(): number {
+    this.s = (this.s * 48271) % 2147483647;
+    return this.s / 2147483647;
+  }
+}
+
+const D_WALL0 = 1792850400.0;
+const D_MONO0 = 1000.0;
+const D_TICK_S = 5.0;
+const D_TICKS = 56;
+
+function diffPerson(rng: ParkMiller, pid: number, t: number): PersonObs {
+  const h = ({ 1: 0.8, 2: 0.6, 3: 0.25, 4: 0.7 } as Record<number, number>)[pid] as number;
+  const x1 = 0.1 * (pid - 1) + 0.05 * rng.u();
+  const y1 = 0.05 + 0.1 * rng.u();
+  const y2 = Math.min(1.0, y1 + h * (0.9 + 0.2 * rng.u()));
+  const late = pid === 1 && t > 200.0;
+  const vis = rng.u() < 0.8;
+  const nanval = rng.u() < 0.05;
+  const cue = (scale: number): number => (rng.u() < 0.1 ? NaN : (rng.u() * 2 - 1) * scale);
+  const fist_onsets = rng.u() < 0.02 ? 1 : 0;
+  const fist_active = rng.u() < 0.1;
+  const slump = rng.u() < (late ? 0.9 : 0.4);
+  const head_in_hands = rng.u() < 0.1;
+  const motion = rng.u() < 0.1 ? NaN : rng.u() * (late ? 0.01 : 0.05);
+  const face_valence = vis ? (nanval ? NaN : rng.u() * 2 - 1) : NaN;
+  const blink_onsets = rng.u() < 0.05 ? 1 : 0;
+  const p: Partial<PersonObs> & Pick<PersonObs, "track_id" | "bbox"> = {
+    track_id: pid,
+    bbox: [x1, y1, x1 + 0.3, y2],
+    fist_onsets,
+    fist_active,
+    slump,
+    head_in_hands,
+    motion,
+    face_visible: vis,
+    face_valence,
+    blink_onsets,
+  };
+  if (vis) {
+    p.brow_down = cue(0.3);
+    p.eye_open = cue(0.2);
+    p.mouth_frown = cue(0.3);
+    p.smile = cue(0.5);
+    p.head_yaw = cue(30.0);
+    p.head_pitch = cue(25.0);
+  }
+  return makePersonObs(p);
+}
+
+function diffPresent(rng: ParkMiller, pid: number, t: number): boolean {
+  if (pid === 1) return (t < 120.0 || t >= 160.0) && rng.u() >= 0.1;
+  if (pid === 2) return t >= 30.0 && t < 90.0 && rng.u() < 0.5;
+  if (pid === 3) return rng.u() < 0.9;
+  return t >= 10.0 && t < 10.5;
+}
+
+/** 10 Hz video and 1 Hz audio (at k + 0.05) in time order, generated in Python's evaluation order. */
+function diffStream(rng: ParkMiller): Obs[] {
+  const out: Obs[] = [];
+  let decoded = 0;
+  for (let i = 0; i < D_TICKS * D_TICK_S * 10; i++) {
+    const t = i * 0.1;
+    decoded = i === 1500 ? 1 : decoded + 1; // the capture restarts at t = 150
+    const persons: PersonObs[] = [];
+    for (const pid of [1, 2, 3, 4])
+      if (diffPresent(rng, pid, t)) persons.push(diffPerson(rng, pid, t));
+    const lux = rng.u() < 0.3 ? NaN : t > 250.0 ? 40.0 + rng.u() : 200.0 + 100.0 * rng.u();
+    out.push(
+      makeVideoObs({
+        t,
+        wall: D_WALL0 + t,
+        frame_seq: i,
+        frames_decoded: decoded,
+        lux,
+        lux_quality: rng.u(),
+        frame_w: 640,
+        frame_h: 480,
+        mirrored: true,
+        persons,
+      }),
+    );
+    if (i % 10 === 0) {
+      const k = i / 10;
+      const ta = k + 0.05;
+      const loud = k >= 100 && k <= 130;
+      const db = rng.u() < 0.05 ? NaN : loud ? 70.0 + rng.u() : 45.0 + 10.0 * rng.u();
+      const speech_prob = rng.u();
+      const laughter_onsets = rng.u() < 0.15 ? 1 : 0;
+      const compliment_hits = rng.u() < 0.1 ? 1 : 0;
+      out.push(
+        makeAudioObs({
+          t: ta,
+          wall: D_WALL0 + ta,
+          block_seq: k,
+          db_spl: db,
+          rms_power: 1e-5,
+          speech_prob,
+          laughter_onsets,
+          compliment_hits,
+        }),
+      );
+    }
+  }
+  return out.sort((a, b) => a.t - b.t); // stable, like list.sort(key=...)
+}
+
+/** Python `fmt`: None/True/False, strings as is, lists bracketed, every number as repr(float(v)). */
+function pyFmt(v: unknown): string {
+  if (v === null || v === undefined) return "None";
+  if (typeof v === "boolean") return v ? "True" : "False";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return `[${v.map(pyFmt).join(",")}]`;
+  return pyRepr(v as number);
+}
+
+/** Operator actions applied just before the flush of tick k. */
+function diffOps(agg: Aggregator, k: number, wall: number): object | null {
+  switch (k) {
+    case 3:
+      agg.startBaseline();
+      return null;
+    case 6:
+      agg.inject({ laughter: 2, compliments: 1, fists: { 1: 2, 9: 1 } });
+      return null;
+    case 8:
+      return agg.calibrate(60.0, 250.0);
+    case 10:
+      agg.luxOverride = 123.0;
+      return null;
+    case 12:
+      agg.luxOverride = null;
+      agg.seedHours(3.5, wall);
+      return null;
+    case 15:
+      agg.logBreak(1, wall);
+      return null;
+    case 20:
+      return agg.startBaseline(8);
+    case 24:
+      agg.logBreak(null, wall);
+      return null;
+    case 30:
+      agg.resetFrameCounter();
+      return null;
+    case 40:
+      agg.resetPeople();
+      return null;
+    case 45:
+      return agg.calibrate(null, 300.0);
+    case 50:
+      return agg.startBaseline(null, "auto");
+    default:
+      return null;
+  }
+}
+
+describe("aggregator under operator actions", () => {
+  // .venv/bin/python -B diff_ops.py: same stream and actions through valence.runtime.aggregator.Aggregator;
+  // per tick sha256(text)[:12] of every record (all fields but ambient_db), baseline_status(), the action's
+  // return value and the counters, numbers as repr(float(v)).
+  const PY_DIGESTS = [
+    "5a36b70032ff",
+    "31fbe55fb92c",
+    "e502e0518aa3",
+    "36722cfbec60",
+    "bf4a5c0b0b7b",
+    "6357311e7ba7",
+    "81a4e140ee40",
+    "dc7fe0e8cfac",
+    "acdaa746f383",
+    "9cb806c2d658",
+    "f824cef39d1c",
+    "ed3cd1cc4bea",
+    "e77c3207ad01",
+    "5aa377440560",
+    "3c0448b7448f",
+    "efc43d7b8725",
+    "b34cd4298ea1",
+    "7010b395f868",
+    "b831a6eb0b21",
+    "3da9859c2d6e",
+    "f7558f9d5ee3",
+    "ed835cb7b36f",
+    "b0195460ba1d",
+    "eddae89cfb55",
+    "9a8e51b2b4c4",
+    "79088ee34669",
+    "9e1861b72c40",
+    "114b6acc7930",
+    "4a6908eaa877",
+    "a0354559940f",
+    "fa0c22bfd7ff",
+    "4e7c6907b57e",
+    "3eba3b2e3653",
+    "003ce0775dd1",
+    "05de8a8f637b",
+    "fd9c4acef331",
+    "ddf0d6520632",
+    "728e52634284",
+    "2addd874d055",
+    "5df232fb8c73",
+    "96a895966709",
+    "51d4925f4da0",
+    "c3807e76d39b",
+    "46aa7cd8354e",
+    "d15872d0f5d1",
+    "a88602cb1490",
+    "9844c7dc2cb8",
+    "c377aa996781",
+    "b6566eac4cb9",
+    "3d86b697823e",
+    "2f10bd5c3ef5",
+    "7bc1c6b9c272",
+    "122b2e5823dd",
+    "78daa5c540e6",
+    "355dfc13bfa8",
+    "1703cc06274c",
+  ];
+  const PY_AMBIENT = [
+    50.68022474332462, 51.69811035754819, 50.97888736752562, 50.25582468209559, 51.14164823854025,
+    47.5550110773346, 50.815704632467416, 50.08224176345446, 51.233775370048235, 60.51446408805884,
+    60.141535998288546, 56.7164485822422, 57.205595661944066, 59.35058229025948, 60.7153537505894,
+    58.88162269847575, 59.18566246798481, 60.71741309848485, 58.9336993518443, 61.08258088698764,
+    79.2049201883319, 79.30064956564206, 79.3119667703674, 79.36206701350281, 79.38546920015023,
+    79.11952822705291, 73.1582448390843, 60.463603805686915, 60.1124949175233, 56.583586755195114,
+    58.51141961812218, 57.28057881118731, 61.14667337980325, 61.99247854752174, 60.712345088792325,
+    59.234131874929346, 60.41341483878273, 56.161492319944216, 62.00495089052734,
+    59.221932502171015, 60.72162489017754, 60.434258739322416, 61.58380956289923, 59.50054410220161,
+    60.669667364954414, 61.250401663099375, 57.66776297729666, 58.72201449943228,
+    60.564856546906455, 58.49246341447482, 58.53564321561479, 60.24781988559191, 57.5726427780529,
+    58.16649029851666, 59.6428459945094, 60.00614928270483,
+  ];
+  const PY_RECENT_LEVEL = 59.64215906891952;
+
+  const rng = new ParkMiller(20261024);
+  const agg = new Aggregator(
+    makeSettings({ room_baseline_s: 20, break_absent_min: 0.5, person_drop_min: 1.0 }),
+    "diff",
+    "live",
+  );
+  const obs = diffStream(rng);
+  const digests: string[] = [];
+  const texts: string[] = [];
+  const ambient: number[] = [];
+  let j = 0;
+  for (let k = 0; k < D_TICKS; k++) {
+    const b = (k + 1) * D_TICK_S;
+    while (j < obs.length && (obs[j] as Obs).t < b) agg.push(obs[j++] as Obs);
+    const wall = D_WALL0 + b;
+    const op = diffOps(agg, k, wall);
+    const recs = agg.flush(wall, D_MONO0 + b, 14.0 + b / 3600.0);
+    const parts = recs.map((r) => {
+      const d = tickRecordToDict(r) as unknown as Record<string, unknown>;
+      return TICK_FIELDS.filter((f) => f !== "ambient_db")
+        .map((f) => pyFmt(d[f]))
+        .join(";");
+    });
+    parts.push(
+      Object.entries(agg.baselineStatus())
+        .map(([key, v]) => `${key}=${pyFmt(v)}`)
+        .join(";"),
+    );
+    parts.push(
+      op === null
+        ? ""
+        : Object.entries(op)
+            .map(([key, v]) => `${key}=${pyFmt(v)}`)
+            .join(";"),
+    );
+    parts.push(
+      pyFmt([
+        agg.gatedOut,
+        agg.framesDecoded,
+        agg.videoFramesTotal,
+        agg.audioBlocksTotal,
+        [...agg.latestBoxes.keys()].sort((a, b2) => a - b2),
+        agg.hoursSinceBreak(1, wall),
+        agg.hoursSinceBreak(4, wall),
+      ]),
+    );
+    const text = parts.join("\n");
+    texts.push(text);
+    digests.push(sha256Hex(text).slice(0, 12));
+    ambient.push((recs[0] as TickRecord).ambient_db);
+  }
+
+  it("generates the same observation stream as the Python script", () => {
+    expect(obs.length).toBe(3080);
+  });
+
+  it("matches the reference records, baseline status and counters on every tick", () => {
+    expect(digests.length).toBe(PY_DIGESTS.length);
+    const first = digests.findIndex((d, i) => d !== PY_DIGESTS[i]);
+    expect(first === -1 ? "all ticks match" : `tick ${first}:\n${texts[first] ?? ""}`).toBe(
+      "all ticks match",
+    );
+  });
+
+  it("keeps the pow/log10 Leq within 1e-9 of numpy", () => {
+    expect(ambient.length).toBe(PY_AMBIENT.length);
+    ambient.forEach((a, i) =>
+      expect(Math.abs(a - (PY_AMBIENT[i] as number))).toBeLessThanOrEqual(1e-9),
+    );
+    expect(Math.abs(agg.recentLevel() - PY_RECENT_LEVEL)).toBeLessThanOrEqual(1e-9);
+  });
+});
+
+describe("aggregator off the golden path", () => {
+  const ROOM_BASE: RoomFields = {
+    tick: 0,
+    ts: 1.0,
+    t_mono: 1.0,
+    session_id: "s",
+    n_people: 2,
+    source: "live",
+    ambient_db: NaN,
+    db_p90: NaN,
+    light_lux: NaN,
+    lux_quality: 0.0,
+    room_db_base: NaN,
+    room_lux_base: NaN,
+    laughter_count: 0,
+    compliments_count: 0,
+    tod_h: 1.0,
+  };
+  const rec = (pid: number, flag: number, fists: number): TickRecord =>
+    makeTickRecord({
+      ...ROOM_BASE,
+      person_id: pid,
+      display_id: `Person #${pid}`,
+      social_withdrawal_flag: flag,
+      clenched_fists_count: fists,
+    });
+
+  it("treats NaN as truthy and -0.0 as falsy in inject(), like Python's `if laughter:`", () => {
+    // agg.inject(laughter=nan) -> laughter_count nan, simulated ['laughter_count']
+    let agg = new Aggregator(makeSettings(), "s");
+    agg.inject({ laughter: NaN });
+    let room = agg.flush(10.0, 1.0, 12.0)[0] as TickRecord;
+    expect(room.laughter_count).toBeNaN();
+    expect(room.simulated_fields).toEqual(["laughter_count"]);
+    // agg.inject(laughter=-0.0, compliments=nan) -> 0, nan, ['compliments_count']
+    agg = new Aggregator(makeSettings(), "s");
+    agg.inject({ laughter: -0.0, compliments: NaN });
+    room = agg.flush(10.0, 1.0, 12.0)[0] as TickRecord;
+    expect(Object.is(room.laughter_count, 0)).toBe(true);
+    expect(room.compliments_count).toBeNaN();
+    expect(room.simulated_fields).toEqual(["compliments_count"]);
+  });
+
+  it("raises the room withdrawal flag on a NaN flag and sums counts like Python's sum()", () => {
+    // room_record(base, [a(nan, 0.1), b(0, 0.2), c(-0.0, 0.3)]) -> flag 1, fists 0.6 (3.12 compensated sum)
+    const r = roomRecord(ROOM_BASE, [rec(1, NaN, 0.1), rec(2, 0, 0.2), rec(3, -0.0, 0.3)]);
+    expect(r.social_withdrawal_flag).toBe(1);
+    expect(r.clenched_fists_count).toBe(0.6);
+    // room_record(base, [b, c]) -> 0, 0.5; room_record(base, []) -> fists 0
+    const r2 = roomRecord(ROOM_BASE, [rec(2, 0, 0.2), rec(3, -0.0, 0.3)]);
+    expect([r2.social_withdrawal_flag, r2.clenched_fists_count]).toEqual([0, 0.5]);
+    expect(Object.is(roomRecord(ROOM_BASE, []).clenched_fists_count, 0)).toBe(true);
+  });
+
+  it("sizes the baseline with int(seconds or room_baseline_s)", () => {
+    const agg = new Aggregator(makeSettings({ room_baseline_s: 10 }), "s");
+    // None, 0, 0.0, -0.0 -> 10; 2.9 -> 2; -2.9 -> -2; 1e-09 -> 0
+    const cases: [number | null, number][] = [
+      [null, 10],
+      [0, 10],
+      [-0.0, 10],
+      [2.9, 2],
+      [-2.9, -2],
+      [1e-9, 0],
+    ];
+    for (const [s, want] of cases) expect(agg.startBaseline(s).target_samples).toBe(want);
+    // ValueError: cannot convert float NaN to integer; OverflowError: cannot convert float infinity to integer
+    expect(() => agg.startBaseline(NaN)).toThrow();
+    expect(() => agg.startBaseline(Infinity)).toThrow();
+    expect(new Aggregator(makeSettings({ room_baseline_s: 2.5 }), "s").baseline.target).toBe(2);
+    expect(new Aggregator(makeSettings({ room_baseline_s: -1.5 }), "s").baseline.target).toBe(-1);
+    expect(() => new Aggregator(makeSettings({ room_baseline_s: NaN }), "s")).toThrow();
+    expect(() => new Aggregator(makeSettings({ room_baseline_s: Infinity }), "s")).toThrow();
+  });
+
+  it("fails like Python's KeyError when an injected-only person passes a zero presence bar", () => {
+    const agg = new Aggregator(makeSettings({ participant_min_presence: 0.0 }), "s");
+    agg.push(
+      makeVideoObs({
+        t: 0.0,
+        wall: 100.0,
+        frame_seq: 1,
+        persons: [makePersonObs({ track_id: 1, bbox: [0.1, 0.1, 0.5, 0.9] })],
+      }),
+    );
+    agg.inject({ fists: { 7: 1 } });
+    expect(() => agg.flush(105.0, 5.0, 12.0)).toThrow(/7/); // KeyError: 7
+  });
+
+  it("raises where Python's statistics.median and math.log10 raise", () => {
+    // obs.t NaN leaves no block inside the drift window: StatisticsError no median for empty data
+    let agg = new Aggregator(makeSettings({ room_baseline_s: 2 }), "s");
+    agg.push(makeAudioObs({ t: 0.0, wall: 1.0, block_seq: 0, db_spl: 50.0, rms_power: 1.0 }));
+    agg.push(makeAudioObs({ t: NaN, wall: 1.0, block_seq: 1, db_spl: 50.0, rms_power: 1.0 }));
+    expect(() => agg.baselineStatus()).toThrow();
+    // every block's power underflows to 0.0: ValueError math domain error. The failed flush keeps the
+    // tick's blocks (no _reset_tick), so Python fails again on every later flush, as here.
+    agg = new Aggregator(makeSettings(), "s");
+    agg.dbCorrection = -1e6;
+    agg.push(makeAudioObs({ t: 0.0, wall: 1.0, block_seq: 0, db_spl: 50.0, rms_power: 1.0 }));
+    expect(() => agg.flush(5.0, 5.0, 1.0)).toThrow(/math domain error/);
+    expect(() => agg.recentLevel()).toThrow(/math domain error/);
+    agg.dbCorrection = 0.0;
+    expect(() => agg.flush(10.0, 10.0, 1.0)).toThrow(/math domain error/);
+    // a lux drift ratio that underflows to 0.0: math.log2 raises ValueError math domain error
+    agg = new Aggregator(makeSettings({ room_baseline_s: 1 }), "s");
+    agg.push(makeAudioObs({ t: 0.0, wall: 1.0, block_seq: 0, db_spl: 50.0, rms_power: 1.0 }));
+    [1e300, 1e-300, 1e-300].forEach((lux, i) =>
+      agg.push(makeVideoObs({ t: i, wall: 1.0 + i, frame_seq: i, lux, lux_quality: 1.0 })),
+    );
+    expect(() => agg.baselineStatus()).toThrow(/math domain error/);
+  });
+
+  it("keeps failing like Python when injected fists meet a frame with nobody in it", () => {
+    // POST /api/sim/event {fists: {1: 2}} with the camera on and nobody in frame: max() of an empty mean_h
+    // raises ValueError, and since _reset_tick never runs every later flush raises too (a reference bug).
+    const agg = new Aggregator(makeSettings(), "s");
+    agg.push(makeVideoObs({ t: 0.0, wall: 100.0, frame_seq: 1 }));
+    agg.inject({ fists: { 1: 2 } });
+    expect(() => agg.flush(105.0, 5.0, 12.0)).toThrow(/empty/);
+    expect(() => agg.flush(110.0, 10.0, 12.0)).toThrow(/empty/);
+  });
+
+  it("propagates a NaN calibration the way Python does", () => {
+    const agg = new Aggregator(makeSettings(), "s");
+    agg.push(makeAudioObs({ t: 0.0, wall: 1.0, block_seq: 0, db_spl: 50.0, rms_power: 1.0 }));
+    expect(agg.recentLevel(-1.0)).toBeNaN(); // recent_level(-1.0) -> nan (mean of nothing)
+    agg.push(makeAudioObs({ t: 1.0, wall: 2.0, block_seq: 1, db_spl: 52.0, rms_power: 1.0 }));
+    const out = agg.calibrate(NaN); // {'db_correction': nan}
+    expect(Object.keys(out)).toEqual(["db_correction"]);
+    expect(out.db_correction).toBeNaN();
+    agg.push(
+      makeAudioObs({
+        t: 2.0,
+        wall: 3.0,
+        block_seq: 2,
+        db_spl: 52.0,
+        rms_power: 1.0,
+        laughter_onsets: 1,
+      }),
+    );
+    const r = agg.flush(5.0, 5.0, 1.0)[0] as TickRecord;
+    // ambient_db nan, db_p90 nan, laughter 1, gated_out 0, room_db_base nan
+    expect(r.ambient_db).toBeNaN();
+    expect(r.db_p90).toBeNaN();
+    expect([r.laughter_count, agg.gatedOut]).toEqual([1, 0]);
+    expect(r.room_db_base).toBeNaN();
+  });
+
+  it("follows DST changes and odd offsets in named zones like localtime()", () => {
+    // TZ=<zone> python -c "from valence.runtime.engine import local_tod; ...". Post-1970 only: earlier
+    // offsets come from the tz database build (ICU here, system zoneinfo for Python) and can differ.
+    const cases: [string, number, number][] = [
+      ["America/New_York", 1699164000.0, 1.0],
+      ["America/New_York", 1699167599.5, 1.9997222222222222], // fall back: last second of the first 1 am
+      ["America/New_York", 1699167600.0, 2.0],
+      ["America/New_York", 1710053999.5, 1.9997222222222222], // spring forward
+      ["America/New_York", 1710054000.0, 3.0],
+      ["Australia/Lord_Howe", 1699167599.5, 17.999722222222225], // half-hour DST
+      ["Pacific/Chatham", 1699164000.0, 19.75], // +13:45
+      ["Pacific/Chatham", 1e9 + 0.9999996, 14.528055555555556],
+      ["Asia/Kolkata", 1e9 + 0.9999996, 7.2780555555555555],
+      ["Africa/Monrovia", 64060588799.0, 23.999722222222225],
+    ];
+    for (const [tz, wall, want] of cases) expect(localTod(wall, tz), `${tz} ${wall}`).toBe(want);
+  });
+
+  it("rejects a non-finite timestamp like datetime.fromtimestamp", () => {
+    // ValueError Invalid value NaN (not a number); OverflowError timestamp out of range for platform time_t
+    expect(() => localTod(NaN, "UTC")).toThrow();
+    expect(() => localTod(Infinity, "UTC")).toThrow();
+    expect(() => localTod(-Infinity)).toThrow();
+  });
+});
+
+describe("jsonl recordings like recording.iter_obs", () => {
+  const A0 = '{"type":"audio","t":0.0,"wall":5.0,"block_seq":0,"db_spl":NaN,"rms_power":1e-5}';
+  const A1 = '{"type":"audio","t":1.0,"wall":6.0,"block_seq":1,"db_spl":Infinity,"rms_power":1e-5}';
+  const A2 =
+    '{"type":"audio","t":2.0,"wall":7.0,"block_seq":2,"db_spl":-Infinity,"rms_power":1e-5}';
+
+  it("splits universal newlines and reads json.loads' NaN and Infinity literals", () => {
+    // a file of "\r"-separated lines plus a trailing "\r\n  \r" -> 3 obs, db_spl [nan, inf, -inf]
+    const obs = parseJsonl([A0, A1, A2].join("\r") + "\r\n  \r");
+    expect(obs.map((o) => (o.type === "audio" ? o.db_spl : 0))).toEqual([NaN, Infinity, -Infinity]);
+  });
+
+  it("strips the whitespace str.strip() strips and nothing else", () => {
+    // "\x1c" + line + "\x85\n\u3000\n" -> 1 obs
+    expect(parseJsonl("\x1c" + A0 + "\x85\n\u3000\n").length).toBe(1);
+    // a UTF-8 BOM is not whitespace to Python: JSONDecodeError
+    expect(() => parseJsonl("\ufeff" + A0 + "\n")).toThrow();
+  });
+
+  it("keeps NaN-looking text inside strings untouched", () => {
+    // json.loads keeps "x": "NaN Infinity" as a string; obs_from_dict then raises TypeError on the unknown
+    // field (AudioObs.__init__() got an unexpected keyword argument 'x'), and so must parseJsonl.
+    expect(() => parseJsonl(A0.replace("}", ',"x":"NaN Infinity"}'))).toThrow(/unexpected field/);
+  });
+});
+
+describe("offline replay tick length", () => {
+  it("takes tick_s as its own argument, defaulting to the settings' tick", () => {
+    const obs = [0.0, 1.0, 2.5, 4.0].map((t, i) =>
+      makeAudioObs({ t, wall: t, block_seq: i, db_spl: 50.0, rms_power: 1.0 }),
+    );
+    // replay_offline(rt, path, tick_s=2.0) steps at mono 2, 4, 6
+    expect(
+      replayOffline(obs, { wall0: 0, mono0: 0, tickS: 2.0, tz: "UTC" }).map((t) => t.mono),
+    ).toEqual([2, 4, 6]);
+    expect(
+      replayOffline(obs, {
+        wall0: 0,
+        mono0: 0,
+        settings: makeSettings({ tick_s: 3.0 }),
+        tz: "UTC",
+      }).map((t) => t.mono),
+    ).toEqual([3, 6]);
+  });
+});
+
+describe("real capture files", () => {
+  it("parse to the observations recording.iter_obs reads from the same files", () => {
+    // The golden recording cases hold obs_to_dict(iter_obs(data/real/<name>.jsonl)), untrimmed (all < 6 min).
+    const recordings = fixture.cases.filter((c) => c.kind === "recording");
+    expect(recordings.length).toBe(7);
+    for (const c of recordings) {
+      const text = readFileSync(
+        path.resolve(FRONTEND_ROOT, "../data/real", `${c.name}.jsonl`),
+        "utf8",
+      );
+      const got = parseJsonl(text).map((o) => obsToDict(o));
+      expect(got.length, c.name).toBe(c.obs.length);
+      expect(got, c.name).toEqual(c.obs);
+    }
   });
 });

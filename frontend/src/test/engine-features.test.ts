@@ -19,9 +19,12 @@ import {
   PERSON_FIELDS,
   arraysFromRecords,
   compute,
+  featureIndex,
+  featureSet,
   featuresFromWindow,
   selectFeatures,
 } from "@/engine/features";
+import { parseLightGBMText } from "@/engine/lgbm";
 import { isnan, ulpDistance } from "@/engine/num";
 import { ROOM, RollingWindow } from "@/engine/window";
 import { artifactJson, artifactText, loadFixture, nn } from "./engine-fixtures";
@@ -362,6 +365,210 @@ describe("compute edge cases against Python", () => {
     expect(arraysFromRecords(rows, ["ambient_db"]).ambient_db).toEqual(
       Float64Array.from([50, 51, 52]),
     );
+  });
+});
+
+// ---------- Beyond the fixtures ----------
+// Inputs the golden replay never produces, each found by an adversarial review against the Python code.
+// The expected values are literals printed by .venv/bin/python running valence/features/compute.py.
+
+/** A plain person window: n ticks, every channel constant. */
+function plainPerson(n: number, tod = 14.0): Record<string, Float64Array> {
+  const full = (v: number): Float64Array => new Float64Array(n).fill(v);
+  return {
+    motion_energy: full(0.03),
+    posture_slump: full(0.2),
+    head_in_hands_frac: full(0),
+    clenched_fists_count: full(0),
+    social_withdrawal_flag: full(0),
+    n_people: full(1),
+    hours_since_break: full(1.5),
+    tod_h: full(tod),
+    face_valence: full(0.1),
+    face_visible: full(1),
+  };
+}
+
+/** A room window with the given dB series, constant light and a 0 dB / luxBase baseline. */
+function plainRoom(db: number[], lux?: number[], luxBase = 300.0): Record<string, Float64Array> {
+  const n = db.length;
+  const full = (v: number): Float64Array => new Float64Array(n).fill(v);
+  return {
+    ambient_db: Float64Array.from(db),
+    light_lux: lux ? Float64Array.from(lux) : full(320),
+    laughter_count: full(0),
+    compliments_count: full(0),
+    room_db_base: full(0),
+    room_lux_base: full(luxBase),
+  };
+}
+
+/** `v` moved k ulps along the doubles (finite v). */
+function stepUlps(v: number, k: number): number {
+  const dv = new DataView(new ArrayBuffer(8));
+  dv.setFloat64(0, v);
+  const bits = dv.getBigInt64(0);
+  const ord = (bits < 0n ? -(bits & 0x7fffffffffffffffn) : bits) + BigInt(k);
+  dv.setBigUint64(0, ord < 0n ? -ord | (1n << 63n) : ord);
+  return dv.getFloat64(0);
+}
+
+describe("inputs beyond the golden fixtures", () => {
+  const at = (x: Float64Array, name: string): number => x[FEATURE_INDEX[name] as number] as number;
+
+  it("returns the zero numpy's SIMD fmax reduction returns for a zero max", () => {
+    // Python: compute(person, room) with these ambient_db series; '-0' is -0.0
+    const cases: [string, number[], number[]][] = [
+      ["first zero wins below 8 values", [-0.0, 0.0], [-0, -0, -0, -0]],
+      ["one 8-lane vector replaces the seed", [0.0, ...Array<number>(8).fill(-0.0)], [-0, -0, -0, -0]],
+      [
+        "150 ticks of zeros and NaNs",
+        Array.from({ length: 150 }, (_v, i) => (i % 7 === 0 ? NaN : i % 3 === 0 ? 0.0 : -0.0)),
+        [0, 0, 0, 0],
+      ],
+      [
+        "75 ticks through the 64-value unrolled step",
+        Array.from({ length: 75 }, (_v, i) => (i % 5 === 0 ? -1.0 : i % 4 ? -0.0 : 0.0)),
+        [-0, -0, -0, -0],
+      ],
+    ];
+    for (const [label, db, want] of cases) {
+      const x = compute(plainPerson(db.length), plainRoom(db));
+      const got = ["db_max_1m", "db_max_5m", "db_max_15m", "db_room_max_5m"].map((n) => at(x, n));
+      got.forEach((g, i) => expect(Object.is(g, want[i]), `${label}: ${g} vs ${want[i]}`).toBe(true));
+    }
+  });
+
+  it("raises where math.sin and math.log2 raise instead of returning NaN or -Infinity", () => {
+    // Python: ValueError('math domain error') for each of these
+    expect(() => compute(plainPerson(3, 1e308), plainRoom([50, 50, 50]))).toThrow("math domain error");
+    expect(() => compute(plainPerson(3, -2.9e307), plainRoom([50, 50, 50]))).toThrow("math domain error");
+    expect(() => compute(plainPerson(3, Infinity), plainRoom([50, 50, 50]))).toThrow("math domain error");
+    for (const [lux, base] of [
+      [320.0, Infinity], // 320 / inf == 0
+      [5e-324, 2.0], // underflows to 0
+      [1e-300, 1e300],
+    ] as const)
+      expect(() => compute(plainPerson(3), plainRoom([50, 50, 50], [lux, lux, lux], base))).toThrow(
+        "math domain error",
+      );
+  });
+
+  it("keeps the infinite and NaN light ratios math.log2 lets through", () => {
+    // Python: tod 2.86e307 -> (0.94280732448637, -0.33333818997356524); inf/inf -> nan; inf/300 and 1e300/1e-300 -> inf
+    const x = compute(plainPerson(3, 2.86e307), plainRoom([50, 50, 50]));
+    expect(ulpDistance(at(x, "tod_sin"), 0.94280732448637)).toBeLessThanOrEqual(MAX_ULPS);
+    expect(ulpDistance(at(x, "tod_cos"), -0.33333818997356524)).toBeLessThanOrEqual(MAX_ULPS);
+    const lux = (l: number, base: number): number[] => {
+      const y = compute(plainPerson(3), plainRoom([50, 50, 50], [l, l, l], base));
+      return ["lux_room_now", "lux_room_mean_5m", "lux_room_mean_15m"].map((n) => at(y, n));
+    };
+    expect(lux(Infinity, Infinity)).toEqual([NaN, NaN, NaN]);
+    expect(lux(Infinity, 300)).toEqual([Infinity, Infinity, Infinity]);
+    expect(lux(1e300, 1e-300)).toEqual([Infinity, Infinity, Infinity]);
+  });
+
+  it("reads a null record field as NaN, like np.array(..., dtype=float)", () => {
+    // Python: np.array([None, 1, True], dtype=float) -> [nan, 1.0, 1.0]
+    const rows = [null, 1, true].map(
+      (v, tick) =>
+        ({
+          ...makeTickRecord({
+            tick,
+            ts: tick * 5,
+            t_mono: tick * 5,
+            session_id: "s",
+            person_id: 1,
+            display_id: "Person #1",
+            n_people: 1,
+          }),
+          face_valence: v,
+        }) as unknown as TickRecord,
+    );
+    expect([...arraysFromRecords(rows, ["face_valence"]).face_valence]).toEqual([NaN, 1, 1]);
+  });
+
+  it("rejects a negative or fractional window length on the first append, as deque(maxlen=...) does", () => {
+    const row = makeTickRecord({
+      tick: 0,
+      ts: 0,
+      t_mono: 0,
+      session_id: "s",
+      person_id: 4,
+      display_id: "Person #4",
+      n_people: 1,
+    });
+    // Python: RollingWindow(-1) and RollingWindow(2.5) construct; append raises ValueError / TypeError
+    for (const bad of [-1, 2.5]) {
+      const w = new RollingWindow(bad);
+      expect(w.people()).toEqual([]);
+      expect(() => w.append(row)).toThrow(bad < 0 ? "maxlen must be non-negative" : "an integer is required");
+    }
+    // Python: RollingWindow(0) keeps an empty slot -> people() [4], snapshot(4) [], fill_minutes(4) 0.0
+    const w0 = new RollingWindow(0);
+    w0.append(row);
+    expect(w0.people()).toEqual([4]);
+    expect(w0.snapshot(4)).toEqual([]);
+    expect(w0.fillMinutes(4)).toBe(0);
+  });
+
+  it("treats Object method names as unknown features and sets, like a Python KeyError", () => {
+    for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(FEATURE_INDEX[name], name).toBeUndefined();
+      expect(FEATURE_SETS[name], name).toBeUndefined();
+      expect(() => featureIndex(name)).toThrow();
+      expect(() => featureSet(name)).toThrow();
+    }
+  });
+
+  it("keeps the last-bit sin/cos rounding gap from flipping any served split for every whole-second tod", () => {
+    // Live tod_h is local_tod(): h + m/60 + s/3600, so all 86400 values can be checked. V8 and glibc differ by
+    // 1 ulp on about 3% of them; a decision `x <= t` (or a clip bound) can only flip if t lies within the
+    // 2-ulp band around the V8 value.
+    // The sweep evaluates compute()'s formula directly (compute() itself is too slow for 86400 calls in
+    // jsdom); every 97th second goes through compute() to tie the two together.
+    const live = { tod_sin: new Float64Array(86400), tod_cos: new Float64Array(86400) };
+    for (let k = 0; k < 86400; k++) {
+      const h = Math.floor(k / 3600);
+      const m = Math.floor((k % 3600) / 60);
+      const tod = h + m / 60.0 + (k % 60) / 3600.0;
+      live.tod_sin[k] = Math.sin((2 * Math.PI * tod) / 24);
+      live.tod_cos[k] = Math.cos((2 * Math.PI * tod) / 24);
+      if (k % 97 === 0) {
+        const x = compute(plainPerson(1, tod), plainRoom([50]));
+        expect(at(x, "tod_sin")).toBe(live.tod_sin[k]);
+        expect(at(x, "tod_cos")).toBe(live.tod_cos[k]);
+      }
+    }
+    for (const dir of ["", "all/"]) {
+      const booster = parseLightGBMText(artifactText(`${dir}m2.txt`));
+      const bounds = artifactJson<Record<string, number[]>>(`${dir}clip_bounds.json`);
+      for (const feat of ["tod_sin", "tod_cos"] as const) {
+        const fi = booster.featureNames.indexOf(feat);
+        const cuts: number[] = [...(bounds[feat] ?? [])];
+        for (const t of booster.trees)
+          t.split_feature.forEach((f, i) => {
+            if (f === fi) cuts.push(t.threshold[i] as number);
+          });
+        expect(cuts.length, `${dir}m2 ${feat}`).toBeGreaterThan(100);
+        cuts.sort((a, b) => a - b);
+        let near = 0;
+        for (const v of live[feat]) {
+          const lo = stepUlps(v, -MAX_ULPS);
+          const hi = stepUlps(v, MAX_ULPS);
+          // first cut >= lo
+          let a = 0;
+          let b = cuts.length;
+          while (a < b) {
+            const mid = (a + b) >> 1;
+            if ((cuts[mid] as number) < lo) a = mid + 1;
+            else b = mid;
+          }
+          if (a < cuts.length && (cuts[a] as number) < hi) near++;
+        }
+        expect(near, `${dir}m2 ${feat}: cuts within ${MAX_ULPS} ulps of a live value`).toBe(0);
+      }
+    }
   });
 });
 

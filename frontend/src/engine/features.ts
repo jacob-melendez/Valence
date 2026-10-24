@@ -5,10 +5,12 @@
  * slot's window (room history is continuous even when the person just arrived). Missing values stay NaN.
  * The 123 features come out in FEATURE_NAMES order as a Float64Array.
  *
- * Parity: every reduction goes through num.ts (numpy's pairwise sums, two-pass nanstd, nanmedian) and the
- * ewm weights come from a table of numpy's own values, so 118 of the 123 features are bit-identical to
- * Python. tod_sin/tod_cos (math.sin/cos) and lux_room_* (math.log2) go through V8's Math functions, which
- * round differently from glibc in the last bit for a few percent of inputs; see Elementary functions.
+ * Parity: every reduction goes through num.ts (numpy's pairwise sums, two-pass nanstd, nanmedian), the
+ * ewm weights come from a table of numpy's own values and the max features copy numpy's SIMD fmax reduction
+ * (fmaxReduce, for the sign of a zero max), so 118 of the 123 features are bit-identical to Python.
+ * tod_sin/tod_cos (math.sin/cos) and lux_room_* (math.log2) go through V8's Math functions, which round
+ * differently from glibc in the last bit for a few percent of inputs; see Elementary functions. Inputs that
+ * make Python raise (an empty person window, a missing channel, math.sin(inf), math.log2(0)) throw here.
  * Golden values: scripts/export_web_golden.py -> src/test/fixtures/engine/features.json.gz.
  */
 import type { TickRecord } from "./contracts";
@@ -16,7 +18,6 @@ import {
   allNaN,
   isnan,
   nanToNum,
-  nanmax,
   nanmean,
   nanmedian,
   nanstd,
@@ -141,9 +142,17 @@ export const FEATURE_NAMES: readonly string[] = (() => {
 })();
 /** Number of features (123). */
 export const N_FEATURES = FEATURE_NAMES.length;
+/**
+ * A dict-like lookup table: no prototype, so `table["constructor"]` or `table["toString"]` is undefined
+ * (a Python KeyError) instead of an inherited Object method.
+ */
+function dict<V>(entries: Iterable<readonly [string, V]>): Record<string, V> {
+  return Object.assign(Object.create(null) as Record<string, V>, Object.fromEntries(entries));
+}
+
 /** Feature name -> index in the vector (valence/features/compute.py:54). */
-export const FEATURE_INDEX: Readonly<Record<string, number>> = Object.fromEntries(
-  FEATURE_NAMES.map((n, i) => [n, i]),
+export const FEATURE_INDEX: Readonly<Record<string, number>> = dict(
+  FEATURE_NAMES.map((n, i) => [n, i] as const),
 );
 
 /** Index of a feature; throws on an unknown name (Python: KeyError). */
@@ -200,15 +209,15 @@ const M2 = [...ABS_M2.filter((n) => !ABS_ROOM.includes(n)), ...ROOM_REL];
 export const CONTEXT: readonly string[] = M2.filter((n) => !FACE_FEATURES.includes(n));
 
 /** Feature sets of the model ladder, docs/PLAN.md "Model ladder" (valence/features/compute.py:69). */
-export const FEATURE_SETS: Readonly<Record<string, readonly string[]>> = {
-  m0: ["face_now", "face_visible_now"],
-  m0t: FACE_FEATURES,
-  m1: SNAPSHOT,
-  m2_noface: CONTEXT,
-  m2_abs: ABS_M2, // absolute dB/lux instead of room-relative (ablation)
-  m2_notime: M2.filter((n) => !["hours_since_break", "tod_sin", "tod_cos"].includes(n)),
-  m2: M2,
-};
+export const FEATURE_SETS: Readonly<Record<string, readonly string[]>> = dict<readonly string[]>([
+  ["m0", ["face_now", "face_visible_now"]],
+  ["m0t", FACE_FEATURES],
+  ["m1", SNAPSHOT],
+  ["m2_noface", CONTEXT],
+  ["m2_abs", ABS_M2], // absolute dB/lux instead of room-relative (ablation)
+  ["m2_notime", M2.filter((n) => !["hours_since_break", "tod_sin", "tod_cos"].includes(n))],
+  ["m2", M2],
+]);
 
 /** A named feature set; throws on an unknown one (Python: KeyError). */
 export function featureSet(name: string): readonly string[] {
@@ -236,7 +245,12 @@ export function arraysFromRecords<F extends NumericField>(
   fields: readonly F[],
 ): Record<F, Float64Array> {
   const out = {} as Record<F, Float64Array>;
-  for (const f of fields) out[f] = Float64Array.from(records, (r) => r[f] as number);
+  // dtype=float turns None into nan; a typed array would turn null into 0
+  for (const f of fields)
+    out[f] = Float64Array.from(records, (r) => {
+      const v = r[f] as number | null | undefined;
+      return v === null || v === undefined ? NaN : Number(v);
+    });
   return out;
 }
 
@@ -249,7 +263,7 @@ function need(d: Readonly<Record<string, Float64Array | undefined>>, key: string
 
 /** `x[-1]`; throws on an empty array like Python's IndexError. */
 function last(x: Float64Array): number {
-  if (x.length === 0) throw new RangeError("index out of range: empty window");
+  if (x.length === 0) throw new RangeError("index out of range: empty window"); // Python: IndexError
   return x[x.length - 1] as number;
 }
 
@@ -367,11 +381,24 @@ function ewmWeight(age: number, halfLife: number): number {
   return EWM_WEIGHTS[halfLife]?.[age] ?? Math.pow(0.5, age / halfLife);
 }
 
+/**
+ * CPython's `math_1` wrapper (Modules/mathmodule.c) around a libm call, with can_overflow = 0: a NaN result
+ * from a non-NaN input, or an infinite result from a finite input, raises ValueError("math domain error").
+ * That is how `math.sin(inf)` and `math.log2(0.0)` fail in compute(); the port throws at the same inputs
+ * instead of returning NaN / -Infinity.
+ */
+function math1(fn: (x: number) => number, x: number): number {
+  const r = fn(x);
+  if (isnan(r) ? !isnan(x) : !Number.isFinite(r) && Number.isFinite(x))
+    throw new RangeError("math domain error");
+  return r;
+}
+
 /** `math.sin` / `math.cos` of the time-of-day angle. */
-const sin = Math.sin;
-const cos = Math.cos;
+const sin = (x: number): number => math1(Math.sin, x);
+const cos = (x: number): number => math1(Math.cos, x);
 /** `math.log2` for the room-relative light features. */
-const log2 = Math.log2;
+const log2 = (x: number): number => math1(Math.log2, x);
 
 // ---------- Window statistics ----------
 
@@ -382,6 +409,51 @@ const log2 = Math.log2;
 function nanstat(fn: (a: Float64Array) => number, x: Float64Array): number {
   if (x.length === 0 || allNaN(x)) return NaN;
   return fn(x);
+}
+
+/** x86 `maxpd` lane: `a > b ? a : b`, so the second operand wins on +0/-0 ties and on NaN. */
+const vmax = (a: number, b: number): number => (a > b ? a : b);
+/** numpy `npyv_maxp_f64` lane (`_mm512_mask_max_pd(a, b == b, a, b)`): keeps `a` where `b` is NaN. */
+const vmaxp = (a: number, b: number): number => (isnan(b) ? a : a > b ? a : b);
+/** glibc `fmax` (math/s_fmax_template.c), numpy's scalar tail: the first operand wins ties. */
+const fmax = (x: number, y: number): number => (x >= y ? x : x < y ? y : isnan(y) ? x : y);
+const LANES = 8;
+
+/**
+ * `np.nanmax(x)` for a non-empty float64 window, i.e. `np.fmax.reduce(x)`, including the sign of a zero
+ * maximum. num.ts nanmax always prefers +0.0; numpy's answer depends on where each zero lands in its SIMD
+ * reduction (numpy/_core/src/umath/loops_minmax.dispatch.c.src simd_reduce_c_fmax_f64, AVX-512, 8 lanes):
+ * the accumulator starts as x[0] in every lane, takes 8 vectors per step and then single vectors, folds
+ * the lanes with GCC's _mm512_reduce_max_pd order (upper half against lower half, NaN lanes as -inf), and
+ * finishes the last < 8 values with fmax. Checked against np.fmax.reduce on 60k random arrays of zeros,
+ * NaNs, infinities and normals, lengths 1..261. Like the ewm table, this is the AVX-512 reference
+ * machine's answer: an AVX2 build (4 lanes) can return the other zero for the same window.
+ */
+function fmaxReduce(x: Float64Array): number {
+  const n = x.length;
+  if (n === 0) return NaN; // numpy raises; nanstat never calls this on an empty window
+  const acc = new Float64Array(LANES).fill(x[0] as number);
+  let i = 1;
+  for (; n - i >= 8 * LANES; i += 8 * LANES) {
+    for (let l = 0; l < LANES; l++) {
+      const v = (k: number): number => x[i + k * LANES + l] as number;
+      const r0123 = vmaxp(vmaxp(v(0), v(1)), vmaxp(v(2), v(3)));
+      const r4567 = vmaxp(vmaxp(v(4), v(5)), vmaxp(v(6), v(7)));
+      acc[l] = vmaxp(acc[l] as number, vmaxp(r0123, r4567));
+    }
+  }
+  for (; n - i >= LANES; i += LANES)
+    for (let l = 0; l < LANES; l++) acc[l] = vmaxp(acc[l] as number, x[i + l] as number);
+  let r: number;
+  if (allNaN(acc)) r = acc[0] as number;
+  else {
+    const a = Array.from(acc, (v) => (isnan(v) ? -Infinity : v));
+    const h4 = [0, 1, 2, 3].map((l) => vmax(a[l + 4] as number, a[l] as number));
+    const h2 = [0, 1].map((l) => vmax(h4[l + 2] as number, h4[l] as number));
+    r = vmax(h2[0] as number, h2[1] as number);
+  }
+  for (; i < n; i++) r = fmax(r, x[i] as number);
+  return r;
 }
 
 /**
@@ -438,7 +510,7 @@ function continuous(x: Float64Array): number[] {
   const out = [now];
   for (const w of WIN_NAMES) {
     const seg = tail(x, WIN[w]);
-    out.push(nanstat(nanmean, seg), nanstat(nanstd, seg), slopePerMin(seg), nanstat(nanmax, seg));
+    out.push(nanstat(nanmean, seg), nanstat(nanstd, seg), slopePerMin(seg), nanstat(fmaxReduce, seg));
   }
   const m1 = out[1] as number;
   const m15 = out[9] as number;
@@ -460,6 +532,8 @@ function roomRel(v: ReadonlyMap<string, number>, dbBase: number, luxBase: number
     const absolute = v.get(name.replaceAll("_room", "")) as number;
     if (name.split("_")[0] === "db") return absolute - dbBase;
     const ok = absolute > 0 && luxBase > 0; // false for NaN
+    // log2 throws where Python raises: a ratio that underflows to 0 (e.g. a baseline of inf). inf / inf is
+    // NaN, which math.log2 passes through.
     return ok ? log2(absolute / luxBase) : NaN;
   });
 }
@@ -506,20 +580,17 @@ export function compute(person: Channels, room: Channels): Float64Array {
     feats.push(...events(need(scope === "person" ? p : r, field)));
 
   const withdraw = nanToNum(need(p, "social_withdrawal_flag"), { nan: 0.0 });
-  const todArr = need(p, "tod_h");
-  if (todArr.length === 0) throw new RangeError("compute: empty person window"); // Python: IndexError
-  const tod = last(todArr);
-  if (!isnan(tod) && !Number.isFinite(tod)) throw new RangeError("math domain error"); // math.sin(inf)
+  const tod = last(need(p, "tod_h")); // an empty person window fails here, like Python's IndexError
   const nPeople = need(p, "n_people");
-  feats.push(
-    last(withdraw),
-    npMean(tail(withdraw, WIN["5m"])),
-    last(nPeople),
-    last(need(p, "hours_since_break")),
-    isnan(tod) ? NaN : sin((2 * Math.PI * tod) / 24),
-    isnan(tod) ? NaN : cos((2 * Math.PI * tod) / 24),
-    nPeople.length / MAX_TICKS,
-  );
+  // Pushed one by one in Python's evaluation order, so a bad window fails at the same step. The angle, not
+  // tod, is what math.sin sees: |tod| > ~2.9e307 overflows it to inf, which raises there.
+  feats.push(last(withdraw));
+  feats.push(npMean(tail(withdraw, WIN["5m"])));
+  feats.push(last(nPeople));
+  feats.push(last(need(p, "hours_since_break")));
+  feats.push(isnan(tod) ? NaN : sin((2 * Math.PI * tod) / 24));
+  feats.push(isnan(tod) ? NaN : cos((2 * Math.PI * tod) / 24));
+  feats.push(nPeople.length / MAX_TICKS);
 
   const face = need(p, "face_valence");
   const vis = need(p, "face_visible");
