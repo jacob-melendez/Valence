@@ -1,4 +1,4 @@
-// Runs every e2e scenario (run.mjs) and the checks that compare scenarios: the head-roll sign (the portrait rotated
+// Runs every e2e scenario (run.mjs), including a refused camera and a refused mic, and the checks that compare scenarios: the head-roll sign (the portrait rotated
 // 15 degrees clockwise must read ~30 degrees more roll than rotated counterclockwise) and two tracked people with a
 // face each in the two-person scene. Exit 1 if anything fails. Writes .out/summary.json.
 //
@@ -16,16 +16,25 @@ for (const k of ["--seconds", "--csp", "--delegate"]) {
   const i = args.indexOf(k);
   if (i >= 0) pass.push(k, args[i + 1]);
 }
-const scenarios = ["one", "two", "roll_cw", "roll_ccw"];
+// [report tag, run.mjs arguments]
+const runs = [
+  ["one", ["--scenario", "one"]],
+  ["two", ["--scenario", "two"]],
+  ["roll_cw", ["--scenario", "roll_cw"]],
+  ["roll_ccw", ["--scenario", "roll_ccw"]],
+  ["one-no-camera", ["--scenario", "one", "--deny", "camera"]],
+  ["one-no-mic", ["--scenario", "one", "--deny", "mic"]],
+];
+const scenarios = runs.map(([tag]) => tag);
 const reports = {};
 let first = true;
-for (const sc of scenarios) {
-  const r = spawnSync(process.execPath, [path.join(E2E, "run.mjs"), "--scenario", sc, ...pass, ...(first ? [] : ["--no-build"])], {
+for (const [tag, argv] of runs) {
+  const r = spawnSync(process.execPath, [path.join(E2E, "run.mjs"), ...argv, ...pass, ...(first ? [] : ["--no-build"])], {
     stdio: ["ignore", "ignore", "inherit"],
   });
   first = false;
-  reports[sc] = JSON.parse(readFileSync(path.join(E2E, ".out", `report-${sc}.json`), "utf8"));
-  reports[sc].exit = r.status;
+  reports[tag] = JSON.parse(readFileSync(path.join(E2E, ".out", `report-${tag}.json`), "utf8"));
+  reports[tag].exit = r.status;
 }
 const roll = (sc) => reports[sc].medians.head_roll_abs;
 const lastPersons = reports.two.sample_video.at(-1)?.persons ?? [];

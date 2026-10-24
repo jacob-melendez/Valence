@@ -5,7 +5,7 @@
 // download size.
 //
 //   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
-//                    [--audio file.wav] [--python-cadence] [--no-build] [--headed]
+//                    [--audio file.wav] [--python-cadence] [--deny camera|mic] [--no-build] [--headed]
 //
 // Run from frontend/. Needs `npm install`, the repo's Python venv (for make_media.py) and Playwright's Chromium
 // (NODE_PATH or /opt/node-tools/node_modules provides `playwright`).
@@ -38,6 +38,10 @@ const opt = (name, dflt) => {
   return i >= 0 ? args[i + 1] : dflt;
 };
 const SCENARIO = opt("--scenario", "one");
+// --deny camera|mic: the user refuses that device: getUserMedia rejects any request for it with NotAllowedError, as a
+// browser does after "Block" (headless Chromium has no permission prompt to click).
+const DENY = opt("--deny", "");
+const TAG = DENY ? `${SCENARIO}-no-${DENY}` : SCENARIO;
 const SECONDS = Number(opt("--seconds", "25"));
 const DELEGATE = opt("--delegate", "");
 const CSP_KIND = opt("--csp", "task");
@@ -105,6 +109,18 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 await context.grantPermissions(["camera", "microphone"], { origin });
+if (DENY) {
+  await context.addInitScript((deny) => {
+    const md = navigator.mediaDevices;
+    const real = md.getUserMedia.bind(md);
+    md.getUserMedia = async (c) => {
+      if ((deny === "camera" && c?.video) || (deny === "mic" && c?.audio)) {
+        throw new DOMException("Permission denied", "NotAllowedError");
+      }
+      return real(c);
+    };
+  }, DENY);
+}
 const page = await context.newPage();
 const offOrigin = [];
 const consoleCsp = [];
@@ -139,7 +155,7 @@ for (;;) {
 }
 const data = await page.evaluate(() => window.__e2e);
 mkdirSync(OUT, { recursive: true });
-await page.screenshot({ path: path.join(OUT, `screenshot-${SCENARIO}.png`) });
+await page.screenshot({ path: path.join(OUT, `screenshot-${TAG}.png`) });
 await browser.close();
 server.close();
 
@@ -157,23 +173,33 @@ const mediapipeBytes = served.filter((s) => s.url.startsWith("/mediapipe/")).red
 const status = data.status ?? {};
 const counters = data.counters ?? {};
 const expectPeople = SCENARIO === "two" ? 2 : 1;
-const checks = {
-  csp_header_applied: (resp?.headers()["content-security-policy"] ?? "") === CSP,
-  perception_running: status.phase === "running" && !data.error,
+const videoChecks = {
   video_observations: video.length >= 20,
-  audio_observations: audio.length >= 3,
   faces_detected: faces.length >= 5,
   people_tracked: maxPeople >= expectPeople,
   blendshapes_52: faces.some((p) => p.nbs === 52),
-  speech_heard: audio.some((a) => a.speech !== null && a.speech > 0.5),
   frames_purged: counters.frames_decoded > 0 && counters.frames_decoded - counters.frames_purged <= 1,
+};
+const audioChecks = {
+  audio_observations: audio.length >= 3,
+  speech_heard: audio.some((a) => a.speech !== null && a.speech > 0.5),
+};
+const checks = {
+  csp_header_applied: (resp?.headers()["content-security-policy"] ?? "") === CSP,
+  perception_running: status.phase === "running" && !data.error,
+  ...(DENY === "camera"
+    ? { camera_off_reported: status.camera === false && (status.degraded ?? []).includes("no camera"), no_video: video.length === 0 }
+    : videoChecks),
+  ...(DENY === "mic"
+    ? { mic_off_reported: status.mic === false && (status.degraded ?? []).includes("no microphone"), no_audio: audio.length === 0 }
+    : audioChecks),
   no_live_buffers_or_violations: counters.violations === 0,
   no_off_origin_requests: offOrigin.length === 0,
   no_csp_violations: consoleCsp.length === 0 && data.violations.length === 0,
   no_page_errors: pageErrors.length === 0,
 };
 const report = {
-  scenario: SCENARIO,
+  scenario: TAG,
   csp: CSP,
   delegate_requested: DELEGATE || "default (GPU, CPU fallback)",
   seconds: SECONDS,
@@ -217,9 +243,9 @@ const report = {
   sample_video: video.slice(-3),
   sample_audio: audio.slice(-3),
 };
-writeFileSync(path.join(OUT, `report-${SCENARIO}.json`), `${JSON.stringify(report, null, 2)}\n`);
-console.log(JSON.stringify({ scenario: SCENARIO, ok: report.ok, checks, metrics: report.metrics, medians: report.medians,
+writeFileSync(path.join(OUT, `report-${TAG}.json`), `${JSON.stringify(report, null, 2)}\n`);
+console.log(JSON.stringify({ scenario: TAG, ok: report.ok, checks, metrics: report.metrics, medians: report.medians,
   error: data.error, errors: pageErrors.slice(0, 5), csp: report.csp_violations.slice(0, 5), off: offOrigin.slice(0, 5),
   console: consoleLog.slice(0, 10) }, null, 2));
-console.log(report.ok ? `e2e ${SCENARIO}: OK` : `e2e ${SCENARIO}: FAILED`);
+console.log(report.ok ? `e2e ${TAG}: OK` : `e2e ${TAG}: FAILED`);
 process.exit(report.ok ? 0 : 1);

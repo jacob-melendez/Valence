@@ -18,6 +18,9 @@ node e2e/run.mjs --scenario two           # two people side by side
 node e2e/run.mjs --scenario roll_cw       # portrait rotated 15 degrees clockwise (head roll sign check)
 node e2e/run.mjs --csp deploy             # the CSP the Cloudflare deploy writes (scripts/security-headers.mjs)
 node e2e/run.mjs --delegate CPU           # force the CPU delegate
+node e2e/run.mjs --deny camera            # the user refuses the camera (getUserMedia: NotAllowedError): audio alone
+node e2e/run.mjs --deny mic               # the user refuses the mic: video alone
+node e2e/run.mjs --python-cadence         # faces on every other frame, as the Python edge
 ```
 
 `run.mjs` makes sure the MediaPipe assets exist (`scripts/mediapipe-assets.mjs`), builds the media with
