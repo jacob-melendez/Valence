@@ -178,3 +178,36 @@ a frame between face passes, or a face pass that misses while the face is still 
 the 0.45 s hold), counts as visible. It neither enters the baseline nor resets the blink detector. Only frames whose
 hold has expired count as "not visible" (`update(None)`). Otherwise a single missed pass would erase a blink in
 progress.
+
+### 15:40 — Faces checked against the edge on identical frames; whole console on real perception
+
+**Faces, side by side.** The browser (WASM) and the edge (native MediaPipe 0.10.35) ran on identical frames: the e2e
+scenes and two CC BY 4.0 clips of real people (intel-iot-devkit). Each frame carried an index marker, and colour was
+converted with libyuv's I420ToARGB, which matches Chromium bit for bit (verified on full-frame dumps).
+- **Implementation parity (CPU delegate).** Blendshapes agree to p95 1.3e-4, valence_raw to 1.1e-4, head yaw and
+  pitch to 0.004°, landmarks to 0.003 px, and the face count matches on every frame.
+- **PersonObs against an IMAGE-mode edge replica on the browser's timestamps.** face_valence and all cues agree at
+  r ≥ 0.987 (mostly ≥ 0.998), with median |d| ~1e-5. Blinks: 22 vs 22 on female, 24 vs 23 on male.
+- **VIDEO vs IMAGE mode.** The output was bit-identical on all 2297 frames where the detector fired. The detector
+  runs every frame either way, and VIDEO only added a stale ghost face about once per 2000 frames. **Faces now run in
+  IMAGE mode, as on the edge.**
+- **Defect fixed.** The head-crop retry's matrix is in the crop's own camera: yaw and pitch were off by a median
+  2–3° (p95 6°), and the head_pitch cue stepped ~8.5° at each full-frame/crop switch. Crop hits now report yaw and
+  pitch as missing and keep roll.
+- **Open.** On software WebGL the GPU delegate drifts 100–300× more than CPU (face_valence p95 0.06, landmarks
+  ~1 px). Real GPUs are unmeasured, so `?delegate=CPU|GPU` on the console URL and REAL_CAMERA.md step 6 compare them.
+- **Cadence.** Faces on every frame, against the edge's odd frames, give 22 and 24 blinks instead of 13 and 15 on
+  the two clips: the reason for the default.
+
+**The whole console on real perception.** Production build, `/?source=browser`, fake camera and mic fed with the
+portrait and speech (new `--fake-video` / `--fake-audio` flags in `scripts/check-static.mjs`).
+- **Panels:** Person #1 tracked, a prediction with all four layers and template text, the emotion map, and the
+  governance panel: 236 frames decoded, 235 purged, 428 audio blocks purged, 0 violations.
+- **Network and errors:** 0 off-origin requests, 0 CSP violations, 0 page errors. Screenshot in
+  `frontend/e2e/console-in-browser.jpg`.
+
+**For Cloud B.** `data/browser/{female,male}.jsonl`: one 132 s pass of each CC BY clip as features-only
+`obs_to_dict` lines with the emotion-v1 cues, for its real-vs-simulated spread check. Source, license and stats are
+in `data/browser/README.md`.
+
+**Fixtures.** At 15:38 every one reproduces byte for byte.
