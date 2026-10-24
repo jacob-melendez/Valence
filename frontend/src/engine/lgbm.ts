@@ -77,12 +77,16 @@ export function parseLightGBMText(text: string): Booster {
   const lines = text.split(/\r?\n/);
   let i = 0;
   const header = new Map<string, string>();
-  // The header runs up to the first "Tree=" block; a bare "tree" line opens the file.
+  // The header runs up to the first "Tree=" block; a bare "tree" line opens the file. A line without "=" is a
+  // key with an empty value, as LoadModelFromString reads it: random-forest models flag themselves with a bare
+  // "average_output" line, which a key=value-only reader would miss.
   for (; i < lines.length; i++) {
     const line = (lines[i] as string).trim();
     if (line.startsWith("Tree=") || line === "end of trees") break;
+    if (line.length === 0) continue;
     const eq = line.indexOf("=");
-    if (eq > 0) header.set(line.slice(0, eq), line.slice(eq + 1));
+    if (eq < 0) header.set(line, "");
+    else if (eq > 0) header.set(line.slice(0, eq), line.slice(eq + 1));
   }
   const version = header.get("version") ?? "";
   if (version !== "v4")
@@ -90,9 +94,20 @@ export function parseLightGBMText(text: string): Booster {
   if (header.has("average_output"))
     throw new Error("average_output (random forest) models are not supported");
   const numClass = requireInt(header, "num_class");
-  const numTreePerIteration = requireInt(header, "num_tree_per_iteration");
+  // Older files omit num_tree_per_iteration; LightGBM then uses num_class.
+  const numTreePerIteration = header.has("num_tree_per_iteration")
+    ? requireInt(header, "num_tree_per_iteration")
+    : numClass;
   const maxFeatureIdx = requireInt(header, "max_feature_idx");
-  const featureNames = (header.get("feature_names") ?? "").split(" ").filter((s) => s.length > 0);
+  // LightGBM refuses a file without feature_names, or with a count other than max_feature_idx + 1.
+  const names = header.get("feature_names");
+  if (names === undefined) throw new Error("LightGBM model: missing feature_names");
+  const featureNames = names.split(" ").filter((s) => s.length > 0);
+  if (featureNames.length !== maxFeatureIdx + 1) {
+    throw new Error(
+      `LightGBM model: ${featureNames.length} feature_names for max_feature_idx ${maxFeatureIdx}`,
+    );
+  }
 
   const trees: Tree[] = [];
   while (i < lines.length) {
@@ -176,9 +191,9 @@ function treeFromText(kv: Map<string, string>, index: number): Tree {
     throw new Error(`Tree=${index}: linear trees are not supported`);
   const nInternal = numLeaves - 1;
   const leafValue = numbers(kv, "leaf_value", numLeaves, true);
-  // A single-leaf tree may carry no counts; its SHAP is the leaf value alone, so 0 is a safe stand-in.
-  const leafCount = numbers(kv, "leaf_count", numLeaves, nInternal > 0);
-  const decisionType = numbers(kv, "decision_type", nInternal, true);
+  // Tree(const char*) fills absent optional arrays with zeros: decision_type 0 is a None-type split that sends
+  // defaults right, and zero counts leave raw scores intact while TreeSHAP turns NaN (0 / 0), as in LightGBM.
+  const decisionType = orZeros(numbers(kv, "decision_type", nInternal, false), nInternal);
   for (const d of decisionType) {
     if (d & CATEGORICAL_MASK)
       throw new Error(`Tree=${index}: categorical splits are not supported`);
@@ -193,12 +208,16 @@ function treeFromText(kv: Map<string, string>, index: number): Tree {
       leftChild: numbers(kv, "left_child", nInternal, true),
       rightChild: numbers(kv, "right_child", nInternal, true),
       leafValue,
-      leafCount: leafCount.length === numLeaves ? leafCount : new Array<number>(numLeaves).fill(0),
-      internalCount: numbers(kv, "internal_count", nInternal, true),
+      leafCount: orZeros(numbers(kv, "leaf_count", numLeaves, false), numLeaves),
+      internalCount: orZeros(numbers(kv, "internal_count", nInternal, false), nInternal),
       shrinkage,
     },
     index,
   );
+}
+
+function orZeros(values: number[], n: number): number[] {
+  return values.length === n ? values : new Array<number>(n).fill(0);
 }
 
 // ---------- dump_model() JSON ----------
@@ -295,6 +314,11 @@ function treeFromDump(info: NonNullable<DumpModel["tree_info"]>[number], index: 
     node.split_index !== undefined ? node.split_index : ~(node.leaf_index ?? 0);
   const visit = (node: DumpNode): void => {
     if (node.split_index === undefined) {
+      // A linear tree's leaf adds leaf_const + leaf_coeff . x (Tree::LinearModelToJSON); the tree-level
+      // is_linear flag is not in the dump, so the leaf keys are the only sign. Reading leaf_value alone would
+      // silently give the wrong score.
+      if ("leaf_const" in node || "leaf_coeff" in node || "leaf_features" in node)
+        throw new Error(`tree ${index}: linear trees are not supported`);
       const leaf = node.leaf_index ?? 0;
       if (leaf < 0 || leaf >= numLeaves)
         throw new Error(`tree ${index}: leaf_index ${leaf} out of range`);
@@ -434,6 +458,8 @@ function finishBooster(b: Omit<Booster, "numFeatures">): Booster {
  * The dense row LightGBM's predictor actually sees: the inputs with |v| <= kZeroThreshold (signed zeros
  * included) replaced by 0.0; NaN and +-inf pass through. Like `Booster.predict`'s shape check, a row of the
  * wrong width throws (passing the full 123-feature vector instead of the model's columns is the likely slip).
+ * A null or undefined entry (a hole in a plain array) is missing, NaN, as `np.asarray(x, dtype=float)` makes
+ * None; without the check it would fall through to 0.0, which a NaN-type split sends the other way.
  */
 export function predictorRow(booster: Booster, x: ArrayLike<number>): Float64Array {
   const row = new Float64Array(booster.numFeatures);
@@ -441,8 +467,9 @@ export function predictorRow(booster: Booster, x: ArrayLike<number>): Float64Arr
     throw new Error(`LightGBM model expects ${row.length} features, got ${x.length}`);
   }
   for (let i = 0; i < row.length; i++) {
-    const v = x[i] as number;
-    if (Math.abs(v) > K_ZERO_THRESHOLD || v !== v) row[i] = v;
+    const v = x[i] as number | null | undefined;
+    if (v === null || v === undefined) row[i] = NaN;
+    else if (Math.abs(v) > K_ZERO_THRESHOLD || v !== v) row[i] = v;
   }
   return row;
 }
