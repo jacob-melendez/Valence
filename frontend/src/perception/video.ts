@@ -35,6 +35,11 @@ export const FACE_CROP_PX = 256;
  */
 export const FACE_HOLD_S = 0.45;
 export const FACE_HOLD_PASSES = 2.25;
+/**
+ * A longer gap between face passes is a pause (tab hidden, a stall), not the device's pace: it is not measured,
+ * or a minute in a hidden tab would hold a face that has left for ~20 s.
+ */
+export const FACE_PASS_MAX_GAP_S = 2.0;
 /** Hands whose wrist is in the bottom 20% of the frame are typing, not fists. */
 export const KEYBOARD_ZONE = 0.8;
 
@@ -157,6 +162,7 @@ export class VisionPipeline {
       const ps = postures.get(did)!;
       const [onsets, active] = this.fists.personState(did);
       const visible = t - p.faceSeenT <= this.faceHoldS;
+      if (!visible) p.cues.update(null, t * 1000); // a frame without a visible face resets the blink detector
       const cues = visible ? { ...p.lastCues, blink_onsets: p.blinkPending } : NO_CUES;
       p.blinkPending = 0;
       persons.push({
@@ -227,7 +233,7 @@ export class VisionPipeline {
   }
 
   private updateFaces(frame: FrameInput, byId: Map<number, Det>, w: number, h: number, t: number): void {
-    if (this.lastFacePassT !== null && t > this.lastFacePassT) {
+    if (this.lastFacePassT !== null && t > this.lastFacePassT && t - this.lastFacePassT <= FACE_PASS_MAX_GAP_S) {
       const dt = t - this.lastFacePassT;
       this.facePassInterval = this.facePassInterval ? 0.8 * this.facePassInterval + 0.2 * dt : dt;
     }
@@ -260,8 +266,11 @@ export class VisionPipeline {
         const [yaw, pitch] = headPoseDeg(hit.matrix);
         p.raw = { blendshapes: hit.blendshapes, head_yaw_deg: yaw, head_pitch_deg: pitch, head_roll_deg: headRollDeg(hit.matrix) };
       }
-      // Emotion cues: a face frame without a readable face counts as not visible (resets the blink detector).
-      const readable = hit !== undefined && Number.isFinite(p.faceValence);
+      // Emotion cues (docs/EMOTION_FEATURES.md 1.2-1.3): a face without a valence reading counts as not visible. A miss
+      // while the face is still held (face_visible stays true) is a held frame, like the fist frames: no update, so it
+      // neither resets the blink detector nor breaks the visible-time clock. Frames past the hold reset in process().
+      if (hit === undefined) continue;
+      const readable = Number.isFinite(p.faceValence);
       const cues = p.cues.update(readable ? rawCues(hit.blendshapes, hit.matrix) : null, t * 1000);
       if (readable) {
         p.lastCues = cues;

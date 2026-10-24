@@ -28,10 +28,10 @@ function seated(opts: { dx?: number; scale?: number; wristY?: number; vis?: numb
   return lm;
 }
 
-function blendshapes(smile: number) {
+function blendshapes(smile: number, over: Record<string, number> = {}) {
   return {
     categories: BLENDSHAPE_NAMES.map((name, index) => ({
-      index, categoryName: name, displayName: "", score: name.startsWith("mouthSmile") ? smile : 0.02,
+      index, categoryName: name, displayName: "", score: over[name] ?? (name.startsWith("mouthSmile") ? smile : 0.02),
     })),
     headIndex: 0, headName: "",
   };
@@ -42,7 +42,7 @@ const MATRIX = { rows: 4, columns: 4, data: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
 
 interface Scene {
   poses: Landmark[][];
-  faces: { nose: [number, number]; smile: number }[];
+  faces: { nose: [number, number]; smile: number; bs?: Record<string, number> }[];
   hands: { wrist: [number, number]; fist: number }[];
   cropFace?: number | null;
 }
@@ -59,7 +59,7 @@ function fakeModels(scene: () => Scene) {
       const s = scene();
       return {
         faceLandmarks: s.faces.map((f) => Array.from({ length: 478 }, () => ({ x: f.nose[0], y: f.nose[1], z: 0, visibility: 0 }))),
-        faceBlendshapes: s.faces.map((f) => blendshapes(f.smile)),
+        faceBlendshapes: s.faces.map((f) => blendshapes(f.smile, f.bs)),
         facialTransformationMatrixes: s.faces.map(() => MATRIX),
       };
     },
@@ -207,6 +207,20 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     expect(obs.slice(2).every((o) => o.persons[0]!.face_visible)).toBe(true); // no flicker between passes
   });
 
+  it("a pause (tab hidden) is not taken for a slow device: the face hold stays 0.45 s after it", () => {
+    let face = true;
+    const { models } = fakeModels(() => ({
+      poses: [seated()], faces: face ? [{ nose: [0.5, 0.3], smile: 0.2 }] : [], hands: [], cropFace: null,
+    }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    run(pipe, 20, 100); // 10 Hz
+    run(pipe, 4, 160); // back after a minute in a hidden tab: face passes at 160.1 and 160.3
+    expect(pipe.faceHoldS).toBeCloseTo(FACE_HOLD_S, 9);
+    face = false; // the person leaves
+    const after = run(pipe, 10, 160.4);
+    expect(after.at(-1)!.persons[0]!.face_visible).toBe(false); // 1 s after the last face
+  });
+
   it("uses the head-crop face when the full-frame pass misses it", () => {
     const { models } = fakeModels(() => ({ poses: [seated()], faces: [], hands: [], cropFace: 0.4 }));
     const obs = run(new VisionPipeline(models, fakePixels().pixels), 4);
@@ -254,6 +268,46 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     for (const ts of [calls.pose, calls.faces, calls.gestures]) {
       for (let i = 1; i < ts.length; i++) expect(ts[i]!).toBeGreaterThan(ts[i - 1]!);
     }
+  });
+
+  it("emotion cues: a face pass that misses while the face is held is not a frame without a visible face", () => {
+    // Face passes run on odd frames (pass k on frame 2k + 1, every 0.2 s). null = the pass misses the face.
+    // Passes 4-6: closed, miss (held: face_visible stays true), open 0.4 s later -> one blink (doc 1.3).
+    // Passes 8-11: closed, two misses (frame 22 is past FACE_HOLD_S: face_visible false), open 600 ms later -> the
+    // non-visible frame reset the detector, no blink.
+    const passes: (number | null)[] = [0.05, 0.05, 0.05, 0.05, 0.9, null, 0.05, 0.05, 0.9, null, null, 0.05, 0.05];
+    let closure: number | null = null;
+    const { models } = fakeModels(() => ({
+      poses: [seated()], hands: [],
+      faces: closure === null ? [] : [{ nose: [0.5, 0.3], smile: 0.1, bs: { eyeBlinkLeft: closure, eyeBlinkRight: closure } }],
+    }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    const persons = Array.from({ length: 2 * passes.length }, (_, i) => {
+      closure = passes[i >> 1] ?? null;
+      return pipe.process(FRAME, 100 + 0.1 * i, 0, i, i + 1).persons[0]!;
+    });
+    expect(persons.map((p, i) => p.face_visible === (i >= 1 && i !== 22))).not.toContain(false);
+    expect(persons.map((p) => p.blink_onsets)).toEqual(persons.map((_, i) => (i === 13 ? 1 : 0)));
+    expect(persons[22]!.eye_open).toBeNaN();
+  });
+
+  it("emotion cues: the neutral baseline freezes after 20 s of visible face when every other face pass misses", () => {
+    let hit = true;
+    let brow = 0.1;
+    const { models } = fakeModels(() => ({
+      poses: [seated()], hands: [],
+      faces: hit ? [{ nose: [0.5, 0.3], smile: 0.1, bs: { browDownLeft: brow, browDownRight: brow } }] : [],
+    }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    let last: VideoObs | null = null;
+    for (let i = 0; i < 700; i++) {
+      hit = (i >> 1) % 2 === 0; // face pass i >> 1 on odd frames: every other pass finds the face (every 0.4 s)
+      brow = i < 300 ? 0.1 : 0.5; // 30 s at 0.1, then 40 s at 0.5
+      last = pipe.process(FRAME, 100 + 0.1 * i, 0, i, i + 1);
+      if (i >= 1) expect(last.persons[0]!.face_visible).toBe(true);
+    }
+    // Frozen at 20 s of visible face with the neutral at 0.1 (a running median would have moved to 0.5: brow_down 0).
+    expect(last!.persons[0]!.brow_down).toBeCloseTo(0.4, 9);
   });
 });
 

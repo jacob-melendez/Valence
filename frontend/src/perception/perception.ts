@@ -9,8 +9,8 @@
  * Every raw buffer is zero-filled or closed right after its step and counted (counters()), and nothing leaves memory.
  *
  * Robustness: no camera or no mic runs the other alone; a tab in the background pauses video (browsers throttle its
- * timers and may stop decoding) while audio continues; a track that ends (permission revoked, device unplugged) is
- * reported in status().degraded. WebGPU/WebGL problems fall back to the CPU delegate.
+ * timers and may stop decoding) while audio continues; a track that ends (permission revoked, device unplugged) stops
+ * its loop and is reported in status().degraded. WebGPU/WebGL problems fall back to the CPU delegate.
  */
 import { AudioPipeline } from "./audio";
 import { MicTap, VideoFrames } from "./capture";
@@ -141,6 +141,8 @@ class BrowserPerception implements Perception {
   stop(): void {
     this.gen++;
     this.teardown();
+    // The kill switch leaves no observation behind either (the DevTools handle reads `last`).
+    this.last.video = this.last.audio = null;
     if (this.st.phase !== "idle") this.setStatus({ phase: "stopped", camera: false, mic: false, fps: 0 });
   }
 
@@ -152,6 +154,23 @@ class BrowserPerception implements Perception {
         console.warn("[perception] cleanup failed", e);
       }
     }
+    this.dropBlock();
+  }
+
+  /** Runs `c` at teardown; the returned function runs it now instead (once). */
+  private onTeardown(c: () => void): () => void {
+    let done = false;
+    const run = () => {
+      if (done) return;
+      done = true;
+      c();
+    };
+    this.cleanups.push(run);
+    return run;
+  }
+
+  /** Zero-fills and drops the partial 1 s audio block. */
+  private dropBlock(): void {
     if (this.block) {
       this.block.fill(0);
       this.block = null;
@@ -162,10 +181,11 @@ class BrowserPerception implements Perception {
   // ---------- video ----------
 
   private async startVideo(track: MediaStreamTrack, gen: number): Promise<boolean> {
+    const cnt = this.cnt; // this run's counters: its late reports must not land in a restarted run's
     const fps = this.opts.fps ?? 10;
     const backend = await this.deps.visionBackend({
       assetBase: this.opts.assetBase ?? "/mediapipe/", maxPeople: this.opts.maxPeople ?? 3,
-      minPersonH: this.opts.minPersonH ?? 0.25, onDerivedPurged: (n) => (this.cnt.derived_purged += n),
+      minPersonH: this.opts.minPersonH ?? 0.25, onDerivedPurged: (n) => (cnt.derived_purged += n),
       ...(this.opts.delegate ? { delegate: this.opts.delegate } : {}),
       ...(this.opts.worker !== undefined ? { worker: this.opts.worker } : {}),
     });
@@ -173,10 +193,17 @@ class BrowserPerception implements Perception {
       backend.close();
       return false;
     }
-    this.cleanups.push(() => backend.close());
+    const closeBackend = this.onTeardown(() => backend.close());
     const frames = this.deps.videoFrames(track);
-    this.cleanups.push(() => frames.close());
-    await frames.open();
+    const closeFrames = this.onTeardown(() => frames.close());
+    try {
+      await frames.open();
+    } catch (e) {
+      closeFrames(); // no frames: release the camera element and the models now, not at stop()
+      closeBackend();
+      throw e;
+    }
+    if (gen !== this.gen) return false; // stopped while the camera opened (teardown released both)
     this.setStatus({ video_backend: `${backend.where}/${backend.delegate}` }, false);
     if (backend.delegate === "CPU" && this.opts.delegate !== "CPU") this.degrade("no hardware GPU: CPU delegate", true);
 
@@ -211,7 +238,7 @@ class BrowserPerception implements Perception {
         console.warn("[perception] frame grab failed", e);
       }
       if (bitmap && gen !== this.gen) bitmap.close();
-      else if (bitmap) await this.videoStep(bitmap, backend, gen);
+      else if (bitmap) await this.videoStep(bitmap, backend, gen, cnt);
       nextT += period;
       let delay = nextT - performance.now();
       if (delay < 0) {
@@ -224,17 +251,17 @@ class BrowserPerception implements Perception {
     return true;
   }
 
-  private async videoStep(bitmap: ImageBitmap, backend: VisionBackend, gen: number): Promise<void> {
+  private async videoStep(
+    bitmap: ImageBitmap, backend: VisionBackend, gen: number, cnt: PerceptionCounters,
+  ): Promise<void> {
     const t = performance.now() / 1000;
     const wall = Date.now() / 1000;
-    this.cnt.frames_decoded += 1;
-    this.cnt.live_raw_buffers += 1;
+    cnt.frames_decoded += 1;
+    cnt.live_raw_buffers += 1;
     const t0 = performance.now();
     let obs: VideoObs | null = null;
     try {
-      obs = await backend.process(bitmap, t, wall, this.videoSeq, this.cnt.frames_decoded);
-      this.videoSeq += 1;
-      this.degrade("video step failing", false);
+      obs = await backend.process(bitmap, t, wall, this.videoSeq, cnt.frames_decoded);
     } catch (e) {
       if (gen === this.gen) {
         console.error("[perception] video step failed", e);
@@ -242,12 +269,17 @@ class BrowserPerception implements Perception {
       }
     } finally {
       // The backend closed the bitmap (in the worker after the transfer, or here on the main thread).
-      this.cnt.frames_purged += 1;
-      this.cnt.live_raw_buffers -= 1;
+      cnt.frames_purged += 1;
+      cnt.live_raw_buffers -= 1;
     }
-    if (this.cnt.live_raw_buffers !== 0) {
-      this.cnt.violations += this.cnt.live_raw_buffers;
-      this.cnt.live_raw_buffers = 0;
+    if (cnt.live_raw_buffers !== 0) {
+      cnt.violations += cnt.live_raw_buffers;
+      cnt.live_raw_buffers = 0;
+    }
+    if (gen !== this.gen) return; // stopped (maybe restarted) meanwhile: the rest belongs to the current run
+    if (obs) {
+      this.videoSeq += 1;
+      this.degrade("video step failing", false);
     }
     const ms = performance.now() - t0;
     const hz = this.lastVideoT !== null && t > this.lastVideoT ? 1 / (t - this.lastVideoT) : 0;
@@ -262,19 +294,32 @@ class BrowserPerception implements Perception {
   // ---------- audio ----------
 
   private async startAudio(track: MediaStreamTrack, gen: number): Promise<boolean> {
+    const cnt = this.cnt; // this run's counters (see startVideo)
     const base = this.opts.assetBase ?? "/mediapipe/";
     const models = await this.deps.audioModels(base);
     if (gen !== this.gen) {
       models.close();
       return false;
     }
-    this.cleanups.push(() => models.close());
+    const closeModels = this.onTeardown(() => models.close());
     const pipeline = new AudioPipeline(models, { splOffsetDb: this.opts.splOffsetDb ?? 94 });
-    const tap = this.deps.micTap(track, join(base, "pcm-tap.worklet.js"), (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen));
-    this.cleanups.push(() => tap.close());
-    await tap.open();
+    const tap = this.deps.micTap(track, join(base, "pcm-tap.worklet.js"),
+      (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen, cnt, track));
+    const closeTap = this.onTeardown(() => tap.close());
+    try {
+      await tap.open();
+    } catch (e) {
+      closeTap(); // release the AudioContext and YAMNet now, not at stop()
+      closeModels();
+      throw e;
+    }
+    if (gen !== this.gen) return false; // stopped while the tap opened (teardown closed it)
     if (tap.state === "suspended") this.degrade("audio waits for a click on the page", true);
     const onEnded = () => {
+      // An ended track still feeds the worklet (silence): close the tap and drop the partial block rather than
+      // report a silent room.
+      closeTap();
+      this.dropBlock();
       this.degrade("microphone stopped", true);
       this.setStatus({ mic: false });
     };
@@ -284,10 +329,13 @@ class BrowserPerception implements Perception {
   }
 
   /** One ~100 ms raw chunk: copy into the 1 s block, zero-fill it; a full block is analysed and zero-filled too. */
-  private onChunk(chunk: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number): void {
-    this.cnt.live_raw_buffers += 1;
+  private onChunk(
+    chunk: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number, cnt: PerceptionCounters,
+    track: MediaStreamTrack,
+  ): void {
+    cnt.live_raw_buffers += 1;
     try {
-      if (gen !== this.gen) return;
+      if (gen !== this.gen || track.readyState !== "live") return; // late chunks (stopped, mic ended): purge only
       this.degrade("audio waits for a click on the page", false);
       if (!this.block || this.block.length !== sampleRate) {
         this.block?.fill(0);
@@ -300,23 +348,25 @@ class BrowserPerception implements Perception {
         this.block.set(chunk.subarray(i, i + take), this.blockN);
         this.blockN += take;
         i += take;
-        if (this.blockN === this.block.length) this.audioStep(this.block, sampleRate, pipeline, gen);
+        if (this.blockN === this.block.length) this.audioStep(this.block, sampleRate, pipeline, gen, cnt);
       }
     } finally {
       chunk.fill(0);
-      this.cnt.audio_blocks_purged += 1;
-      this.cnt.live_raw_buffers -= 1;
+      cnt.audio_blocks_purged += 1;
+      cnt.live_raw_buffers -= 1;
     }
   }
 
-  private audioStep(block: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number): void {
+  private audioStep(
+    block: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number, cnt: PerceptionCounters,
+  ): void {
     const t = performance.now() / 1000;
     const wall = Date.now() / 1000;
     const t0 = performance.now();
     const at16k = resampleTo16k(block, sampleRate);
     block.fill(0);
     this.blockN = 0;
-    this.cnt.derived_purged += 1;
+    cnt.derived_purged += 1;
     let obs = null;
     try {
       obs = pipeline.process(at16k, t, wall, this.audioSeq);
@@ -327,7 +377,7 @@ class BrowserPerception implements Perception {
       this.degrade("audio step failing", true);
     } finally {
       at16k.fill(0);
-      this.cnt.derived_purged += 1;
+      cnt.derived_purged += 1;
     }
     const ms = performance.now() - t0;
     this.setStatus({ audio_ms: this.st.audio_ms ? 0.9 * this.st.audio_ms + 0.1 * ms : ms }, false);

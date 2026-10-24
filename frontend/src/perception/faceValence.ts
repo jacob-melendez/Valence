@@ -85,13 +85,44 @@ export function median(values: readonly number[]): number {
 }
 
 /**
+ * Samples kept sorted by binary insertion, so the running median is O(1) instead of a sort per update (Python
+ * re-sorts in statistics.median every time; the value is the same).
+ */
+export class SortedSamples {
+  private readonly v: number[] = [];
+
+  get length(): number {
+    return this.v.length;
+  }
+
+  push(x: number): void {
+    let lo = 0;
+    let hi = this.v.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.v[mid]! <= x) lo = mid + 1;
+      else hi = mid;
+    }
+    this.v.splice(lo, 0, x);
+  }
+
+  /** statistics.median of the samples; throws when empty. */
+  median(): number {
+    const n = this.v.length;
+    if (!n) throw new Error("median of an empty list");
+    const mid = n >> 1;
+    return n % 2 ? this.v[mid]! : (this.v[mid - 1]! + this.v[mid]!) / 2;
+  }
+}
+
+/**
  * Per-person neutral baseline: valence relative to the median raw valence over that person's first
  * `calibrationS` seconds of visible face (running median while calibrating, frozen afterwards). Visible time accrues
  * only between consecutive visible samples, each gap capped at `maxGapS`; a non-finite `t` accrues nothing.
  * Non-finite input means "face not visible": NaN out, never enters the baseline.
  */
 export class FaceValenceCalibrator {
-  private samples: number[] = [];
+  private samples = new SortedSamples();
   private visibleS = 0;
   private prevT: number | null = null;
   private prevVisible = false;
@@ -109,7 +140,7 @@ export class FaceValenceCalibrator {
 
   get baseline(): number {
     if (this.frozen !== null) return this.frozen;
-    return this.samples.length ? median(this.samples) : 0.0;
+    return this.samples.length ? this.samples.median() : 0.0;
   }
 
   get visibleSeconds(): number {
@@ -134,7 +165,7 @@ export class FaceValenceCalibrator {
         this.samples.push(vRaw);
       } else {
         this.frozen = this.baseline;
-        this.samples = [];
+        this.samples = new SortedSamples();
       }
     }
     return pyMax(-1.0, pyMin(1.0, Math.tanh(this.gain * (vRaw - this.baseline))));

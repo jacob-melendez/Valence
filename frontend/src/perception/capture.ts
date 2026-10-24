@@ -135,6 +135,11 @@ export class VideoFrames {
   }
 }
 
+/** User activations that let a suspended AudioContext start (a touch activates on pointerup, not pointerdown). */
+const GESTURES = ["pointerdown", "pointerup", "keydown", "click"] as const;
+/** How long open() waits for a suspended context to start by itself. */
+const RESUME_WAIT_MS = 1000;
+
 /** Mic tap: ~100 ms raw chunks at the context's native rate, delivered to `onChunk` (which must zero-fill them). */
 export class MicTap {
   private ctx: AudioContext | null = null;
@@ -171,26 +176,35 @@ export class MicTap {
     this.source = ctx.createMediaStreamSource(new MediaStream([this.track]));
     this.source.connect(node);
     if (ctx.state === "suspended") {
-      await ctx.resume().catch(() => undefined);
+      // Chromium settles resume() only once the context runs, i.e. never without a user activation: wait a little,
+      // then retry on every gesture until it runs (one that is not an activation, like a touch's pointerdown, leaves
+      // it suspended).
+      const wait = new Promise((r) => setTimeout(r, RESUME_WAIT_MS));
+      await Promise.race([ctx.resume(), wait]).catch(() => undefined);
       if (ctx.state === "suspended" && typeof document !== "undefined") {
-        const resume = () => void ctx.resume().catch(() => undefined);
+        const resume = () => void ctx.resume().then(() => {
+          if (ctx.state === "running") this.stopResumeOnGesture();
+        }, () => undefined);
         this.resumeOnGesture = resume;
-        document.addEventListener("pointerdown", resume, { once: true });
-        document.addEventListener("keydown", resume, { once: true });
+        for (const ev of GESTURES) document.addEventListener(ev, resume);
       }
     }
   }
 
+  private stopResumeOnGesture(): void {
+    if (!this.resumeOnGesture) return;
+    for (const ev of GESTURES) document.removeEventListener(ev, this.resumeOnGesture);
+    this.resumeOnGesture = null;
+  }
+
   close(): void {
     this.node?.port.postMessage("stop");
-    if (this.node) this.node.port.onmessage = null;
+    // The port keeps its handler: chunks the worklet posted before "stop" still arrive and onChunk zero-fills them
+    // (without a handler they would be dropped with their samples intact).
     this.source?.disconnect();
     this.node?.disconnect();
-    if (this.resumeOnGesture) {
-      document.removeEventListener("pointerdown", this.resumeOnGesture);
-      document.removeEventListener("keydown", this.resumeOnGesture);
-    }
+    this.stopResumeOnGesture();
     void this.ctx?.close().catch(() => undefined);
-    this.ctx = this.node = this.source = this.resumeOnGesture = null;
+    this.ctx = this.node = this.source = null;
   }
 }

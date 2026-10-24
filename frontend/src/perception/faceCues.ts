@@ -3,7 +3,7 @@
  * reference for parity: raw channels from the blendshapes and the facial transformation matrix, a per-person
  * neutral baseline (first 20 s of visible face) and a blink detector. Only scalars; landmarks are never touched.
  */
-import { median, pyMax, pyMin } from "./faceValence";
+import { pyMax, pyMin, SortedSamples } from "./faceValence";
 
 export const CUE_CALIBRATION_S = 20.0;
 export const MAX_GAP_S = 1.0;
@@ -89,8 +89,9 @@ function pyMod(a: number, b: number): number {
 /** Python's (v + 180) % 360 - 180. */
 const wrapDeg = (v: number) => (Number.isNaN(v) ? v : pyMod(v + 180.0, 360.0) - 180.0);
 
-const emptySamples = (): Record<RawChannel, number[]> => ({
-  brow: [], closure: [], frown: [], smile: [], yaw: [], pitch: [],
+const emptySamples = (): Record<RawChannel, SortedSamples> => ({
+  brow: new SortedSamples(), closure: new SortedSamples(), frown: new SortedSamples(), smile: new SortedSamples(),
+  yaw: new SortedSamples(), pitch: new SortedSamples(),
 });
 
 /** Neutral baseline (first 20 s of visible face, running median, then frozen) and the blink detector. */
@@ -107,7 +108,7 @@ export class FaceCueTracker {
   baseline(): RawCues {
     if (this.frozen) return this.frozen;
     const out = {} as RawCues;
-    for (const k of RAW_CHANNELS) out[k] = this.samples[k].length ? median(this.samples[k]) : 0.0;
+    for (const k of RAW_CHANNELS) out[k] = this.samples[k].length ? this.samples[k].median() : 0.0;
     return out;
   }
 

@@ -27,6 +27,7 @@ const post = (msg: WorkerReply, transfer: Transferable[] = []) => (self as unkno
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data;
   if (msg.kind === "init") {
+    post({ kind: "started" }); // the page stops timing the start: the models may take a while to download
     try {
       const models = await loadVisionModels(msg.assetBase, {
         ...(msg.delegate ? { delegate: msg.delegate as Delegate } : {}), maxPeople: msg.maxPeople,

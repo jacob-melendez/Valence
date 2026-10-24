@@ -15,6 +15,7 @@ export type WorkerRequest =
   | { kind: "close" };
 
 export type WorkerReply =
+  | { kind: "started" }
   | { kind: "ready"; delegate: Delegate }
   | { kind: "error"; message: string }
   | { kind: "obs"; id: number; obs: VideoObs; ms: number; derived: number }
@@ -65,13 +66,17 @@ export async function workerBackend(opts: VisionBackendOptions, timeoutMs = 6000
   const pending = new Map<number, { resolve: (o: VideoObs) => void; reject: (e: Error) => void }>();
   let nextId = 1;
   const delegate = await new Promise<Delegate>((resolve, reject) => {
+    // Times the worker's own start only: the model download after "started" can take minutes on a slow network,
+    // and giving up then would load everything again on the main thread.
     const timer = setTimeout(() => reject(new Error("vision worker did not start")), timeoutMs);
     worker.onerror = (e) => {
       clearTimeout(timer);
       reject(new Error(`vision worker failed: ${e.message || "script error"}`));
     };
     worker.onmessage = (e: MessageEvent<WorkerReply>) => {
-      if (e.data.kind === "ready") {
+      if (e.data.kind === "started") {
+        clearTimeout(timer);
+      } else if (e.data.kind === "ready") {
         clearTimeout(timer);
         resolve(e.data.delegate);
       } else if (e.data.kind === "error") {
