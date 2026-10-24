@@ -6,6 +6,7 @@
  * Message shapes follow contract 1.0 (valence/contracts.py, docs/API.md).
  */
 import { useSyncExternalStore } from "react";
+import { BrowserSource, type BrowserEngine, type PerceptionLike } from "./browser-source";
 
 // ---------- Types ----------
 export type StateKey = "Focused" | "Frustrated_Masked" | "Exhausted" | "Collaborative_Happy";
@@ -135,9 +136,11 @@ export interface LlmExplanation {
   event_id: string; label_display: string; text: string; source: ExplanationSource; latency_ms: number;
 }
 
-export type ConnState = "mock" | "connecting" | "open" | "closed";
+export type Source = "mock" | "live" | "browser";
+export type ConnState = "mock" | "connecting" | "open" | "closed" | "browser";
 export interface ValenceState {
-  source: "mock" | "live";
+  /** mock: generated here; live: the desktop backend; browser: the whole engine running in this page (Valence Web). */
+  source: Source;
   conn: ConnState;
   baseUrl: string;
   persons: TrackPerson[];
@@ -333,12 +336,18 @@ export function baselineProgress(b: RoomBaseline | null): number {
 
 /** Live sensors without a captured venue baseline: the operator should capture one before judging. */
 export function baselineWarning(s: Pick<ValenceState, "source" | "conn" | "status" | "baseline">): boolean {
-  return s.source === "live" && s.conn === "open" && s.status?.mode === "live" && s.baseline?.mode !== "captured";
+  const sensing = s.source === "browser" || (s.source === "live" && s.conn === "open" && s.status?.mode === "live");
+  return sensing && s.baseline?.mode !== "captured";
 }
 
 /** Provenance badges for the header: MOCK, or (when connected) REPLAY / HYBRID / SIMULATED, else LIVE. */
 export function provenanceBadges(s: ValenceState): { label: string; tone: "mock" | "live" | "warn"; title: string }[] {
   if (s.source === "mock") return [{ label: "MOCK", tone: "mock", title: "Generated in the browser, no backend" }];
+  if (s.source === "browser") {
+    const sim = [...new Set([...Object.values(s.predictions), ...Object.values(s.vectors)].flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
+    return [{ label: "IN-BROWSER", tone: "live", title: "Camera and mic processed in this page; nothing is recorded or sent" },
+      ...(sim.length ? [{ label: `SIMULATED: ${sim.join(", ")}`, tone: "warn" as const, title: "Simulated or operator-set data in the 15-minute window" }] : [])];
+  }
   if (s.conn !== "open") return [];
   const latest = [...Object.values(s.predictions), ...Object.values(s.vectors)];
   const sim = [...new Set(latest.flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
@@ -588,6 +597,15 @@ const MOCK_RETENTION = {
   ],
   never_kept: ["video frames (zeroed and released each frame)", "audio blocks (zeroed each block)", "transcripts (Vosk grammar: only lexicon hits exist)", "pose keypoints (stay inside perception)", "face images or embeddings"],
 };
+// What the in-browser source keeps (same shape as GET /api/retention): numbers in this tab's memory only.
+const BROWSER_RETENTION = {
+  raw_media_stored: 0,
+  held: [
+    { what: "rolling state vector (numeric TickRecords)", where: "this tab's memory", how_long: "15 minutes" },
+    { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "this tab's memory (hash-chained)", how_long: "until the tab closes" },
+  ],
+  never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (CSP connect-src 'self')"],
+};
 const MOCK_BASELINE: RoomBaseline = { mode: "captured", complete: true, target_samples: 90, db_samples: 90, lux_samples: 90, db_median: 57.2, db_iqr: 2.3, lux_median: 410 };
 const MOCK_SCENARIOS: ScenarioInfo[] = ["full_demo", "focused", "frustrated_masked", "exhausted", "collaborative_happy"].map((name) => ({ name }));
 const MOCK_RECORDINGS: RecordingInfo[] = [{ name: "golden_demo" }, { name: "capture_typing" }];
@@ -710,12 +728,48 @@ function stopLive() {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
+// ---------- In-browser source (Valence Web) ----------
+// The engine glue and the perception module are loaded lazily (and only if present), so the console bundle
+// stays small for the mock and live sources.
+const engineGlue = import.meta.glob<{ createBrowserEngine: () => Promise<BrowserEngine> }>("../engine/browser-engine.ts");
+const perceptionModule = import.meta.glob<{ createPerception?: () => PerceptionLike | Promise<PerceptionLike>; createMockPerception?: () => PerceptionLike | Promise<PerceptionLike> }>("../perception/index.ts");
+const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: string): Promise<T> => {
+  const load = Object.values(mods)[0];
+  if (!load) throw new Error(`${what} is not built yet`);
+  return load();
+};
+/** `?perception=mock` uses the mock perception (no camera); the default is the real MediaPipe module. */
+const wantMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
+let browser: BrowserSource | null = null;
+function startBrowser() {
+  browser = new BrowserSource({
+    createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine(),
+    createPerception: async () => {
+      const m = await loadOptional(perceptionModule, "The browser perception module");
+      const make = wantMockPerception() ? m.createMockPerception : m.createPerception ?? m.createMockPerception;
+      if (!make) throw new Error("perception module has no factory");
+      return make();
+    },
+    emit: (m) => { if (state.source === "browser") handleMessage(m); },
+    onBaseline: (b) => { if (state.source === "browser") set({ baseline: b }); },
+    onError: (what, detail) => {
+      if (state.source !== "browser") return;
+      if (what === "mic") set({ micError: detail }); else set({ edgeError: `${what}: ${detail}` });
+    },
+  });
+  void browser.start();
+}
+function stopBrowser() { browser?.stop(); browser = null; }
+
 // ---------- Public API ----------
-export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
+export function setSource(source: Source, baseUrl = state.baseUrl) {
   const base = cleanBase(baseUrl) || state.baseUrl;
-  stopLive(); mock.stop(); resetData();
+  stopLive(); mock.stop(); stopBrowser(); resetData();
   set({ source, baseUrl: base, running: "running" });
-  if (source === "mock") {
+  if (source === "browser") {
+    set({ conn: "browser", retention: BROWSER_RETENTION, evalSummary: null, scenarios: [], recordings: [] });
+    startBrowser();
+  } else if (source === "mock") {
     set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL, baseline: { ...MOCK_BASELINE }, scenarios: MOCK_SCENARIOS, recordings: MOCK_RECORDINGS });
     mock.backfill(); mock.start();
   } else {
@@ -730,8 +784,17 @@ export function hasApiParam(): boolean {
   if (typeof window === "undefined") return false;
   try { return !!validBase(new URLSearchParams(window.location.search).get("api")); } catch { return false; }
 }
-/** Mock by default; opened with `?api=`, connect to that backend right away. */
-export function boot() { if (!booted) { booted = true; setSource(hasApiParam() ? "live" : "mock", resolveBaseUrl()); } }
+/** True when the page was opened with `?source=browser` (the hosted Valence Web link). */
+export function hasBrowserParam(): boolean {
+  if (typeof window === "undefined") return false;
+  try { return new URLSearchParams(window.location.search).get("source") === "browser"; } catch { return false; }
+}
+/** Mock by default; `?source=browser` runs the engine in this page; `?api=` connects to that backend right away. */
+export function boot() {
+  if (booted) return;
+  booted = true;
+  setSource(hasBrowserParam() ? "browser" : hasApiParam() ? "live" : "mock", resolveBaseUrl());
+}
 
 /** The preview box's aspect ratio (`aspect-video`). */
 export const VIEW_ASPECT = 16 / 9;
@@ -808,6 +871,11 @@ export async function sendCommand(c: Command) {
   if (state.source === "mock") {
     mock.command(c);
     return set({ lastCommand: { text: `POST ${path} (mock)`, ok: true } });
+  }
+  if (state.source === "browser") {
+    const r = browser?.command(c) ?? { ok: false, text: "in-browser engine not running" };
+    if (r.ok) applyCommandResult(c, {});
+    return set({ lastCommand: { text: r.text, ok: r.ok } });
   }
   try {
     const init: RequestInit = { method: "POST" };

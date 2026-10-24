@@ -4,6 +4,7 @@ import {
   shownExplanation, stateName, useValence,
   type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
+import { getBrowserStream, onBrowserStream } from "@/lib/browser-source";
 
 export const STATE_VAR: Record<StateKey | "Overwhelmed" | "Tense", string> = {
   Focused: "var(--state-focused)",
@@ -31,8 +32,8 @@ export function Header() {
   const s = useValence();
   const [url, setUrl] = useState(s.baseUrl);
   useEffect(() => { setUrl(s.baseUrl); }, [s.baseUrl]); // picks up ?api= / saved URL resolved after hydration
-  const connLabel = { mock: "MOCK STREAM", connecting: "CONNECTING…", open: "LIVE · CONNECTED", closed: "DISCONNECTED · RETRYING" }[s.conn];
-  const connColor = s.conn === "open" || s.conn === "mock" ? "bg-ok" : s.conn === "connecting" ? "bg-warn" : "bg-destructive";
+  const connLabel = { mock: "MOCK STREAM", connecting: "CONNECTING…", open: "LIVE · CONNECTED", closed: "DISCONNECTED · RETRYING", browser: "IN-BROWSER · ON-DEVICE" }[s.conn];
+  const connColor = s.conn === "open" || s.conn === "mock" || s.conn === "browser" ? "bg-ok" : s.conn === "connecting" ? "bg-warn" : "bg-destructive";
   return (
     <header className="flex flex-wrap items-center gap-4 border-b px-6 py-4">
       <div className="mr-auto">
@@ -53,10 +54,11 @@ export function Header() {
         </span>
       ))}
       <div className="flex items-center gap-1 rounded-md border p-1 font-mono text-sm">
-        {(["mock", "live"] as const).map((m) => (
-          <button key={m} onClick={() => setSource(m, url)}
+        {(["mock", "live", "browser"] as const).map((m) => (
+          <button key={m} onClick={() => setSource(m, url)} data-testid={`source-${m}`}
+            title={m === "browser" ? "Run the whole engine in this page: camera and mic never leave the device" : undefined}
             className={`rounded px-3 py-1.5 uppercase ${s.source === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-            {m}
+            {m === "browser" ? "in-browser" : m}
           </button>
         ))}
       </div>
@@ -126,6 +128,29 @@ export function SourceControls() {
   const rec = s.recordings.some((x) => x.name === recording) ? recording : (s.recordings[0]?.name ?? "");
   // Re-posting /api/live while the camera runs re-aligns the frame counters under a running capture.
   const liveRunning = s.status?.mode === "live" && !!s.status.camera && !s.edgeError;
+  const errors = (s.edgeError || s.micError) && (
+    <div className="space-y-1 rounded-md border border-destructive bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive" data-testid="edge-errors">
+      {s.edgeError && <div>{s.source === "browser" ? "" : "edge: "}{s.edgeError}</div>}
+      {s.micError && <div>mic: {s.micError} (running video-only)</div>}
+    </div>
+  );
+  if (s.source === "browser") return (
+    <div className="panel" data-testid="source-controls">
+      <div className="panel-title">Source</div>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 font-mono text-sm">
+          <span className="rounded-md border border-primary px-3 py-1.5 text-primary">● In-browser (camera + mic)</span>
+          <span className="text-xs text-muted-foreground">camera {s.status?.camera ? "on" : "off"} · mic {s.status?.mic ? "on" : "off"} · {fmt(s.status?.fps, 1)} fps</span>
+        </div>
+        {errors}
+        <p className="text-sm text-muted-foreground">
+          The whole engine runs in this page: perception, the 15-minute window, the model, the explanation and the audit log.
+          Frames and audio are processed in memory and dropped; the page is not allowed to send data anywhere.
+          Scenario and recording replays need the desktop backend (LIVE).
+        </p>
+      </div>
+    </div>
+  );
   return (
     <div className="panel" data-testid="source-controls">
       <div className="panel-title">Source</div>
@@ -136,12 +161,7 @@ export function SourceControls() {
           </Btn>
           <span className="font-mono text-xs text-muted-foreground">mode: <span className="text-foreground" data-testid="backend-mode">{String(s.status?.mode ?? "—").toUpperCase()}</span></span>
         </div>
-        {(s.edgeError || s.micError) && (
-          <div className="space-y-1 rounded-md border border-destructive bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive" data-testid="edge-errors">
-            {s.edgeError && <div>edge: {s.edgeError}</div>}
-            {s.micError && <div>mic: {s.micError} (running video-only)</div>}
-          </div>
-        )}
+        {errors}
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-20 text-sm text-muted-foreground">Speed</span>
           <div className="flex items-center gap-1 rounded-md border p-0.5 font-mono text-sm" role="group" aria-label="Replay speed">
@@ -225,15 +245,30 @@ export function CameraView() {
   const [cam, setCam] = useState<"pending" | "on" | "off">("pending");
   const replay = s.status?.mode === "replay";
 
+  const inBrowser = s.source === "browser";
   useEffect(() => {
+    // In-browser source: show the stream the engine already opened (one camera, one permission prompt).
+    if (inBrowser) {
+      const show = (st: MediaStream | null) => {
+        if (videoRef.current) videoRef.current.srcObject = st;
+        setCam(st && st.getVideoTracks().length ? "on" : "off");
+      };
+      show(getBrowserStream());
+      return onBrowserStream(show);
+    }
     let stream: MediaStream | null = null;
+    let cancelled = false;
     if (!navigator.mediaDevices?.getUserMedia) { setCam("off"); return; }
     // Ask for 16:9: the default 640x480 makes macOS switch the shared camera (and so the backend frame) to 4:3.
     navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-      .then((st) => { stream = st; if (videoRef.current) videoRef.current.srcObject = st; setCam("on"); })
-      .catch(() => setCam("off"));
-    return () => stream?.getTracks().forEach((t) => t.stop());
-  }, []);
+      .then((st) => {
+        // The source may have switched while the prompt was open: release the camera instead of showing it.
+        if (cancelled) { st.getTracks().forEach((t) => t.stop()); return; }
+        stream = st; if (videoRef.current) videoRef.current.srcObject = st; setCam("on");
+      })
+      .catch(() => { if (!cancelled) setCam("off"); });
+    return () => { cancelled = true; stream?.getTracks().forEach((t) => t.stop()); };
+  }, [inBrowser]);
 
   const showVideo = cam === "on" && !replay;
   return (
