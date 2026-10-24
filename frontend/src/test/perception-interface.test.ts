@@ -26,7 +26,15 @@ describe("perception types", () => {
       const d = JSON.parse(line) as Record<string, unknown>;
       const obs = obsFromDict(d);
       expect(obs.type).toBe(d["type"]);
-      expect(obsToDict(obs)).toEqual(d);
+      // Older recordings lack the emotion cues; they come back with the Python defaults.
+      const cueDefaults = {
+        brow_down: null, eye_open: null, mouth_frown: null, smile: null, head_yaw: null, head_pitch: null,
+        blink_onsets: 0,
+      };
+      const expected = d["type"] === "video"
+        ? { ...d, persons: (d["persons"] as object[]).map((p) => ({ ...cueDefaults, ...p })) }
+        : d;
+      expect(obsToDict(obs)).toEqual(expected);
     }
   });
 
@@ -36,7 +44,8 @@ describe("perception types", () => {
       frame_h: 480, mirrored: false,
       persons: [{
         track_id: 1, bbox: [0, 0, 1, 1], fist_onsets: 0, fist_active: false, slump: false, head_in_hands: false,
-        motion: NaN, face_visible: false, face_valence: NaN, raw: null,
+        motion: NaN, face_visible: false, face_valence: NaN, brow_down: NaN, eye_open: NaN, mouth_frown: NaN,
+        smile: NaN, head_yaw: NaN, head_pitch: NaN, blink_onsets: 0, raw: null,
       }],
     };
     const d = obsToDict(v);
@@ -87,6 +96,8 @@ describe("createMockPerception", () => {
         expect(person.bbox.every((x) => x >= 0 && x <= 1)).toBe(true);
         expect(person.bbox[2]).toBeGreaterThan(person.bbox[0]);
         if (person.face_visible) {
+          expect(Number.isFinite(person.brow_down)).toBe(true);
+          expect(Math.abs(person.head_yaw)).toBeLessThanOrEqual(90);
           expect(person.face_valence).toBeGreaterThanOrEqual(-1);
           expect(person.face_valence).toBeLessThanOrEqual(1);
           expect(Object.keys(person.raw!.blendshapes)).toHaveLength(52);
@@ -119,6 +130,7 @@ describe("createMockPerception", () => {
     expect(people.some((x) => x.head_in_hands)).toBe(true);
     const audio = seen.filter((o): o is AudioObs => o.type === "audio");
     expect(audio.reduce((n, a) => n + a.laughter_onsets, 0)).toBeGreaterThan(0);
+    expect(people.reduce((n, x) => n + x.blink_onsets, 0)).toBeGreaterThan(20);
     const valences = people.map((x) => x.face_valence).filter(Number.isFinite);
     expect(Math.max(...valences)).toBeGreaterThan(0.5);
     expect(Math.min(...valences)).toBeLessThan(-0.5);

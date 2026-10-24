@@ -26,3 +26,10 @@ Newest entry last.
 - `faceValence.ts`: port of `face_valence.py` (formula, calibrator, Hungarian face assignment), used by the mock.
 - Tests: `src/test/perception-interface.test.ts` (types, JSONL round trip, mock cadence and content, media fallbacks).
 - Next: the pure ports with parity fixtures, then the MediaPipe pipeline and the headless-Chromium end-to-end test.
+
+### 12:50 — Emotion cues in the interface
+
+Cloud B's `docs/EMOTION_FEATURES.md` (emotion-v1) landed: `PersonObs` gains `brow_down`, `eye_open`, `mouth_frown`,
+`smile`, `head_yaw`, `head_pitch` and `blink_onsets`. They are in `types.ts` (required; `obsFromDict` gives older
+recordings the Python defaults), `faceCues.ts` ports `valence/features/face_cues.py` (baseline, blink detector, head
+pose from the matrix), and the mock fills them. The raw extras follow B's sign convention (pitch > 0 = face up).

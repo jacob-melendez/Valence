@@ -7,6 +7,7 @@
  * script and face_valence is computed from them with the real formula (face_valence.py), so the extras and the
  * valence agree.
  */
+import { FaceCueTracker, NO_CUES, rawCues } from "./faceCues";
 import { valenceRaw } from "./faceValence";
 import { Hub } from "./hub";
 import {
@@ -70,6 +71,7 @@ interface MockPerson {
   slumpSince: number | null;
   nextBlinkAt: number;
   baseline: number;
+  cues: FaceCueTracker;
 }
 
 export function createMockPerception(opts: MockPerceptionOptions = {}): Perception {
@@ -112,7 +114,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
     return centres.slice(0, nPeople).map((cx, i) => ({
       id: i + 1, offsetS: i * 47, cx, width: nPeople === 3 ? 0.22 : 0.3, jitter: [0, 0], motion: 0.04,
       dropoutUntil: -Infinity, fistActiveUntil: -Infinity, nextFistAt: 105 + i * 47, slumpSince: null,
-      nextBlinkAt: 2 + i, baseline: 0.02,
+      nextBlinkAt: 2 + i, baseline: 0.02, cues: new FaceCueTracker(),
     }));
   };
 
@@ -143,7 +145,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
     return {
       blendshapes: bs,
       head_yaw_deg: round(8 * Math.sin((s + p.offsetS) / 9) + 2 * gauss(), 2),
-      head_pitch_deg: round((phase === "worn_out" ? 14 : 3) + 2 * gauss(), 2),
+      head_pitch_deg: round((phase === "worn_out" ? -14 : -3) + 2 * gauss(), 2),
       head_roll_deg: round(2 * gauss(), 2),
     };
   };
@@ -163,6 +165,9 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
     const visible = s >= p.dropoutUntil;
     const raw = visible ? faceRaw(p, phase, s) : null;
     const faceValence = raw ? round(clamp(Math.tanh(2.5 * (valenceRaw(raw.blendshapes) - p.baseline)), -1, 1)) : NaN;
+    const cues = raw
+      ? p.cues.update({ ...rawCues(raw.blendshapes, null), yaw: raw.head_yaw_deg, pitch: raw.head_pitch_deg }, s * 1000)
+      : (p.cues.update(null, s * 1000), NO_CUES);
 
     let onsets = 0;
     if (phase === "frustrated" && s >= p.nextFistAt) {
@@ -183,7 +188,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
 
     return {
       track_id: p.id, bbox, fist_onsets: onsets, fist_active: s < p.fistActiveUntil, slump, head_in_hands: headInHands,
-      motion: round(p.motion), face_visible: visible, face_valence: faceValence, raw,
+      motion: round(p.motion), face_visible: visible, face_valence: faceValence, ...cues, raw,
     };
   };
 

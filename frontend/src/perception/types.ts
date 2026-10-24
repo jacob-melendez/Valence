@@ -20,11 +20,13 @@ export type BBox = [number, number, number, number];
 export interface FaceRaw {
   /** All 52 blendshape scores (0..1) by MediaPipe category name, `_neutral` included. */
   blendshapes: Record<string, number>;
-  /** Head turn, degrees: 0 facing the camera, > 0 turned toward the image's right (the person's left). */
+  /**
+   * Absolute head pose from the facial transformation matrix, degrees, signed as in docs/EMOTION_FEATURES.md 1.1:
+   * yaw > 0 the nose points toward the image's right; pitch > 0 the face tilts up; roll > 0 the head tilts clockwise
+   * in the image (its top toward the image's right). All about 0 when facing the lens.
+   */
   head_yaw_deg: number;
-  /** Head nod, degrees: 0 level, > 0 looking down. */
   head_pitch_deg: number;
-  /** Head tilt, degrees: 0 upright, > 0 tilted clockwise in the image. */
   head_roll_deg: number;
 }
 
@@ -44,6 +46,22 @@ export interface PersonObs {
   face_visible: boolean;
   /** [-1, 1] relative to the person's neutral baseline; NaN when the face is not visible. */
   face_valence: number;
+  // Emotion-map face cues (docs/EMOTION_FEATURES.md section 1), relative to the person's neutral (first 20 s of
+  // visible face); NaN (blink_onsets 0) when the face is not visible. Python defaults them to NaN / 0.
+  /** browDown L/R mean minus neutral, -1..1. */
+  brow_down: number;
+  /** Neutral eyeBlink L/R mean minus this frame's, -1..1 (> 0 eyes wider than neutral). */
+  eye_open: number;
+  /** mouthFrown L/R mean minus neutral, -1..1. */
+  mouth_frown: number;
+  /** mouthSmile L/R mean minus neutral, -1..1. */
+  smile: number;
+  /** Degrees from the neutral pose, -90..90; > 0 nose toward the image's right. */
+  head_yaw: number;
+  /** Degrees from the neutral pose, -90..90; > 0 face tilted up. */
+  head_pitch: number;
+  /** Blinks completed on this frame (0 or 1). */
+  blink_onsets: number;
   /**
    * Browser-only extras. The browser source always sets it (null when the face is not visible); it is absent on
    * observations replayed from Python recordings.
@@ -213,7 +231,7 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 const nanToNull = (v: number): number | null => (Number.isNaN(v) ? null : v);
 const nullToNan = (v: unknown): number => (v === null || v === undefined ? NaN : Number(v));
 
-/** JSON-safe dict, NaN -> null, like contracts.obs_to_dict (plus `raw` when present). */
+/** JSON-safe dict, NaN -> null, like contracts.obs_to_dict (every PersonObs field, plus `raw` when present). */
 export function obsToDict(obs: Obs): { [k: string]: Json } {
   if (obs.type === "audio") {
     return {
@@ -230,7 +248,9 @@ export function obsToDict(obs: Obs): { [k: string]: Json } {
       const d: { [k: string]: Json } = {
         track_id: p.track_id, bbox: [...p.bbox], fist_onsets: p.fist_onsets, fist_active: p.fist_active,
         slump: p.slump, head_in_hands: p.head_in_hands, motion: nanToNull(p.motion), face_visible: p.face_visible,
-        face_valence: nanToNull(p.face_valence),
+        face_valence: nanToNull(p.face_valence), brow_down: nanToNull(p.brow_down), eye_open: nanToNull(p.eye_open),
+        mouth_frown: nanToNull(p.mouth_frown), smile: nanToNull(p.smile), head_yaw: nanToNull(p.head_yaw),
+        head_pitch: nanToNull(p.head_pitch), blink_onsets: p.blink_onsets,
       };
       if (p.raw !== undefined) {
         d["raw"] = p.raw === null ? null : {
@@ -243,7 +263,10 @@ export function obsToDict(obs: Obs): { [k: string]: Json } {
   };
 }
 
-/** Inverse of obsToDict; also reads Python JSONL lines (`obs_to_dict`, or the older "kind" key). */
+/**
+ * Inverse of obsToDict; also reads Python JSONL lines (`obs_to_dict`, or the older "kind" key). Fields an older
+ * recording lacks take the Python defaults (NaN, 0).
+ */
 export function obsFromDict(d: Record<string, unknown>): Obs {
   const kind = d["type"] ?? d["kind"];
   const num = (k: string) => nullToNan(d[k]);
@@ -263,6 +286,9 @@ export function obsFromDict(d: Record<string, unknown>): Obs {
       fist_onsets: Number(p["fist_onsets"] ?? 0), fist_active: Boolean(p["fist_active"]), slump: Boolean(p["slump"]),
       head_in_hands: Boolean(p["head_in_hands"]), motion: nullToNan(p["motion"]),
       face_visible: Boolean(p["face_visible"]), face_valence: nullToNan(p["face_valence"]),
+      brow_down: nullToNan(p["brow_down"]), eye_open: nullToNan(p["eye_open"]), mouth_frown: nullToNan(p["mouth_frown"]),
+      smile: nullToNan(p["smile"]), head_yaw: nullToNan(p["head_yaw"]), head_pitch: nullToNan(p["head_pitch"]),
+      blink_onsets: Number(p["blink_onsets"] ?? 0),
     };
     if ("raw" in p) {
       const r = p["raw"] as Record<string, unknown> | null;
