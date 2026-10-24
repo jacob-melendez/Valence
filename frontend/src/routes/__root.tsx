@@ -12,6 +12,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { boot } from "../lib/valence";
 
 function NotFoundComponent() {
   return (
@@ -117,9 +118,10 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   // The static build prerenders only this shell (vite.config.ts, SPA mode), with an empty outlet. Rendering the
   // page after hydration keeps the first client render identical to the shell (no hydration mismatch); the
-  // console boots client-side anyway (camera, store, engine).
+  // console boots client-side anyway (camera, store, engine). boot() runs first so the console's first render (and
+  // the camera preview's effect) already sees the chosen source: the tour never asks for the camera.
   const [hydrated, setHydrated] = useState(false);
-  useEffect(() => setHydrated(true), []);
+  useEffect(() => { boot(); setHydrated(true); }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

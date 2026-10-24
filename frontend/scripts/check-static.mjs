@@ -1,11 +1,14 @@
 // End-to-end check of the static build as Cloudflare will serve it: dist/client behind a tiny server that applies
 // dist/client/_headers, loaded in headless Chromium. Fails if any request leaves the origin, if anything violates
-// the CSP, or if the page throws.
+// the CSP (in the page, a Worker or a worklet: the served CSP gets a report-uri), if the page throws, or if the
+// console shows its red error box (--allow-errors to accept it).
 //
 //   npm run build && node scripts/check-static.mjs [--path /?source=browser] [--fake-media] [--screenshot out.png]
+//   node scripts/check-static.mjs --path "/?source=browser&perception=mock" --fake-media --wait 25000 --expect "Top drivers by layer"
+//   node scripts/check-static.mjs --path "/?demo=tour" --wait 15000 --expect "Top drivers by layer" --forbid-media
 //
 // --fake-media starts Chromium with a fake camera and microphone (and auto-accepts the permission prompt), so the
-// in-browser source can be exercised without hardware.
+// in-browser source can be exercised without hardware. --forbid-media fails if the page calls getUserMedia at all.
 
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
@@ -29,8 +32,12 @@ const SHOT = opt("--screenshot", null);
 const FAKE_VIDEO = opt("--fake-video", null);
 const FAKE_AUDIO = opt("--fake-audio", null);
 const FAKE = args.includes("--fake-media") || Boolean(FAKE_VIDEO || FAKE_AUDIO);
-// --expect "a|b": each text must be on the page at the end (e.g. a person card once predictions flow).
+// --expect "a|b": each text must be on the page at the end. For predictions use PersonCard-only text such as
+// "Top drivers by layer": "Person #1" is also the label of the tracking box, which appears before any prediction.
 const EXPECT = (opt("--expect", "") ?? "").split("|").filter(Boolean);
+const ALLOW_ERRORS = args.includes("--allow-errors");
+const FORBID_MEDIA = args.includes("--forbid-media");
+const REPORT_PATH = "/__csp-report";
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -67,14 +74,24 @@ const RULES = parseHeaders(path.join(ROOT, "_headers"));
 const matches = (pattern, url) =>
   pattern.endsWith("*") ? url.startsWith(pattern.slice(0, -1)) : url === pattern;
 
+// CSP reports: the browser sends them for violations in Workers and worklets too, which raise no document event,
+// no console message and (blocked before the network) no request event.
+const reports = [];
 const server = createServer((req, res) => {
   const url = new URL(req.url, "http://x").pathname;
+  if (url === REPORT_PATH && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => { reports.push(body); res.statusCode = 204; res.end(); });
+    return;
+  }
   let file = path.join(ROOT, decodeURIComponent(url));
   if (!file.startsWith(ROOT) || !existsSync(file) || statSync(file).isDirectory())
     file = path.join(ROOT, "index.html");
   for (const r of RULES)
     if (matches(r.pattern, url))
-      for (const [k, v] of Object.entries(r.headers)) res.setHeader(k, v);
+      for (const [k, v] of Object.entries(r.headers))
+        res.setHeader(k, k.toLowerCase() === "content-security-policy" ? `${v}; report-uri ${REPORT_PATH}` : v);
   res.setHeader("Content-Type", TYPES[path.extname(file)] ?? "application/octet-stream");
   createReadStream(file).pipe(res);
 });
@@ -106,6 +123,13 @@ await page.addInitScript(() => {
   document.addEventListener("securitypolicyviolation", (e) =>
     window.__csp.push(`${e.violatedDirective} ${e.blockedURI}`),
   );
+  // Every getUserMedia call, before the page's own code runs (the tour and ?perception=mock must make none).
+  window.__gum = [];
+  const md = navigator.mediaDevices;
+  if (md?.getUserMedia) {
+    const orig = md.getUserMedia.bind(md);
+    md.getUserMedia = (c) => { window.__gum.push(JSON.stringify(c)); return orig(c); };
+  }
 });
 page.on("request", (r) => {
   const u = r.url();
@@ -119,6 +143,12 @@ page.on("pageerror", (e) => errors.push(String(e)));
 const resp = await page.goto(origin + PAGE, { waitUntil: "load" });
 await page.waitForTimeout(WAIT_MS);
 violations.push(...(await page.evaluate(() => window.__csp)));
+const gum = await page.evaluate(() => window.__gum);
+const edgeErrors = await page.evaluate(() => {
+  const el = document.querySelector("[data-testid=edge-errors]");
+  return el && el.getClientRects().length ? el.innerText : null;
+});
+await page.waitForTimeout(1000); // CSP reports are sent asynchronously
 const csp = resp?.headers()["content-security-policy"] ?? "";
 const title = await page.title();
 const bodyText = await page.evaluate(() => document.body.innerText);
@@ -134,11 +164,15 @@ const report = {
   csp_applied: csp.startsWith("default-src 'self'"),
   off_origin_requests: offOrigin,
   csp_violations: violations,
+  csp_reports: reports,
   page_errors: errors,
+  edge_errors: edgeErrors,
+  getusermedia_calls: gum,
   missing_text: missing,
 };
 console.log(JSON.stringify(report, null, 2));
 const ok =
-  report.csp_applied && !offOrigin.length && !violations.length && !errors.length && !missing.length;
+  report.csp_applied && !offOrigin.length && !violations.length && !reports.length && !errors.length &&
+  !missing.length && (ALLOW_ERRORS || !edgeErrors) && !(FORBID_MEDIA && gum.length);
 console.log(ok ? "check-static: OK" : "check-static: FAILED");
 process.exit(ok ? 0 : 1);

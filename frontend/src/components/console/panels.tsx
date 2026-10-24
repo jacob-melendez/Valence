@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  LAYERS, REPLAY_SPEEDS, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, provenanceBadges, sendCommand, setSource,
+  LAYERS, REPLAY_SPEEDS, STALE_BUILD, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, getState, isMockPerception, provenanceBadges, sendCommand, setSource,
   shownExplanation, stateName, useValence, clearSelfReports, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
-  type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg, type StatusMsg,
+  type EvalSummary, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
-import { getBrowserStream, onBrowserStream } from "@/lib/browser-source";
+import { getBrowserStream, onBrowserStream, type BrowserStatus } from "@/lib/browser-source";
 
 export const STATE_VAR: Record<StateKey | "Overwhelmed" | "Tense", string> = {
   Focused: "var(--state-focused)",
@@ -131,7 +131,9 @@ export function SourceControls() {
   const errors = (s.edgeError || s.micError) && (
     <div className="space-y-1 rounded-md border border-destructive bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive" data-testid="edge-errors">
       {s.edgeError && <div>{s.source === "browser" ? "" : "edge: "}{s.edgeError}</div>}
-      {s.micError && <div>mic: {s.micError} (running video-only)</div>}
+      {/* "video-only" is only true while the camera runs. */}
+      {s.micError && <div>{s.source === "browser" ? "" : "mic: "}{s.micError}{s.edgeError ? "" : " (running video-only)"}</div>}
+      {s.edgeError === STALE_BUILD && <Btn small onClick={() => window.location.reload()}>↻ Reload</Btn>}
     </div>
   );
   if (s.source === "browser") return (
@@ -148,7 +150,8 @@ export function SourceControls() {
         {errors}
         <p className="text-sm text-muted-foreground">
           The whole engine runs in this page: perception, the 15-minute window, the model, the explanation and the audit log.
-          Frames and audio are processed in memory and dropped; the page is not allowed to send data anywhere.
+          Frames and audio are processed in memory and dropped, and nothing is uploaded; the deployed site's CSP forbids
+          connecting to any other origin (System status shows whether this host serves it).
           Scenario and recording replays need the desktop backend (LIVE).
         </p>
       </div>
@@ -200,6 +203,8 @@ export function RoomBaselineCard() {
   const b = s.baseline;
   const progress = baselineProgress(b);
   const capturing = b?.mode === "capturing";
+  // The tour's scripted records never reach the aggregator, so a capture there would never fill.
+  const tour = s.source === "browser" && getBrowserMode() === "tour";
   const warn = baselineWarning(s);
   const tone = b?.mode === "captured" ? "bg-ok" : capturing ? "bg-primary" : "bg-muted-foreground";
   const stat = (k: string, v: string, id: string) => (
@@ -230,12 +235,13 @@ export function RoomBaselineCard() {
             <span className="font-mono" data-testid="baseline-progress">{b.db_samples}/{b.target_samples}{b.lux_samples !== b.db_samples ? ` · lux ${b.lux_samples}` : ""}</span>
           </div>
           {capturing && <p className="mt-2 text-sm text-warn">Sit neutral and quiet at the desk until the mode reads “captured”.</p>}
-          {b.mode === "auto" && <p className="mt-2 text-xs text-muted-foreground">Automatic: the first {b.target_samples} s of the session or recording{b.complete ? "" : " (filling)"}. Scenario replays use the simulator's own baseline.</p>}
+          {b.mode === "auto" && !tour && <p className="mt-2 text-xs text-muted-foreground">Automatic: the first {b.target_samples} s of the session or recording{b.complete ? "" : " (filling)"}. Scenario replays use the simulator's own baseline.</p>}
         </>
       )}
+      {tour && <p className="mt-2 text-xs text-muted-foreground">The tour carries its own baseline; capturing one needs the live camera and mic.</p>}
       <div className="mt-3 flex flex-wrap gap-2">
-        <Btn small tone="primary" disabled={capturing} onClick={() => sendCommand({ kind: "baseline", seconds: 90 })}>◎ Capture 90 s</Btn>
-        <Btn small onClick={() => sendCommand({ kind: "baseline_reset" })}>Reset</Btn>
+        <Btn small tone="primary" disabled={capturing || tour} onClick={() => sendCommand({ kind: "baseline", seconds: 90 })}>◎ Capture 90 s</Btn>
+        <Btn small disabled={tour} onClick={() => sendCommand({ kind: "baseline_reset" })}>Reset</Btn>
       </div>
     </div>
   );
@@ -250,6 +256,8 @@ export function CameraView() {
 
   const inBrowser = s.source === "browser";
   useEffect(() => {
+    // Nothing before boot() has picked the source: the tour and ?perception=mock must never ask for the camera.
+    if (!s.booted) return;
     // In-browser source: show the stream the engine already opened (one camera, one permission prompt).
     if (inBrowser) {
       const show = (st: MediaStream | null) => {
@@ -271,7 +279,7 @@ export function CameraView() {
       })
       .catch(() => { if (!cancelled) setCam("off"); });
     return () => { cancelled = true; stream?.getTracks().forEach((t) => t.stop()); };
-  }, [inBrowser]);
+  }, [inBrowser, s.booted]);
 
   const showVideo = cam === "on" && !replay;
   return (
@@ -302,7 +310,7 @@ export function CameraView() {
         })}
         {s.running !== "running" && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/80 text-3xl font-bold">
-            {s.running === "paused" ? "PAUSED · sensing suspended" : "STOPPED · privacy kill switch"}
+            {s.running === "paused" ? "PAUSED · camera and mic released" : "STOPPED · privacy kill switch"}
           </div>
         )}
       </div>
@@ -349,7 +357,7 @@ export function Governance() {
 // ---------- Status ----------
 export function SystemStatus() {
   const s = useValence();
-  const st = s.status as (StatusMsg & { face_hz?: number; video_backend?: string | null }) | null;
+  const st = s.status as BrowserStatus | null;
   const inBrowser = s.source === "browser";
   const item = (k: string, v: React.ReactNode, ok?: boolean) => (
     <div className="flex items-center justify-between border-b py-1.5 last:border-0">
@@ -362,19 +370,23 @@ export function SystemStatus() {
       <div className="panel-title">System status</div>
       {!st ? <div className="text-muted-foreground">No status yet</div> : (
         <div className="text-base">
+          {inBrowser && st.loading && item("Loading", <span data-testid="status-loading">{st.loading}…</span>)}
           {inBrowser && getBrowserMode() === "tour" ? item("Camera / mic", "not used (tour)") : <>
             {item("Camera", st.camera ? "ON" : "OFF", st.camera)}
             {item("Microphone", st.mic ? "ON" : "OFF", st.mic)}
           </>}
           {item("Mode", String(st.mode ?? "—").toUpperCase())}
           {item("FPS", fmt(st.fps))}
-          {/* Blink rates are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3). */}
-          {inBrowser && typeof st.face_hz === "number" && item("Face rate (blinks)", `${fmt(st.face_hz)} Hz`, st.face_hz >= 15)}
+          {/* Blink rates are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3); perception runs at
+              10 fps, so this is information, not a fault. */}
+          {inBrowser && typeof st.face_hz === "number" && item("Face rate (blinks)", <>{fmt(st.face_hz)} Hz{st.face_hz < 15 && <span className="block text-xs font-normal text-muted-foreground">blink counts undercount below ~15 Hz</span>}</>)}
           {inBrowser && st.video_backend && item("Video models", st.video_backend)}
           {item("Loop latency", `${fmt(st.loop_latency_ms, 0)} ms`, (st.loop_latency_ms ?? 0) < 250)}
           {inBrowser ? item("Narrator", "template (in-browser)") : item("Narrator", st.narrator, st.narrator === "ready")}
-          {/* In the browser the page stays online (it loads its own files) but its CSP forbids sending data anywhere. */}
-          {inBrowser ? item("Network", "SEALED · connect-src 'self'", true) : item("Network", st.offline ? "OFFLINE ✓" : "ONLINE", st.offline)}
+          {/* In the browser the page stays online (it loads its own files); SEALED only when this host's CSP says so. */}
+          {inBrowser ? (st.sealed === true ? item("Network", "SEALED · connect-src 'self'", true)
+            : st.sealed === false ? item("Network", "not sealed (no CSP on this host)", false) : item("Network", "checking the CSP…"))
+            : item("Network", st.offline ? "OFFLINE ✓" : "ONLINE", st.offline)}
           {item("Degraded", st.degraded?.length ? st.degraded.join(", ") : "none", !st.degraded?.length)}
           {item("Purge violation", st.purge_violation ? "ALARM" : "none", !st.purge_violation)}
           {item("Uptime", `${Math.floor(st.uptime_s / 60)}m ${Math.floor(st.uptime_s % 60)}s`)}
@@ -851,7 +863,8 @@ export function SelfReport() {
   const [last, setLast] = useState<{ v: number; a: number; at: number } | null>(null);
   const [note, setNote] = useState("");
   const [now, setNow] = useState(() => Date.now());
-  const ids = [...new Set([...s.persons.map((p) => p.id), ...Object.keys(s.predictions).map(Number)])].sort((a, b) => a - b);
+  // Only who is tracked now (the room in room-only mode): a departed person's last card must not take the taps.
+  const ids = s.roomOnly ? [0] : [...new Set(s.persons.map((p) => p.id))].sort((a, b) => a - b);
   const [pid, setPid] = useState<number | null>(null);
   const person = pid !== null && ids.includes(pid) ? pid : (ids[0] ?? null);
   useEffect(() => onSelfReports(() => setTaps(getSelfReports().length)), []);
@@ -862,6 +875,7 @@ export function SelfReport() {
   const onTap = (e: React.MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const v = ((e.clientX - r.left) / r.width) * 2 - 1, a = 1 - ((e.clientY - r.top) / r.height) * 2;
+    if (s.running !== "running") { setNote("Sensing is paused or stopped: press Start to record taps."); return; }
     if (person === null) { setNote("No person in view yet."); return; }
     if (recordSelfReport(person, v, a)) { setLast({ v, a, at: Date.now() }); setNote(""); }
     else setNote("No model input yet for this person (the window is still filling).");
@@ -911,6 +925,17 @@ export function Welcome() {
   const [hidden, setHidden] = useState(false);
   if (hidden || s.source !== "browser") return null;
   const tour = getBrowserMode() === "tour";
+  const st = s.status as BrowserStatus | null;
+  const devices = st?.camera && st.mic ? "camera and microphone" : st?.camera ? "camera (no microphone)" : st?.mic ? "microphone (no camera)" : null;
+  // Paused or stopped first: the store has it at once, while status (still "loading") may be a second old.
+  const halted = s.running === "paused" ? "Paused" : "Stopped";
+  const now = s.running !== "running" ? (tour ? `${halted}: press Start to resume the tour.` : `${halted}: camera and microphone are released. Press Start to resume.`)
+    : st?.loading ? `${tour ? "Loading the tour" : "Starting"}: ${st.loading}…`
+    : tour ? "Now playing: a scripted, simulated session walking through the 10 states at 10× speed (no camera)."
+    : s.edgeError && !devices ? "Not running: see the error in the Source panel below."
+    : isMockPerception() ? "Now running on the mock perception (no camera or microphone; for testing)."
+    : devices ? `Now running on your ${devices}. The first minute warms up the window and your neutral face baseline.`
+    : st ? "Camera and microphone are not running: see the Source panel below." : "Starting…";
   return (
     <section className="mx-6 mt-5 rounded-lg border border-primary/60 bg-primary/5 p-5" data-testid="welcome">
       <div className="flex flex-wrap items-start gap-4">
@@ -919,13 +944,11 @@ export function Welcome() {
           <p className="mt-2 max-w-3xl text-base text-muted-foreground">
             Valence reads how a person is doing from the <em>context</em> around the face: room noise and light, posture,
             motion, fists, laughter, time since a break, and the face itself, over a 15-minute window, and explains every call.
-            Here the whole engine runs in this page. Camera and microphone are processed in memory and dropped;
-            the page is not allowed to send data anywhere (<span className="font-mono">connect-src 'self'</span>).
+            Here the whole engine runs in this page. Camera and microphone are processed in memory and dropped, and nothing
+            is uploaded; the deployed site's CSP (<span className="font-mono">connect-src 'self'</span>) forbids the page from
+            connecting to any other origin.{st?.sealed === false ? " This host serves no CSP, so here that is not enforced." : ""}
           </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {tour ? "Now playing: a scripted, simulated session walking through the 10 states at 10× speed (no camera)."
-              : "Now running on your camera and microphone. The first minute warms up the window and your neutral face baseline."}
-          </p>
+          <p className="mt-2 text-sm text-muted-foreground" data-testid="welcome-now">{now}</p>
         </div>
         <div className="flex flex-col gap-2">
           <Btn tone="primary" active={!tour} onClick={() => startBrowserSource("live")}>● Use my camera (on-device)</Btn>

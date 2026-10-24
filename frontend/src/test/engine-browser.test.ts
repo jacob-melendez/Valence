@@ -63,6 +63,49 @@ describe("browser engine glue (served predictor + runtime + emotion map)", () =>
     expect(gov?.type === "governance" && gov.frames_purged).toBeGreaterThan(0);
   });
 
+  it("forgets a person's model input once they are no longer predicted (no stale self-report vectors)", async () => {
+    const engine = await createBrowserEngine({ fetchFn: stubFetch(FILES), tz: "UTC" });
+    vi.useFakeTimers();
+    let mono = 1000, wall = 1792850400;
+    const perception = createMockPerception({ people: 2, seed: 3, clock: { now: () => mono, wall: () => wall } });
+    perception.onObservation((o) => { engine.push(o); });
+    await perception.start(null);
+    for (let s = 0; s < 12; s++) {
+      for (let k = 0; k < 50; k++) { mono += 0.1; wall += 0.1; await vi.advanceTimersByTimeAsync(100); }
+      engine.tick(wall, mono, perception.counters());
+    }
+    expect(engine.latestInputs(1)).not.toBeNull();
+    perception.stop(); // everyone leaves the frame
+    mono += 5; wall += 5;
+    const out = engine.tick(wall, mono, perception.counters());
+    expect(out.some((m) => m.type === "prediction")).toBe(false);
+    expect(engine.latestInputs(1)).toBeNull();
+    expect(engine.latestInputs(2)).toBeNull();
+  });
+
+  it("the kill switch's reset drops the room window too, and control actions go into the audit chain", async () => {
+    const engine = await createBrowserEngine({ fetchFn: stubFetch(FILES), tz: "UTC" });
+    vi.useFakeTimers();
+    let mono = 1000, wall = 1792850400;
+    const perception = createMockPerception({ people: 1, seed: 5, clock: { now: () => mono, wall: () => wall } });
+    perception.onObservation((o) => { engine.push(o); });
+    await perception.start(null);
+    for (let s = 0; s < 6; s++) {
+      for (let k = 0; k < 50; k++) { mono += 0.1; wall += 0.1; await vi.advanceTimersByTimeAsync(100); }
+      engine.tick(wall, mono, perception.counters());
+    }
+    perception.stop();
+    const rooms = engine.runtime.window.room().length;
+    expect(rooms).toBeGreaterThan(0);
+    engine.resetPeople(); // demo reset keeps the room's history
+    expect(engine.runtime.window.room().length).toBe(rooms);
+    engine.resetPeople(false); // the kill switch (app.py control stop: reset_people(keep_room=False))
+    expect(engine.runtime.window.room()).toHaveLength(0);
+    engine.audit?.("control_stop");
+    const ops = engine.runtime.audit.entries().filter((e) => e.kind === "operator").map((e) => e.payload);
+    expect(ops.slice(-2)).toEqual([{ action: "reset", keep_room: false }, { action: "control_stop" }]);
+  });
+
   it("runs without the emotion map when its files are missing", async () => {
     const engine = await createBrowserEngine({ fetchFn: stubFetch({ "/models/core/": ARTIFACTS }), tz: "UTC" });
     expect(engine.emotion).toBeNull();

@@ -2,7 +2,8 @@
  * In-browser source: the whole Valence pipeline runs in this page (Valence Web).
  * Camera and microphone are opened here, turned into observations by the perception module
  * (frontend/src/perception), aggregated and scored by the TypeScript engine (frontend/src/engine), and
- * dropped. Nothing is recorded or sent anywhere (the deployed CSP has connect-src 'self').
+ * dropped. Nothing is recorded or uploaded (the deployed CSP has connect-src 'self'; status().sealed says whether
+ * this host actually serves it).
  * It emits the same messages the backend WebSocket does (docs/API.md section 3), so every panel works unchanged.
  */
 import type { AffectStateInfo, Command, HelloMsg, RoomBaseline, ServerMessage, StatusMsg } from "./valence";
@@ -22,7 +23,9 @@ export interface PerceptionCounters {
   transcripts_purged?: number; violations?: number; live_raw_buffers?: number; fps?: number;
 }
 /** The parts of perception's status() this module shows (frontend/src/perception/types.ts PerceptionStatus). */
-export interface PerceptionStatusLike { fps?: number; face_hz?: number; degraded?: string[]; video_backend?: string | null }
+export interface PerceptionStatusLike {
+  fps?: number; face_hz?: number; degraded?: string[]; video_backend?: string | null; download_bytes?: number;
+}
 /** frontend/src/perception's createPerception() / createMockPerception() result. */
 export interface PerceptionLike {
   start(stream: MediaStream | null): void | Promise<void>;
@@ -47,7 +50,10 @@ export interface BrowserEngine {
   logBreak(wall: number): void;
   startBaseline(seconds: number | null, mode: "capturing" | "auto"): void;
   baseline(): RoomBaseline;
-  resetPeople(): void;
+  /** Forget every person; keepRoom false also drops the room's history (the kill switch, as app.py control stop). */
+  resetPeople(keepRoom?: boolean): void;
+  /** An operator entry in the audit chain (valence/api/app.py control: `control_{action}`). */
+  audit?(action: string): void;
   /** The emotion model's current input for a person (self-report capture), when the emotion map is loaded. */
   latestInputs?(personId: number): { feature_version: string; features: Record<string, number | null> } | null;
 }
@@ -63,7 +69,17 @@ export interface BrowserSourceDeps {
   /** "tour": replay the engine's scripted emotion tour (no camera, no mic), `tourSpeed` times faster than real time. */
   mode?: "live" | "tour";
   tourSpeed?: number;
+  /** false: open no camera or mic and start perception with null (?perception=mock). Default true. */
+  needsMedia?: boolean;
+  /** Whether this host serves a CSP that limits connect-src to 'self' (checked once at start; cspSealed()). */
+  cspSealed?: () => Promise<boolean>;
+  /** A camera/mic open begins (first start, or Start after pause, stop or a refused prompt): the last attempt's
+   *  camera and mic errors no longer apply, and this attempt reports its own. */
+  onOpenSensors?: () => void;
 }
+
+/** status() of this source: the backend's StatusMsg plus the browser-only fields the console shows. */
+export type BrowserStatus = StatusMsg & { face_hz?: number; video_backend?: string | null; sealed?: boolean; loading?: string };
 
 // ---------- Shared camera stream (the preview reuses it instead of opening the camera twice) ----------
 let stream: MediaStream | null = null;
@@ -74,27 +90,77 @@ export function onBrowserStream(l: (s: MediaStream | null) => void): () => void 
   streamListeners.add(l);
   return () => { streamListeners.delete(l); };
 }
+const stopTracks = (s: MediaStream | null | undefined) => s?.getTracks().forEach((t) => t.stop());
+
+// ---------- Is the page sealed? ----------
+/** True when a CSP limits connect-src to 'self' alone (only then may the console say the page is sealed). */
+export const sealsConnect = (csp: string | null | undefined) => !!csp && /(?:^|;)\s*connect-src\s+'self'\s*(?:;|$)/i.test(csp);
+/** Read this page's own CSP header (a same-origin HEAD, which connect-src 'self' allows); false when there is none. */
+export async function cspSealed(fetchFn: typeof fetch = (...a) => fetch(...a)): Promise<boolean> {
+  try {
+    if (typeof location === "undefined") return false;
+    const r = await fetchFn(location.pathname, { method: "HEAD", cache: "no-store" });
+    return sealsConnect(r.headers.get("content-security-policy"));
+  } catch { return false; }
+}
+
+// ---------- Camera and microphone ----------
+const errName = (e: unknown) => (e && typeof e === "object" && "name" in e ? String((e as { name: unknown }).name) : "");
+export const NO_MEDIA_API = "Camera and microphone need a secure page (HTTPS or localhost): this browser offers no getUserMedia here.";
+/** Plain, actionable text for a getUserMedia failure (by DOMException name). */
+export function mediaErrorText(e: unknown, what: "camera" | "mic" | "both"): string {
+  const dev = what === "mic" ? "Microphone" : what === "camera" ? "Camera" : "Camera and microphone";
+  switch (errName(e)) {
+    case "NotAllowedError": return `${dev} blocked: allow ${what === "both" ? "them" : "it"} for this site (the camera icon in the address bar), then press Start.`;
+    case "SecurityError": return `${dev} blocked by the browser's security policy (the page needs HTTPS and a policy that allows the camera).`;
+    case "NotFoundError": return what === "mic" ? "No microphone found." : what === "camera" ? "No camera found." : "No camera or microphone found.";
+    case "NotReadableError": return `${dev} could not start: another app may be using ${what === "both" ? "them" : "it"}, or the system blocked access.`;
+    case "OverconstrainedError": return `${dev} cannot deliver the requested format.`;
+    case "AbortError": return `${dev} start was interrupted: press Start to try again.`;
+    default: return `${dev} failed: ${String(e)}`;
+  }
+}
+// Worth asking again device by device: one device is missing, busy or picky. A refusal (NotAllowed, Security) covers
+// both, and asking again only repeats the prompt (and counts toward the browser's dismissal embargo).
+const RETRY_EACH = new Set(["NotFoundError", "NotReadableError", "OverconstrainedError"]);
 
 /** Open camera (16:9, as the backend edge asks) and microphone (raw: no echo cancellation, noise suppression or AGC,
- *  so levels mean what the Python edge's levels mean). Either may fail independently. */
-async function openMedia(onError: BrowserSourceDeps["onError"]): Promise<MediaStream | null> {
+ *  so levels mean what the Python edge's levels mean). Either may fail on its own; `alive` false stops further prompts. */
+async function openMedia(onError: BrowserSourceDeps["onError"], alive: () => boolean): Promise<MediaStream | null> {
   const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
-  if (!md?.getUserMedia) { onError("camera", "getUserMedia is not available (needs HTTPS or localhost)"); return null; }
+  if (!md?.getUserMedia) { onError("camera", NO_MEDIA_API); return null; }
   const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
   const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
-  try { return await md.getUserMedia({ video, audio }); } catch { /* try each on its own */ }
+  try { return await md.getUserMedia({ video, audio }); } catch (e) {
+    if (!RETRY_EACH.has(errName(e))) { onError("camera", mediaErrorText(e, "both")); return null; }
+  }
   const out = new MediaStream();
-  try { (await md.getUserMedia({ video })).getTracks().forEach((t) => out.addTrack(t)); } catch (e) { onError("camera", String(e)); }
-  try { (await md.getUserMedia({ audio })).getTracks().forEach((t) => out.addTrack(t)); } catch (e) { onError("mic", String(e)); }
+  const each: ["camera" | "mic", MediaStreamConstraints][] = [["camera", { video }], ["mic", { audio }]];
+  for (const [what, c] of each) {
+    if (!alive()) break;
+    try { (await md.getUserMedia(c)).getTracks().forEach((t) => out.addTrack(t)); } catch (e) { onError(what, mediaErrorText(e, what)); }
+  }
   return out.getTracks().length ? out : null;
+}
+
+/** Bytes fetched so far under a prefix since the page loaded (resource timing, finished files only). */
+function fetchedBytes(prefix: string): number {
+  try {
+    const base = new URL(prefix, location.href).href;
+    return (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+      .filter((e) => e.name.startsWith(base)).reduce((n, e) => n + (e.transferSize || 0), 0);
+  } catch { return 0; }
 }
 
 // ---------- The source ----------
 const TICK_MS = 5000;
+const MODELS = "/mediapipe/";
 
 export class BrowserSource {
   private engine: BrowserEngine | null = null;
   private perception: PerceptionLike | null = null;
+  /** The stream this source opened (published to the preview through setStream). */
+  private media: MediaStream | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private statusTimer: ReturnType<typeof setInterval> | null = null;
   private running: "running" | "paused" | "stopped" = "running";
@@ -103,8 +169,18 @@ export class BrowserSource {
   private lastAudioAt = 0;
   private loopLatency = 0;
   private tourTicks = 0;
+  // Operator toggles, kept so a toggle pressed while the engine loads still reaches it.
   private roomOnly = false;
+  private readonly overlays = { face_occlusion: false, low_light: false };
+  private sealed: boolean | null = null;
+  private engineLoading = false;
+  private sensorLoading: "media" | "perception" | null = null;
+  /** Model bytes already fetched when this perception load began (an earlier session's, or none). */
+  private bytesBefore = 0;
+  /** Bumped by start() / stop(): anything an older session still had in flight is dropped. */
   private generation = 0;
+  /** Bumped by openSensors() / closeSensors() (pause, stop): an open still in flight releases what it got. */
+  private sensorGen = 0;
   private readonly now: () => number;
   private readonly mono: () => number;
 
@@ -115,46 +191,108 @@ export class BrowserSource {
     this.mono = deps.mono ?? (() => performance.now());
   }
 
-  /** Load the engine, open camera + mic, start perception and the tick/status timers. */
+  /** Load the engine, open camera + mic, start perception and the tick timer (status from the first second on). */
   async start(): Promise<void> {
     const gen = ++this.generation;
+    this.clearTimers();
     this.startedAt = this.now();
-    try { this.engine = await this.deps.createEngine(); } catch (e) { this.deps.onError("engine", String(e)); return; }
+    this.engineLoading = true;
+    // Status from the start, so the console says what it waits for (engine, permission, ~40 MB of models).
+    const everySecond = () => { if (gen === this.generation) this.deps.emit(this.status()); };
+    this.statusTimer = setInterval(everySecond, 1000);
+    everySecond();
+    this.deps.cspSealed?.().then((s) => { if (gen === this.generation) this.sealed = s; }, () => {});
+    let engine: BrowserEngine;
+    try { engine = await this.deps.createEngine(); } catch (e) {
+      if (gen === this.generation) { this.engineLoading = false; this.deps.onError("engine", String(e)); }
+      return;
+    }
     if (gen !== this.generation) return;
+    this.engine = engine;
+    this.engineLoading = false;
+    // Toggles pressed while it loaded (the console already shows them as set).
+    if (this.roomOnly) engine.setRoomOnly(true);
+    for (const w of ["face_occlusion", "low_light"] as const) if (this.overlays[w]) engine.setOverlay(w, true);
     this.deps.emit(this.hello());
-    if (!this.tour) await this.openSensors(gen);
+    // Paused or stopped while the engine loaded: Start opens the sensors later.
+    if (!this.tour && this.running === "running") await this.openSensors(gen);
     if (gen !== this.generation) return;
     this.tickTimer = setInterval(() => this.tick(), this.tour ? TICK_MS / (this.deps.tourSpeed ?? 10) : TICK_MS);
-    this.statusTimer = setInterval(() => this.deps.emit(this.status()), 1000);
-    this.deps.onBaseline(this.engine.baseline());
+    this.deps.onBaseline(engine.baseline());
   }
 
   private async openSensors(gen: number) {
-    const media = await openMedia(this.deps.onError);
-    if (gen !== this.generation) { media?.getTracks().forEach((t) => t.stop()); return; }
-    setStream(media);
+    const g = ++this.sensorGen;
+    const alive = () => gen === this.generation && g === this.sensorGen && this.running === "running";
+    const onError: BrowserSourceDeps["onError"] = (what, detail) => { if (alive()) this.deps.onError(what, detail); };
+    if (!alive()) return;
+    this.deps.onOpenSensors?.();
+    let media: MediaStream | null = null, p: PerceptionLike | null = null;
     try {
-      this.perception = await this.deps.createPerception();
-      this.perception.onObservation((o) => this.onObs(o));
-      await this.perception.start(media);
-    } catch (e) { this.deps.onError("camera", `perception failed: ${String(e)}`); }
+      if (this.deps.needsMedia !== false) {
+        this.sensorLoading = "media";
+        media = await openMedia(onError, alive);
+        if (!alive()) return this.release(media, null);
+        // Neither camera nor mic: the cause is reported, and perception would have nothing to run on.
+        if (!media) { this.sensorLoading = null; this.emitStatus(); return; }
+        if (stream && stream !== media) stopTracks(stream); // never leave an earlier stream running unseen
+        this.media = media;
+        setStream(media);
+      }
+      this.sensorLoading = "perception";
+      this.bytesBefore = fetchedBytes(MODELS);
+      p = await this.deps.createPerception();
+      if (!alive()) return this.release(media, p);
+      const mine = p;
+      this.perception = p;
+      p.onObservation((o) => { if (this.perception === mine) this.onObs(o); });
+      await p.start(media);
+      if (!alive()) return this.release(media, p);
+      this.sensorLoading = null;
+      this.emitStatus();
+    } catch (e) {
+      const live = alive();
+      this.release(media, p); // no perception: keep neither camera nor mic open for nothing
+      if (live) { this.sensorLoading = null; onError("camera", `perception failed: ${String(e)}`); this.emitStatus(); }
+    }
+  }
+
+  /** Status now rather than at the next second (the Welcome line follows a Stop or a finished open at once). */
+  private emitStatus() { if (this.statusTimer) this.deps.emit(this.status()); }
+
+  /** Stop a perception and close a stream this source opened, leaving whatever a newer open owns. */
+  private release(media: MediaStream | null, p: PerceptionLike | null) {
+    p?.stop();
+    stopTracks(media);
+    if (p && this.perception === p) this.perception = null;
+    if (media && this.media === media) this.media = null;
+    if (media && stream === media) setStream(null);
   }
 
   private closeSensors() {
-    this.perception?.stop();
-    this.perception = null;
-    stream?.getTracks().forEach((t) => t.stop());
+    this.sensorGen += 1; // an open in flight sees this and releases what it got
+    this.sensorLoading = null;
+    const p = this.perception, media = this.media;
+    this.perception = this.media = null;
+    p?.stop();
+    stopTracks(media);
+    stopTracks(stream);
     setStream(null);
   }
 
-  /** Stop everything: timers, perception, camera and mic (the kill switch and source changes). */
-  stop() {
-    this.generation += 1;
+  private clearTimers() {
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.statusTimer) clearInterval(this.statusTimer);
     this.tickTimer = this.statusTimer = null;
+  }
+
+  /** Stop everything: timers, perception, camera and mic (source changes). */
+  stop() {
+    this.generation += 1;
+    this.clearTimers();
     this.closeSensors();
     this.engine = null;
+    this.engineLoading = false;
   }
 
   private onObs(o: ObsLike) {
@@ -166,8 +304,8 @@ export class BrowserSource {
     if (isVideo(o)) this.lastVideoAt = this.now(); else this.lastAudioAt = this.now();
   }
 
-  /** The emotion model's current input for a person (for the self-report capture). */
-  latestInputs(personId: number) { return this.engine?.latestInputs?.(personId) ?? null; }
+  /** The emotion model's current input for a person (for the self-report capture); none while paused or stopped. */
+  latestInputs(personId: number) { return this.running === "running" ? this.engine?.latestInputs?.(personId) ?? null : null; }
 
   private tick() {
     if (this.running !== "running" || !this.engine) return;
@@ -192,38 +330,75 @@ export class BrowserSource {
       ...(affect.length ? { affect_states: affect } : {}) };
   }
 
-  status(): StatusMsg & { face_hz?: number; video_backend?: string | null } {
+  /** What the page is still waiting for, or null once everything runs. */
+  private loadingText(ps: PerceptionStatusLike | undefined): string | null {
+    if (this.engineLoading) return this.tour ? "loading the engine and the tour" : "loading the engine and models";
+    if (this.sensorLoading === "media") return "waiting for camera and microphone";
+    if (this.sensorLoading !== "perception") return null;
+    // Both are page-wide sums (perception's download_bytes reads the same resource timing): count this load only, so a
+    // Start after Pause (models from the HTTP cache) does not show the first session's MB again.
+    const mb = Math.max(0, Math.max(ps?.download_bytes ?? 0, fetchedBytes(MODELS)) - this.bytesBefore) / 1e6;
+    return `loading perception models${mb >= 0.1 ? ` · ${mb.toFixed(1)} MB` : ""}`;
+  }
+
+  status(): BrowserStatus {
     const t = this.now(), c = this.perception?.counters(), ps = this.perception?.status?.();
-    const camera = this.running === "running" && t - this.lastVideoAt < 3000;
-    const mic = this.running === "running" && t - this.lastAudioAt < 3000;
-    const degraded = this.tour ? [] : [...(camera ? [] : ["camera"]), ...(mic ? [] : ["mic"]), ...(ps?.degraded ?? [])];
+    // Camera and mic as the browser has them open (its camera light), not as last seen: an open stream that nothing
+    // reads must still show ON.
+    const live = (kind: string) => !!this.media?.getTracks().some((tr) => tr.kind === kind && tr.readyState === "live");
+    const camera = live("video"), mic = live("audio");
+    const loading = this.loadingText(ps);
+    const flowing = (on: boolean, at: number) => on && t - at < 3000;
+    const degraded = this.tour || this.running !== "running" || loading ? []
+      : this.deps.needsMedia === false ? ["mock perception (no camera or mic)", ...(ps?.degraded ?? [])]
+      : [...(flowing(camera, this.lastVideoAt) ? [] : ["camera"]), ...(flowing(mic, this.lastAudioAt) ? [] : ["mic"]), ...(ps?.degraded ?? [])];
     const r1 = (v: number | undefined) => Math.round((v ?? 0) * 10) / 10;
     return { type: "status", mode: this.tour ? "replay" : "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
       // Face passes per second: blink numbers are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3).
       ...(this.tour ? {} : { face_hz: r1(ps?.face_hz ?? ps?.fps ?? c?.fps), video_backend: ps?.video_backend ?? null }),
+      ...(this.sealed === null ? {} : { sealed: this.sealed }),
+      ...(loading ? { loading } : {}),
       loop_latency_ms: Math.round(this.loopLatency * 10) / 10,
       // The LLM narrator is desktop-only; the browser always uses the template explanation.
       narrator: "template", offline: false, uptime_s: Math.round((t - this.startedAt) / 1000),
-      degraded: this.running === "running" ? degraded : [], purge_violation: false };
+      degraded, purge_violation: false };
   }
 
   /** Operator commands, handled locally (no backend). Returns a short result line for the console. */
   command(c: Command): { ok: boolean; text: string } {
     const e = this.engine;
+    const loading = { ok: false, text: "in-browser engine still loading" };
     switch (c.kind) {
-      case "control":
-        if (c.action === "start" && this.running !== "running") {
-          if (this.running === "stopped" && !this.tour) void this.openSensors(this.generation);
+      case "control": {
+        const was = this.running;
+        if (c.action === "start") {
           this.running = "running";
-        } else if (c.action === "pause") this.running = "paused";
-        else if (c.action === "stop") { this.running = "stopped"; this.closeSensors(); e?.resetPeople(); }
+          // From pause or stop (or after a refused prompt) reopen camera and mic; before the engine exists start() does.
+          if (!this.tour && e && (was !== "running" || (!this.perception && !this.sensorLoading))) void this.openSensors(this.generation);
+        } else {
+          // Pause releases camera and mic too (app.py control: stop_edge) but keeps the window and people; the kill
+          // switch also forgets everyone, room history included (reset_people(keep_room=False)).
+          this.running = c.action === "pause" ? "paused" : "stopped";
+          this.closeSensors();
+          if (c.action === "stop") e?.resetPeople(false);
+        }
+        e?.audit?.(`control_${c.action}`);
+        this.emitStatus();
         return { ok: true, text: `control ${c.action} (in-browser)` };
-      case "break": e?.logBreak(this.now() / 1000); return { ok: true, text: "break logged (in-browser)" };
-      case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); e?.resetPeople(); return { ok: true, text: `room-only ${c.room_only}` };
-      case "sim": e?.setOverlay(c.which, c.enabled); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
-      case "baseline": e?.startBaseline(c.seconds, "capturing"); if (e) this.deps.onBaseline(e.baseline()); return { ok: true, text: `baseline ${c.seconds} s (in-browser)` };
-      case "baseline_reset": e?.startBaseline(null, "auto"); if (e) this.deps.onBaseline(e.baseline()); return { ok: true, text: "baseline reset (in-browser)" };
-      case "demo_reset": e?.resetPeople(); return { ok: true, text: "people reset (in-browser)" };
+      }
+      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); return { ok: true, text: "break logged (in-browser)" };
+      // Only the cards go (runtime.setRoomOnly clears `latest`); windows and break clocks stay, as in app.py set_mode.
+      case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); return { ok: true, text: `room-only ${c.room_only}` };
+      case "sim": this.overlays[c.which] = c.enabled; e?.setOverlay(c.which, c.enabled); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
+      case "baseline":
+      case "baseline_reset":
+        // The tour's records never pass the aggregator, so a capture would never fill.
+        if (this.tour) return { ok: false, text: "the tour carries its own room baseline: capture needs the live camera and mic" };
+        if (!e) return loading;
+        if (c.kind === "baseline") e.startBaseline(c.seconds, "capturing"); else e.startBaseline(null, "auto");
+        this.deps.onBaseline(e.baseline());
+        return { ok: true, text: c.kind === "baseline" ? `baseline ${c.seconds} s (in-browser)` : "baseline reset (in-browser)" };
+      case "demo_reset": if (!e) return loading; e.resetPeople(); return { ok: true, text: "people reset (in-browser)" };
       case "live": return { ok: true, text: "already live (in-browser)" };
       case "replay":
       case "replay_recording":

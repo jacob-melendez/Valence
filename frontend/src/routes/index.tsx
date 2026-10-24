@@ -22,7 +22,7 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  useEffect(() => { boot(); }, []);
+  useEffect(() => { boot(); }, []); // a no-op after the root's boot(); keeps the page usable when rendered alone
   const s = useValence();
   const preds = Object.values(s.predictions).sort((a, b) => a.person_id - b.person_id);
   return (

@@ -68,12 +68,17 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
   } else runtime.useLive();
   let tourTick = 0;
   const inputs = new Map<number, Float64Array>();
+  /** Keep model inputs only for the people predicted this tick: a tap must never pair now with someone who left. */
+  const keepInputs = (msgs: readonly { type: string; person_id?: number }[]) => {
+    const predicted = new Set(msgs.flatMap((m) => (m.type === "prediction" && typeof m.person_id === "number" ? [m.person_id] : [])));
+    for (const pid of [...inputs.keys()]) if (!predicted.has(pid)) inputs.delete(pid);
+  };
 
   /** valence/models/emotion.py affect_for_window, keeping the input for the self-report capture. */
   const affectFor = (pid: number) => {
     if (!emotion) return null;
     const person: readonly TickRecord[] = runtime.window.snapshot(pid);
-    if (!person.length) return null;
+    if (!person.length) { inputs.delete(pid); return null; }
     const room = runtime.window.room();
     const x = emotionInput(featuresFromWindow(person, room.length ? room : person), computeEmotion(person), emotion.meta);
     inputs.set(pid, x);
@@ -103,6 +108,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
           if (a) (m as { affect?: unknown }).affect = a;
           if (truth) (m as { truth?: unknown }).truth = { state: truth.true_state, valence: truth.true_valence, arousal: truth.true_arousal };
         }
+        keepInputs(out);
         return out as ServerMessage[];
       }
       runtime.setPurgeCounters({
@@ -116,6 +122,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
         const a = affectFor(m.person_id === ROOM && runtime.roomOnly ? ROOM : m.person_id);
         if (a) (m as { affect?: unknown }).affect = a;
       }
+      keepInputs(msgs);
       return msgs as ServerMessage[];
     },
     setRoomOnly: (v: boolean) => runtime.setRoomOnly(v),
@@ -126,7 +133,8 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
       else runtime.resetRoomBaseline();
     },
     baseline: (): RoomBaseline => runtime.aggregator.baseline.snapshot(),
-    resetPeople: () => { runtime.resetPeople(); inputs.clear(); },
+    resetPeople: (keepRoom = true) => { runtime.resetPeople(keepRoom); inputs.clear(); },
+    audit: (action: string) => runtime.recordAudit("operator", { action }),
     latestInputs(personId: number) {
       const x = inputs.get(personId);
       if (!x || !emotion) return null;

@@ -6,7 +6,7 @@
  * Message shapes follow contract 1.0 (valence/contracts.py, docs/API.md).
  */
 import { useSyncExternalStore } from "react";
-import { BrowserSource, type BrowserEngine, type PerceptionLike } from "./browser-source";
+import { BrowserSource, cspSealed, type BrowserEngine, type PerceptionLike } from "./browser-source";
 
 // ---------- Types ----------
 export type StateKey = "Focused" | "Frustrated_Masked" | "Exhausted" | "Collaborative_Happy";
@@ -187,6 +187,8 @@ export interface ValenceState {
   affectStates: AffectStateInfo[];
   /** Each person's recent valence-arousal readings (15 minutes), for the affect map's trail. */
   affectTrail: Record<number, AffectPoint[]>;
+  /** False until boot() (or any setSource) has picked the source: the preview opens no camera before that. */
+  booted: boolean;
 }
 export interface AffectPoint { t: number; valence: number; arousal: number; label: string }
 
@@ -215,7 +217,7 @@ let state: ValenceState = {
   status: null, retention: null, evalSummary: null,
   states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   sim: { face_occlusion: false, low_light: false }, running: "running",
-  lastCommand: null, lastMessageAt: 0, affectStates: [], affectTrail: {},
+  lastCommand: null, lastMessageAt: 0, affectStates: [], affectTrail: {}, booted: false,
 };
 const listeners = new Set<() => void>();
 function set(patch: Partial<ValenceState>) {
@@ -393,6 +395,8 @@ function resetData() {
     persons: [], mirrored: false, frameW: 0, frameH: 0, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
     states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
     affectStates: [], affectTrail: {},
+    // A new source (a fresh in-browser engine included) starts with no simulation overlay on.
+    sim: { face_occlusion: false, low_light: false },
   });
 }
 
@@ -631,7 +635,7 @@ const BROWSER_RETENTION = {
     { what: "rolling state vector (numeric TickRecords)", where: "this tab's memory", how_long: "15 minutes" },
     { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "this tab's memory (hash-chained)", how_long: "until the tab closes" },
   ],
-  never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (CSP connect-src 'self')"],
+  never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (nothing is uploaded; the deployed CSP allows connect-src 'self' only)"],
 };
 const MOCK_BASELINE: RoomBaseline = { mode: "captured", complete: true, target_samples: 90, db_samples: 90, lux_samples: 90, db_median: 57.2, db_iqr: 2.3, lux_median: 410 };
 const MOCK_SCENARIOS: ScenarioInfo[] = ["full_demo", "focused", "frustrated_masked", "exhausted", "collaborative_happy"].map((name) => ({ name }));
@@ -760,13 +764,20 @@ function stopLive() {
 // stays small for the mock and live sources.
 const engineGlue = import.meta.glob<{ createBrowserEngine: (opts?: { tour?: boolean }) => Promise<BrowserEngine> }>("../engine/browser-engine.ts");
 const perceptionModule = import.meta.glob<{ createPerception?: () => PerceptionLike | Promise<PerceptionLike>; createMockPerception?: () => PerceptionLike | Promise<PerceptionLike> }>("../perception/index.ts");
+/** Shown when a lazy chunk of an older build is gone (every push redeploys): a reload fetches the new one. */
+export const STALE_BUILD = "Valence Web was updated — reload the page";
+/** A failed dynamic import of a hashed chunk (Chromium, WebKit, Firefox wording, Vite's preload) reads as STALE_BUILD. */
+export function loadError(e: unknown): unknown {
+  return /dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS/i.test(String(e))
+    ? new Error(STALE_BUILD) : e;
+}
 const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: string): Promise<T> => {
   const load = Object.values(mods)[0];
   if (!load) throw new Error(`${what} is not built yet`);
-  return load();
+  try { return await load(); } catch (e) { throw loadError(e); }
 };
-/** `?perception=mock` uses the mock perception (no camera); the default is the real MediaPipe module. */
-const wantMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
+/** `?perception=mock` uses the mock perception (no camera, no mic); the default is the real MediaPipe module. */
+export const isMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
 let browser: BrowserSource | null = null;
 /** The in-browser source's input: live camera + mic, or the scripted emotion tour (no camera; ?demo=tour). */
 let browserMode: "live" | "tour" = "live";
@@ -774,26 +785,34 @@ let browserMode: "live" | "tour" = "live";
 export function startBrowserSource(mode: "live" | "tour") { browserMode = mode; setSource("browser"); }
 export const getBrowserMode = () => browserMode;
 function startBrowser() {
-  const mode = browserMode;
-  browser = new BrowserSource({
-    mode, tourSpeed: 10,
+  const mode = browserMode, mockPerception = isMockPerception();
+  // Callbacks count only while this instance is the current source (a stopped one may still settle a prompt).
+  const current = () => state.source === "browser" && browser === src;
+  const src: BrowserSource = new BrowserSource({
+    mode, tourSpeed: 10, needsMedia: !mockPerception, cspSealed: () => cspSealed(),
     createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine({ tour: mode === "tour" }),
     createPerception: async () => {
       const m = await loadOptional(perceptionModule, "The browser perception module");
-      const make = wantMockPerception() ? m.createMockPerception : m.createPerception ?? m.createMockPerception;
+      const make = mockPerception ? m.createMockPerception : m.createPerception ?? m.createMockPerception;
       if (!make) throw new Error("perception module has no factory");
       return make();
     },
-    emit: (m) => { if (state.source === "browser") handleMessage(m); },
-    onBaseline: (b) => { if (state.source === "browser") set({ baseline: b }); },
+    emit: (m) => { if (current()) handleMessage(m); },
+    onBaseline: (b) => { if (current()) set({ baseline: b }); },
     onError: (what, detail) => {
-      if (state.source !== "browser") return;
-      if (what === "mic") set({ micError: detail }); else set({ edgeError: `${what}: ${detail}` });
+      if (!current()) return;
+      if (detail.includes(STALE_BUILD)) set({ edgeError: STALE_BUILD });
+      else if (what === "mic") set({ micError: detail });
+      else set({ edgeError: what === "engine" ? `engine: ${detail}` : detail }); // camera texts say what failed
     },
+    // A new open (Start after a refused prompt or a failed perception) clears the last attempt's camera and mic
+    // errors; it reports its own. Engine errors are not about the sensors and stay.
+    onOpenSensors: () => { if (current()) set({ micError: null, ...(state.edgeError?.startsWith("engine: ") ? {} : { edgeError: null }) }); },
   });
+  browser = src;
   // Self-report taps record the emotion model's current input for the tapped person.
   setFeatureProvider((pid) => browser?.latestInputs(pid) ?? null);
-  void browser.start();
+  void src.start();
 }
 function stopBrowser() { browser?.stop(); browser = null; setFeatureProvider(null); }
 
@@ -838,7 +857,7 @@ export function clearSelfReports() { selfReports.length = 0; selfReportSession =
 export function setSource(source: Source, baseUrl = state.baseUrl) {
   const base = cleanBase(baseUrl) || state.baseUrl;
   stopLive(); mock.stop(); stopBrowser(); resetData();
-  set({ source, baseUrl: base, running: "running" });
+  set({ source, baseUrl: base, running: "running", booted: true });
   if (source === "browser") {
     set({ conn: "browser", retention: BROWSER_RETENTION, evalSummary: null, scenarios: [], recordings: [] });
     startBrowser();
@@ -866,15 +885,19 @@ export function hasBrowserParam(): boolean {
     return q.get("source") === "browser" || q.get("demo") === "tour";
   } catch { return false; }
 }
+/** The console's own URL parameters: only these opt a hosted visit out of the tour (utm_*, fbclid, ref do not). */
+const CONSOLE_PARAMS = ["source", "demo", "api", "perception"];
 /**
  * The hosted Valence Web site (any origin other than localhost / 127.0.0.1 / a LAN address): a first-time visitor
- * with no URL parameters gets the camera-free tour instead of the operator's mock stream.
+ * without the console's own parameters gets the camera-free tour instead of the operator's mock stream.
  */
 export function isHostedSite(): boolean {
   if (typeof window === "undefined") return false;
   const h = window.location.hostname;
+  let own = false;
+  try { const q = new URLSearchParams(window.location.search); own = CONSOLE_PARAMS.some((k) => q.has(k)); } catch { /* ignore */ }
   return !!h && !/^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(h)
-    && !window.location.search;
+    && !own;
 }
 /**
  * Mock by default; `?source=browser` runs the engine in this page; `?demo=tour` replays the scripted tour through

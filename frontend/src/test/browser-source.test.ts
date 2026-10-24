@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BrowserSource, type BrowserEngine, type ObsLike, type PerceptionLike } from "@/lib/browser-source";
+import {
+  BrowserSource, NO_MEDIA_API, cspSealed, getBrowserStream, mediaErrorText, sealsConnect,
+  type BrowserEngine, type BrowserSourceDeps, type BrowserStatus, type ObsLike, type PerceptionLike,
+} from "@/lib/browser-source";
 import type { RoomBaseline, ServerMessage } from "@/lib/valence";
 
 const BASELINE: RoomBaseline = { mode: "auto", complete: false, target_samples: 90, db_samples: 0, lux_samples: 0, db_median: null, db_iqr: null, lux_median: null };
@@ -29,18 +32,21 @@ function fakeEngine(log: string[]): BrowserEngine {
     logBreak: () => { log.push("break"); },
     startBaseline: (s, m) => { log.push(`baseline ${s} ${m}`); },
     baseline: () => BASELINE,
-    resetPeople: () => { log.push("reset"); },
+    resetPeople: (keepRoom = true) => { log.push(`reset keep_room=${keepRoom}`); },
+    audit: (action) => { log.push(`audit ${action}`); },
   };
 }
 
-function fakePerception(): PerceptionLike & { emit: (o: ObsLike) => void; stopped: boolean } {
+type FakePerception = PerceptionLike & { emit: (o: ObsLike) => void; started: boolean; stopped: boolean; startedWith: unknown };
+function fakePerception(opts: { start?: () => void | Promise<void>; status?: () => object } = {}): FakePerception {
   let cb: ((o: ObsLike) => void) | null = null;
-  const p = {
-    stopped: false,
-    start: () => {},
+  const p: FakePerception = {
+    started: false, stopped: false, startedWith: undefined,
+    start: (s) => { p.started = true; p.startedWith = s; return opts.start?.(); },
     stop: () => { p.stopped = true; },
     onObservation: (f: (o: ObsLike) => void) => { cb = f; },
     counters: () => ({ frames_decoded: 3, frames_purged: 3, audio_blocks_purged: 1, fps: 9.6 }),
+    ...(opts.status ? { status: opts.status } : {}),
     emit: (o: ObsLike) => cb?.(o),
   };
   return p;
@@ -49,18 +55,83 @@ function fakePerception(): PerceptionLike & { emit: (o: ObsLike) => void; stoppe
 const video = (wall: number, h: number[]): ObsLike => ({ t: wall, wall, frame_w: 1280, frame_h: 720, mirrored: false,
   persons: h.map((height, i) => ({ track_id: i + 1, bbox: [0.1, 0.1, 0.3, 0.1 + height] as const, slump: i === 0 })) });
 
-describe("in-browser source", () => {
-  afterEach(() => { vi.useRealTimers(); });
+// ---------- Fake camera and microphone (MediaStream tracks with a readyState, a getUserMedia the test answers) ----------
+class FakeTrack {
+  readyState: "live" | "ended" = "live";
+  constructor(readonly kind: "video" | "audio") {}
+  stop() { this.readyState = "ended"; }
+}
+class FakeStream {
+  constructor(readonly tracks: FakeTrack[] = []) {}
+  getTracks() { return this.tracks; }
+  getVideoTracks() { return this.tracks.filter((t) => t.kind === "video"); }
+  getAudioTracks() { return this.tracks.filter((t) => t.kind === "audio"); }
+  addTrack(t: FakeTrack) { this.tracks.push(t); }
+}
+const domErr = (name: string) => Object.assign(new Error(`${name}: denied`), { name });
+interface Ask { c: MediaStreamConstraints; grant: () => void; deny: (name: string) => void }
+/** getUserMedia that waits for the test (`hold`), or answers at once with both devices (default). */
+function installMedia(answer: "grant" | "hold" | ((c: MediaStreamConstraints) => FakeTrack[] | Error) = "grant") {
+  const calls: MediaStreamConstraints[] = [], asks: Ask[] = [], tracks: FakeTrack[] = [];
+  const make = (c: MediaStreamConstraints) => {
+    const t = [...(c.video ? [new FakeTrack("video")] : []), ...(c.audio ? [new FakeTrack("audio")] : [])];
+    tracks.push(...t);
+    return new FakeStream(t);
+  };
+  const getUserMedia = (c: MediaStreamConstraints) => {
+    calls.push(c);
+    if (answer === "grant") return Promise.resolve(make(c));
+    if (typeof answer === "function") {
+      const r = answer(c);
+      if (r instanceof Error) return Promise.reject(r);
+      tracks.push(...r);
+      return Promise.resolve(new FakeStream(r));
+    }
+    return new Promise((res, rej) => { asks.push({ c, grant: () => res(make(c)), deny: (n) => rej(domErr(n)) }); });
+  };
+  vi.stubGlobal("MediaStream", FakeStream);
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
+  return { calls, asks, tracks, live: () => tracks.filter((t) => t.readyState === "live").map((t) => t.kind) };
+}
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+function deferred<T>() {
+  let resolve!: (v: T) => void, reject!: (e: unknown) => void;
+  const promise = new Promise<T>((a, b) => { resolve = a; reject = b; });
+  return { promise, resolve, reject };
+}
 
-  it("emits hello, tracks for visible people, ticks every 5 s and status every second", async () => {
+function source(over: Partial<BrowserSourceDeps> & { perceptions?: FakePerception[] } = {}) {
+  const log: string[] = [], out: ServerMessage[] = [], errors: string[] = [];
+  const perceptions = over.perceptions ?? [];
+  const src = new BrowserSource({
+    createEngine: async () => fakeEngine(log),
+    createPerception: async () => { const p = fakePerception(); perceptions.push(p); return p; },
+    emit: (m) => out.push(m), onBaseline: () => {}, onError: (w, d) => errors.push(`${w}: ${d}`),
+    ...over,
+  });
+  const lastStatus = () => out.filter((m): m is BrowserStatus => m.type === "status").at(-1);
+  return { src, log, out, errors, perceptions, lastStatus };
+}
+
+describe("in-browser source", () => {
+  beforeEach(() => { vi.useRealTimers(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices;
+  });
+
+  it("emits status from the start, then hello, tracks for visible people, ticks every 5 s and status every second", async () => {
     vi.useFakeTimers();
-    const log: string[] = [], out: ServerMessage[] = [], errors: string[] = [];
+    const media = installMedia();
     const perception = fakePerception();
-    const src = new BrowserSource({ createEngine: async () => fakeEngine(log), createPerception: async () => perception,
-      emit: (m) => out.push(m), onBaseline: () => {}, onError: (w) => errors.push(w), now: () => Date.now(), mono: () => Date.now() });
+    const { src, out, log, errors } = source({ createPerception: async () => perception, now: () => Date.now(), mono: () => Date.now() });
     await src.start();
-    expect(out[0]?.type).toBe("hello");
-    expect(errors).toContain("camera"); // jsdom has no getUserMedia: reported, perception still starts
+    expect(out[0]).toMatchObject({ type: "status", loading: "loading the engine and models" }); // before the engine
+    expect(out[1]?.type).toBe("hello");
+    expect(errors).toEqual([]);
+    expect(perception.startedWith).toBeInstanceOf(FakeStream);
+    expect(media.live()).toEqual(["video", "audio"]);
 
     perception.emit(video(Date.now() / 1000, [0.6, 0.2])); // the 0.2-tall box is background (< 0.55 x tallest)
     perception.emit({ t: 1, wall: 1, db_spl: 50 });
@@ -72,32 +143,337 @@ describe("in-browser source", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(out.filter((m) => m.type === "governance")).toHaveLength(1);
     const status = out.filter((m) => m.type === "status");
-    expect(status.length).toBeGreaterThanOrEqual(4);
-    expect(status.at(-1)).toMatchObject({ narrator: "template", fps: 9.6, mode: "live" });
+    expect(status.length).toBeGreaterThanOrEqual(5);
+    expect(status.at(-1)).toMatchObject({ narrator: "template", fps: 9.6, mode: "live", camera: true, mic: true });
+    expect((status.at(-1) as BrowserStatus).loading).toBeUndefined();
+    src.stop();
+    expect(media.live()).toEqual([]);
+  });
+
+  it("pause releases camera, mic and perception but keeps people; Start reopens them; the kill switch also forgets everyone", async () => {
+    const media = installMedia();
+    const { src, log, out, perceptions, lastStatus } = source();
+    await src.start();
+    expect(src.status()).toMatchObject({ camera: true, mic: true });
+
+    expect(src.command({ kind: "control", action: "pause" }).ok).toBe(true);
+    expect(perceptions[0]?.stopped).toBe(true);
+    expect(media.live()).toEqual([]);
+    expect(getBrowserStream()).toBeNull();
+    expect(src.status()).toMatchObject({ camera: false, mic: false });
+    perceptions[0]?.emit(video(1, [0.5]));
+    expect(log).not.toContain("video");
+    expect(log.some((l) => l.startsWith("reset"))).toBe(false); // the window and people stay
+
+    src.command({ kind: "control", action: "start" });
+    await flush();
+    expect(media.calls).toHaveLength(2);
+    expect(perceptions[1]?.started).toBe(true);
+    expect(media.live()).toEqual(["video", "audio"]);
+
+    src.command({ kind: "control", action: "stop" });
+    expect(perceptions[1]?.stopped).toBe(true);
+    expect(media.live()).toEqual([]);
+    expect(log).toContain("reset keep_room=false"); // room history too, as app.py control stop
+    expect(log.filter((l) => l.startsWith("audit"))).toEqual(["audit control_pause", "audit control_start", "audit control_stop"]);
+    expect(lastStatus()).toBeDefined();
+    expect(out.some((m) => m.type === "governance")).toBe(false);
     src.stop();
   });
 
-  it("pauses sensing, and the kill switch stops perception and resets people", async () => {
-    vi.useFakeTimers();
-    const log: string[] = [], out: ServerMessage[] = [];
-    const perception = fakePerception();
-    const src = new BrowserSource({ createEngine: async () => fakeEngine(log), createPerception: async () => perception,
-      emit: (m) => out.push(m), onBaseline: () => {}, onError: () => {} });
-    await src.start();
-    expect(src.command({ kind: "control", action: "pause" }).ok).toBe(true);
-    perception.emit(video(1, [0.5]));
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(log).not.toContain("video");
-    expect(out.some((m) => m.type === "governance")).toBe(false);
-
+  it("the kill switch during the permission prompt releases the camera once the prompt resolves", async () => {
+    const media = installMedia("hold");
+    const { src, perceptions } = source();
+    const started = src.start();
+    await flush();
+    expect(media.asks).toHaveLength(1);
     src.command({ kind: "control", action: "stop" });
-    expect(perception.stopped).toBe(true);
-    expect(log).toContain("reset");
-    expect(src.command({ kind: "replay", scenario: "full_demo" }).ok).toBe(false);
-    src.command({ kind: "mode", room_only: true });
-    src.command({ kind: "sim", which: "low_light", enabled: true });
+    media.asks[0]?.grant();
+    await started; await flush();
+    expect(media.live()).toEqual([]);
+    expect(getBrowserStream()).toBeNull();
+    expect(perceptions).toHaveLength(0);
+    expect(src.status()).toMatchObject({ camera: false, mic: false });
+    src.stop();
+  });
+
+  it("Stop, Start, Stop, Start during the prompt leaves exactly one stream and one perception, and stop() ends both", async () => {
+    const media = installMedia("hold");
+    const { src, perceptions } = source();
+    const started = src.start();
+    await flush();
+    src.command({ kind: "control", action: "stop" });
+    src.command({ kind: "control", action: "start" }); await flush();
+    src.command({ kind: "control", action: "stop" });
+    src.command({ kind: "control", action: "start" }); await flush();
+    expect(media.asks).toHaveLength(3);
+    for (const a of [...media.asks]) { a.grant(); await flush(); }
+    await started; await flush();
+    expect(media.live()).toEqual(["video", "audio"]); // only the last open survives
+    expect(perceptions.filter((p) => p.started && !p.stopped)).toHaveLength(1);
+    expect(getBrowserStream()?.getTracks().every((t) => t.readyState === "live")).toBe(true);
+    src.stop(); // a source switch
+    expect(media.live()).toEqual([]);
+    expect(perceptions.every((p) => !p.started || p.stopped)).toBe(true);
+  });
+
+  it("Stop while the engine loads: getUserMedia is never called; Start opens the sensors afterwards", async () => {
+    const media = installMedia();
+    const engine = deferred<BrowserEngine>();
+    const log: string[] = [];
+    const { src, perceptions } = source({ createEngine: () => engine.promise });
+    const started = src.start();
+    src.command({ kind: "control", action: "stop" });
+    engine.resolve(fakeEngine(log));
+    await started; await flush();
+    expect(media.calls).toHaveLength(0);
+    expect(perceptions).toHaveLength(0);
+    src.command({ kind: "control", action: "start" });
+    await flush();
+    expect(media.calls).toHaveLength(1);
+    expect(perceptions[0]?.started).toBe(true);
+    src.stop();
+  });
+
+  it("a stopped source asks no further prompt and reports nothing when its pending prompt is denied", async () => {
+    const media = installMedia("hold");
+    const { src, errors } = source();
+    const started = src.start();
+    await flush();
+    src.stop(); // e.g. the visitor clicked "Watch the 10-state tour"
+    media.asks[0]?.deny("NotAllowedError");
+    await started; await flush();
+    expect(media.calls).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  it("stop() while the perception chunk loads: that perception is stopped and its failure is not reported", async () => {
+    const media = installMedia();
+    const chunk = deferred<void>();
+    const p = fakePerception({ start: () => { throw new Error("perception needs a MediaStream with a live camera or mic track"); } });
+    const { src, errors } = source({ createPerception: async () => { await chunk.promise; return p; } });
+    const started = src.start();
+    await flush();
+    src.stop();
+    expect(media.live()).toEqual([]);
+    chunk.resolve();
+    await started; await flush();
+    expect(p.started).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it("perception failing to start releases camera and mic and reports why", async () => {
+    const media = installMedia();
+    const p = fakePerception({ start: () => Promise.reject(new Error("perception failed to start: camera: HTTP 404")) });
+    const { src, errors } = source({ createPerception: async () => p });
+    await src.start();
+    expect(media.live()).toEqual([]);
+    expect(getBrowserStream()).toBeNull();
+    expect(p.stopped).toBe(true);
+    expect(errors).toEqual(["camera: perception failed: Error: perception failed to start: camera: HTTP 404"]);
+    expect(src.status()).toMatchObject({ camera: false, mic: false });
+    src.stop();
+  });
+
+  it("without getUserMedia: reports the real cause and starts no perception", async () => {
+    const { src, errors, perceptions } = source(); // jsdom has no navigator.mediaDevices
+    await src.start();
+    expect(errors).toEqual([`camera: ${NO_MEDIA_API}`]);
+    expect(perceptions).toHaveLength(0);
+    src.stop();
+  });
+
+  it("a refused prompt is asked once (no per-device retry) and explained in plain words", async () => {
+    const media = installMedia(() => domErr("NotAllowedError"));
+    const { src, errors, perceptions } = source();
+    await src.start();
+    expect(media.calls).toHaveLength(1);
+    expect(perceptions).toHaveLength(0);
+    expect(errors).toEqual([`camera: ${mediaErrorText(domErr("NotAllowedError"), "both")}`]);
+    expect(errors[0]).toMatch(/Camera and microphone blocked: allow them .* then press Start/);
+    // Start after allowing it in the browser asks again.
+    src.command({ kind: "control", action: "start" });
+    await flush();
+    expect(media.calls).toHaveLength(2);
+    src.stop();
+  });
+
+  it("each open first clears the last attempt's errors (onOpenSensors); a granted retry runs and says so at once", async () => {
+    let asked = 0;
+    const media = installMedia(() => (asked++ === 0 ? domErr("NotAllowedError") : [new FakeTrack("video"), new FakeTrack("audio")]));
+    const events: string[] = [];
+    const { src, perceptions, lastStatus } = source({ onOpenSensors: () => events.push("open"), onError: (w, d) => events.push(`${w}: ${d}`) });
+    await src.start();
+    expect(events).toHaveLength(2);
+    expect(events.join(" | ")).toMatch(/^open \| camera: Camera and microphone blocked/);
+    expect(lastStatus()?.loading).toBeUndefined(); // the refusal shows now, not at the next second
+    src.command({ kind: "control", action: "start" }); // the visitor allowed it in the browser
+    await flush();
+    expect(events.slice(2)).toEqual(["open"]); // cleared before asking; nothing new to report
+    expect(perceptions[0]?.started).toBe(true);
+    expect(lastStatus()).toMatchObject({ camera: true, mic: true }); // emitted when the open finished
+    expect(lastStatus()?.loading).toBeUndefined();
+    src.command({ kind: "control", action: "start" }); // already running: no new prompt, nothing cleared
+    await flush();
+    expect([media.calls.length, events.filter((e) => e === "open").length]).toEqual([2, 2]);
+    src.stop();
+  });
+
+  it("Stop during the prompt shows at once: status goes out with the command, not at the next second", async () => {
+    const media = installMedia("hold");
+    const { src, lastStatus } = source();
+    const started = src.start();
+    await flush();
+    expect(src.status().loading).toBe("waiting for camera and microphone");
+    expect(lastStatus()?.loading).toBe("loading the engine and models"); // the 1 s timer has not fired yet
+    src.command({ kind: "control", action: "stop" });
+    expect(lastStatus()).toMatchObject({ camera: false, mic: false, degraded: [] });
+    expect(lastStatus()?.loading).toBeUndefined();
+    media.asks[0]?.deny("NotAllowedError");
+    await started;
+    src.stop();
+  });
+
+  it("the loading MB counts this load only: Start after Pause (models from the HTTP cache) does not repeat the first session's", async () => {
+    installMedia();
+    const entries: { name: string; transferSize: number }[] = [];
+    const spy = vi.spyOn(performance, "getEntriesByType").mockImplementation(() => entries as unknown as PerformanceEntryList);
+    const model = (mb: number) => ({ name: new URL(`/mediapipe/file${entries.length}.task`, location.href).href, transferSize: mb * 1e6 });
+    const loads = [deferred<void>(), deferred<void>()];
+    const ps: FakePerception[] = [];
+    const { src } = source({ createPerception: async () => { const i = ps.length, p = fakePerception({ start: () => loads[i]?.promise }); ps.push(p); return p; } });
+    try {
+      const started = src.start();
+      await flush();
+      entries.push(model(10.7), { name: new URL("/assets/perception-x.js", location.href).href, transferSize: 5e6 });
+      expect(src.status().loading).toBe("loading perception models · 10.7 MB");
+      loads[0]?.resolve();
+      await started;
+      src.command({ kind: "control", action: "pause" });
+      src.command({ kind: "control", action: "start" });
+      await flush();
+      expect(src.status().loading).toBe("loading perception models"); // nothing fetched yet for this load
+      entries.push(model(2));
+      expect(src.status().loading).toBe("loading perception models · 2.0 MB");
+      loads[1]?.resolve();
+      await flush();
+      expect(src.status().loading).toBeUndefined();
+    } finally {
+      src.stop();
+      spy.mockRestore();
+    }
+  });
+
+  it("a missing camera is retried device by device and runs on the mic alone", async () => {
+    const media = installMedia((c) => (c.video ? domErr("NotFoundError") : [new FakeTrack("audio")]));
+    const { src, errors, perceptions } = source();
+    await src.start();
+    expect(media.calls.map((c) => Object.keys(c).sort().join("+"))).toEqual(["audio+video", "video", "audio"]);
+    expect(errors).toEqual(["camera: No camera found."]);
+    expect(perceptions[0]?.started).toBe(true);
+    expect(src.status()).toMatchObject({ camera: false, mic: true });
+    src.stop();
+  });
+
+  it("status reports the tracks the browser has open, and the loading phase with the MB downloaded", async () => {
+    installMedia();
+    const loaded = deferred<void>();
+    const p = fakePerception({ start: () => loaded.promise, status: () => ({ phase: "loading", download_bytes: 12_345_678 }) });
+    const { src } = source({ createPerception: async () => p });
+    const started = src.start();
+    await flush();
+    expect(src.status()).toMatchObject({ camera: true, mic: true, loading: "loading perception models · 12.3 MB", degraded: [] });
+    loaded.resolve();
+    await started;
+    expect(src.status().loading).toBeUndefined();
+    const tracks = getBrowserStream()?.getTracks() ?? [];
+    tracks.forEach((t) => t.stop()); // the OS took the camera away
+    expect(src.status()).toMatchObject({ camera: false, mic: false });
+    src.stop();
+  });
+
+  it("?perception=mock (needsMedia false) opens no camera and starts perception with null", async () => {
+    const media = installMedia();
+    const { src, perceptions } = source({ needsMedia: false });
+    await src.start();
+    expect(media.calls).toHaveLength(0);
+    expect(perceptions[0]?.started).toBe(true);
+    expect(perceptions[0]?.startedWith).toBeNull();
+    expect(getBrowserStream()).toBeNull();
+    src.stop();
+  });
+
+  it("room-only toggles keep everyone's window; toggles pressed while the engine loads reach it", async () => {
+    installMedia();
+    const engine = deferred<BrowserEngine>();
+    const log: string[] = [];
+    const { src, out } = source({ createEngine: () => engine.promise });
+    const started = src.start();
+    expect(src.command({ kind: "mode", room_only: true }).ok).toBe(true);
+    expect(src.command({ kind: "sim", which: "low_light", enabled: true }).ok).toBe(true);
+    expect(src.command({ kind: "break" })).toEqual({ ok: false, text: "in-browser engine still loading" });
+    expect(src.command({ kind: "baseline", seconds: 90 }).ok).toBe(false);
+    engine.resolve(fakeEngine(log));
+    await started;
+    expect(log).toEqual(expect.arrayContaining(["room_only true", "overlay low_light true"]));
+    expect(out.find((m) => m.type === "hello")).toMatchObject({ room_only: true });
+    src.command({ kind: "mode", room_only: false });
+    expect(log).toContain("room_only false");
+    expect(log.some((l) => l.startsWith("reset"))).toBe(false); // app.py set_mode only clears the latest cards
     src.command({ kind: "baseline", seconds: 90 });
-    expect(log).toEqual(expect.arrayContaining(["room_only true", "overlay low_light true", "baseline 90 capturing"]));
+    src.command({ kind: "demo_reset" });
+    expect(log).toEqual(expect.arrayContaining(["baseline 90 capturing", "reset keep_room=true"]));
+    expect(src.command({ kind: "replay", scenario: "full_demo" }).ok).toBe(false);
+    src.stop();
+  });
+
+  it("the tour refuses a baseline capture (its records never reach the aggregator) and never opens a camera", async () => {
+    const media = installMedia();
+    const { src, log } = source({ mode: "tour" });
+    await src.start();
+    const r = src.command({ kind: "baseline", seconds: 90 });
+    expect(r.ok).toBe(false);
+    expect(r.text).toMatch(/tour carries its own room baseline/);
+    expect(src.command({ kind: "baseline_reset" }).ok).toBe(false);
+    expect(log.some((l) => l.startsWith("baseline"))).toBe(false);
+    src.command({ kind: "control", action: "stop" });
+    src.command({ kind: "control", action: "start" });
+    await flush();
+    expect(media.calls).toHaveLength(0);
+    src.stop();
+  });
+
+  it("status says sealed only when this host's CSP limits connect-src to 'self'", async () => {
+    const sealed = source({ needsMedia: false, cspSealed: async () => true });
+    await sealed.src.start();
+    expect(sealed.src.status().sealed).toBe(true);
+    sealed.src.stop();
+    const open = source({ needsMedia: false, cspSealed: async () => false });
+    await open.src.start();
+    expect(open.src.status().sealed).toBe(false);
+    open.src.stop();
+    expect(source().src.status().sealed).toBeUndefined(); // not checked yet
+
+    expect(sealsConnect("default-src 'self'; connect-src 'self'; img-src 'self' data:")).toBe(true);
+    expect(sealsConnect("default-src 'self'; connect-src 'self' https://x.example")).toBe(false);
+    expect(sealsConnect("default-src 'self'")).toBe(false);
+    expect(sealsConnect(null)).toBe(false);
+    const head = (csp: string | null) => (async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect([String(url), init?.method, init?.cache]).toEqual([location.pathname, "HEAD", "no-store"]);
+      return new Response(null, { headers: csp ? { "content-security-policy": csp } : {} });
+    }) as typeof fetch;
+    expect(await cspSealed(head("default-src 'self'; connect-src 'self'"))).toBe(true);
+    expect(await cspSealed(head(null))).toBe(false);
+    expect(await cspSealed((async () => { throw new TypeError("offline"); }) as typeof fetch)).toBe(false);
+  });
+
+  it("latestInputs gives nothing while paused or stopped", async () => {
+    const engine = { ...fakeEngine([]), latestInputs: () => ({ feature_version: "emotion-v1", features: { a: 1 } }) };
+    const { src } = source({ needsMedia: false, createEngine: async () => engine });
+    await src.start();
+    expect(src.latestInputs(1)).not.toBeNull();
+    src.command({ kind: "control", action: "pause" });
+    expect(src.latestInputs(1)).toBeNull();
     src.stop();
   });
 });

@@ -45,6 +45,9 @@ From a laptop instead: `cd frontend && npm install && npm run build && npx wrang
 
 ```
 cd frontend && npm run build && node scripts/check-static.mjs
+node scripts/check-static.mjs --path "/?demo=tour" --wait 15000 --expect "Top drivers by layer" --forbid-media
+node scripts/check-static.mjs --path "/?source=browser&perception=mock" --fake-media --wait 25000 --expect "Top drivers by layer" --forbid-media
+node scripts/check-static.mjs --hostname valence-web.example --path "/?utm_source=x" --wait 12000 --expect "Watch the 10-state tour"
 ```
 
 The check serves `dist/client` with the `_headers` rules applied and opens the page in headless Chromium. It fails on:
