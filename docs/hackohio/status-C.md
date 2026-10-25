@@ -359,3 +359,28 @@ Chromium process's RSS sampled every 30 s.
     The harness keeps every audio observation (2,389 by the end), which may explain the troughs' rise.
   - **Counters:** 11,018 frames decoded, 11,017 purged (one in flight); 0 violations; 0 page errors; 8 main-thread
     long tasks, the longest 109 ms.
+
+### 03:45 — final review, slow devices, fresh clone
+
+- **Health.** No fixture drift. 944 frontend tests pass and the build passes. `e2e/run-all.mjs` passes all seven
+  scenarios at 4.4–6.9 fps (worker/CPU), with 0 off-origin requests and 0 CSP violations; both cross checks hold.
+- **Final pre-freeze review**, on how tonight's changes interact:
+  - **Purge gap after Pause (d87fbd6).** With the worker, a frame is almost always in flight. `stop()` counted it
+    only on the step's later rejection, so the console's per-source counters, read right after `stop()`, came out
+    one frame short on every Pause, and the governance purge gap crept up for good. `stop()` now settles the frame
+    in flight; nothing changes on Cloud A's side.
+  - **Lost WebGL context.** Instead of failing every frame under "video step failing", video now stops, releases
+    the models and reports "video stopped: WebGL context lost (restart the camera)".
+  - **Its review found one race (52fc8bb).** If the context is lost while the mic is still loading, `start()` no
+    longer reports the camera as live.
+- **Slow devices, measured with DevTools CPU throttling at 4×** (it slows the page's thread, not workers):
+  - **Worker path:** video holds 5.9 fps. Most of the page's work is `createImageBitmap(video)`: about 5.5 ms per
+    1280×720 frame headless, against about 0.1 ms for `new VideoFrame(video)`, which MediaPipe also accepts. Not
+    switched before the freeze: handing a VideoFrame to WebGL in a worker is untested on Safari and Firefox.
+  - **Main-thread fallback (Safari before 17):** the page was busy 52 of 60 s at 1.6 fps. The loop now rests at least
+    half a step after each one (e276b25): 37.5 of 60 s at 1.1 fps; unthrottled, 6.0 → 4.9 fps.
+  - **New tooling:** `run.mjs --cpu-throttle N` and `--profile out.cpuprofile`.
+- **Fresh clone.** `git clone`, `npm ci`, `npm run build`: the strict prebuild downloads the four models with
+  checked hashes (72 MB in `dist/client/mediapipe`, largest file 11 MB). `scripts/check-static.mjs` with the
+  production CSP, real perception and the fake camera then passes: "Top drivers by layer" appears, with 0 off-origin
+  requests, 0 CSP violations and 0 page errors.
