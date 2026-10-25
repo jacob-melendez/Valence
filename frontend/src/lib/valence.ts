@@ -1,5 +1,5 @@
 /**
- * Valence Console data layer: message types, store, mock engine, live transport, commands.
+ * Valence Web console data layer: message types, store, mock engine, live transport, commands.
  * Every component reads through useValence() and writes through sendCommand(); switching
  * mock <-> live changes nothing outside this module.
  * Camera frames never pass through here: the webcam is preview-only in the UI.

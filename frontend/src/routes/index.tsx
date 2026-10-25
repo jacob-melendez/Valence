@@ -18,9 +18,10 @@ function Index() {
   const preds = Object.values(s.predictions).sort((a, b) => a.person_id - b.person_id);
   const tour = s.source === "browser" && getBrowserMode() === "tour"; // no camera and no tracks: nothing for the Room view
   return (
-    // On phones the operator panels (source, room baseline) and the Room view move below the readings so a visitor
-    // sees the person card and the emotion map first; the kill switch (Controls) stays near the top. The tour uses
-    // that order on every width; otherwise desktop order is unchanged.
+    // On phones the operator panels (source, room baseline) move below the readings so a visitor sees the person card
+    // and the emotion map first; the kill switch (Controls) stays near the top. The tour uses that order on every width
+    // and also moves its Room view (a placeholder: no camera) below the readings. Outside the tour the Room view stays
+    // above them: live, it shows the user's own preview and box right after "Use my camera".
     <div className="flex min-h-screen flex-col">
       <PanelBoundary name="Header"><Header /></PanelBoundary>
       <PanelBoundary name="Welcome"><Welcome /></PanelBoundary>
@@ -31,7 +32,7 @@ function Index() {
       </section>
       <main className="grid gap-5 p-6 xl:grid-cols-[1fr_26rem]">
         <div className="flex flex-col gap-5">
-          <div className={tour ? "order-last" : "order-last lg:order-none"}><PanelBoundary name="Room view"><CameraView /></PanelBoundary></div>
+          <div className={tour ? "order-last" : undefined}><PanelBoundary name="Room view"><CameraView /></PanelBoundary></div>
           <div className="grid gap-5 2xl:grid-cols-2">
             {preds.length === 0 && <div className="panel text-xl text-muted-foreground">Waiting for predictions…</div>}
             {preds.map((p) => <PanelBoundary key={p.person_id} name={`Person #${p.person_id}`}><PersonCard p={p} /></PanelBoundary>)}

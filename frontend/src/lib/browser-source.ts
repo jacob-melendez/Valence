@@ -162,10 +162,18 @@ function fetchedBytes(prefix: string): number {
 }
 
 // ---------- Explanation wording (describe.ts stays identical to Python; only the shown text changes) ----------
-// The engine's break clock starts when a person is first seen (aggregator.ts seen), so live, before "Log a break",
-// its "hours since the last break" is time on camera.
+// The engine's break clock starts when a person is first seen (aggregator.ts seen), so live, until "Log a break"
+// restarts that person's clock, its "hours since the last break" is time on camera.
 const SINCE_BREAK = / hours since the last break/g;
 const SINCE_ARRIVAL = " hours since you appeared on camera (no break logged)";
+/** The room slot's person_id (engine/contracts.ts ROOM): its break clock is the mean of the people present. */
+const ROOM_SLOT = 0;
+// The browser has no speech recognizer, so live the compliment count stays 0 whatever is said (the State vector shows
+// "n/a (no speech)"), yet the model may still cite it. describe.ts's phrasings: compl_cnt_1m/5m/15m ("no compliments in
+// the room in the last 5 minutes", "1 compliment in the room in the last minute"), compl_since_s ("no compliment in the
+// last 15 minutes", "last compliment 40 s ago") and the unnarrated compl_cnt_now ("compl_cnt_now = 0").
+const COMPLIMENTS = /\b(?:(?:no|\d+) compliments? in the room in the last (?:minute|\d+ minutes)|no compliment in the last 15 minutes|last compliment \d+ s ago|compl_cnt_now = \d+(?:\.\d+)?)/g;
+const UNMEASURED = "$& (not measured: no speech recognition)";
 // Signed values are formatted like Python's "+.2f", which prints a value just under zero as "-0.00" (a neutral face
 // in the tour, for one): shown as "+0.00".
 const NEG_ZERO = /(^|[^\d.])-(0\.0+)(?!\d)/g;
@@ -221,8 +229,11 @@ export class BrowserSource {
   private lastAudioAt = 0;
   private loopLatency = 0;
   private tourTicks = 0;
-  /** "Log a break" pressed since the people were last reset: the break clock then means what it says. */
-  private breakLogged = false;
+  /** Track ids seen on camera since the people were last reset: each has a break clock (aggregator.ts seen). */
+  private clocked = new Set<number>();
+  /** Of those, the ones whose clock "Log a break" restarted: for them (and for the room slot, once any break is
+   *  logged) the break clock means what it says. Someone first seen after the break has a clock from arrival. */
+  private onBreak = new Set<number>();
   // Operator toggles, kept so a toggle pressed while the engine loads still reaches it.
   private roomOnly = false;
   private readonly overlays = { face_occlusion: false, low_light: false };
@@ -356,7 +367,10 @@ export class BrowserSource {
     // at most every 0.1 s).
     const tracks = this.engine.push(o);
     if (tracks) this.deps.emit(tracks);
-    if (isVideo(o)) this.lastVideoAt = this.now(); else this.lastAudioAt = this.now();
+    if (isVideo(o)) {
+      this.lastVideoAt = this.now();
+      for (const p of o.persons) this.clocked.add(p.track_id);
+    } else this.lastAudioAt = this.now();
   }
 
   /** The emotion model's current input for a person (for the self-report capture); none while paused or stopped. */
@@ -385,11 +399,16 @@ export class BrowserSource {
     this.tourTicks += 1;
     try { msgs = this.engine.tick(wall, mono, counters); } catch (e) { this.deps.onError("engine", String(e)); }
     this.loopLatency = this.mono() - t0;
-    const sinceArrival = !this.tour && !this.breakLogged;
-    msgs = msgs.map((m) => relabelText(m, (t) => {
-      const u = t.replace(NEG_ZERO, "$1+$2");
-      return sinceArrival ? u.replace(SINCE_BREAK, SINCE_ARRIVAL) : u;
-    }));
+    // Live only: the tour's records carry scripted break clocks and compliments.
+    msgs = msgs.map((m) => {
+      const sinceArrival = !this.tour && m.type === "prediction"
+        && (m.person_id === ROOM_SLOT ? this.onBreak.size === 0 : !this.onBreak.has(m.person_id));
+      return relabelText(m, (t) => {
+        const u = t.replace(NEG_ZERO, "$1+$2");
+        if (this.tour) return u;
+        return (sinceArrival ? u.replace(SINCE_BREAK, SINCE_ARRIVAL) : u).replace(COMPLIMENTS, UNMEASURED);
+      });
+    });
     msgs.forEach((m) => this.deps.emit(m));
     this.deps.onBaseline(this.engine.baseline());
   }
@@ -452,13 +471,14 @@ export class BrowserSource {
           // switch also forgets everyone, room history included (reset_people(keep_room=False)).
           this.running = c.action === "pause" ? "paused" : "stopped";
           this.closeSensors();
-          if (c.action === "stop") { e?.resetPeople(false); this.breakLogged = false; }
+          if (c.action === "stop") { e?.resetPeople(false); this.clocked.clear(); this.onBreak.clear(); }
         }
         e?.audit?.(`control_${c.action}`);
         this.emitStatus();
         return { ok: true, text: `control ${c.action} (in-browser)` };
       }
-      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); this.breakLogged = true; return { ok: true, text: "break logged (in-browser)" };
+      // The engine restarts the clocks it has (everyone seen so far); people who appear later start theirs on arrival.
+      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); this.onBreak = new Set(this.clocked); return { ok: true, text: "break logged (in-browser)" };
       // Only the cards go (runtime.setRoomOnly clears `latest`); windows and break clocks stay, as in app.py set_mode.
       case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); return { ok: true, text: `room-only ${c.room_only}` };
       case "sim": this.overlays[c.which] = c.enabled; e?.setOverlay(c.which, c.enabled); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
@@ -471,7 +491,7 @@ export class BrowserSource {
         this.deps.onBaseline(e.baseline());
         return { ok: true, text: c.kind === "baseline" ? `baseline ${c.seconds} s (in-browser)` : "baseline reset (in-browser)" };
       // Forgotten people get fresh break clocks (aggregator resetPeople): time on camera again.
-      case "demo_reset": if (!e) return loading; e.resetPeople(); this.breakLogged = false; return { ok: true, text: "people reset (in-browser)" };
+      case "demo_reset": if (!e) return loading; e.resetPeople(); this.clocked.clear(); this.onBreak.clear(); return { ok: true, text: "people reset (in-browser)" };
       case "live": return { ok: true, text: "already live (in-browser)" };
       case "replay":
       case "replay_recording":

@@ -43,7 +43,7 @@ export function Header() {
   return (
     <header className="flex flex-wrap items-center gap-4 border-b px-6 py-4">
       <div className="mr-auto">
-        <h1 className="text-3xl font-bold tracking-tight">Valence <span className="text-primary">Console</span></h1>
+        <h1 className="text-3xl font-bold tracking-tight">Valence <span className="text-primary">Web</span></h1>
         <p className="font-mono text-xs text-muted-foreground">context-aware affect · no faces stored · no frames transmitted</p>
       </div>
       {/* In the browser a provenance badge already says IN-BROWSER (tour or on-device). */}
@@ -137,8 +137,10 @@ export function SourceControls() {
   // so the select always shows what Replay sends.
   const sc = scenarios.some((x) => x.name === scenario) ? scenario : (scenarios[0]?.name ?? "full_demo");
   const rec = s.recordings.some((x) => x.name === recording) ? recording : (s.recordings[0]?.name ?? "");
-  // Re-posting /api/live while the camera runs re-aligns the frame counters under a running capture.
-  const liveRunning = s.status?.mode === "live" && !!s.status.camera && !s.edgeError;
+  // Re-posting /api/live while the camera runs re-aligns the frame counters under a running capture. The mock stream's
+  // status says live with a camera, but nothing is captured: never "Live" or "mode: LIVE" there.
+  const mock = s.source === "mock";
+  const liveRunning = !mock && s.status?.mode === "live" && !!s.status.camera && !s.edgeError;
   const errors = (s.edgeError || s.micError) && (
     <div className="space-y-1 rounded-md border border-destructive bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive" data-testid="edge-errors">
       {s.edgeError && <div>{s.source === "browser" ? "" : "edge: "}{s.edgeError}</div>}
@@ -174,10 +176,10 @@ export function SourceControls() {
       <div className="panel-title">Source</div>
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Btn small tone="primary" active={s.status?.mode === "live"} disabled={liveRunning} onClick={() => sendCommand({ kind: "live" })}>
+          <Btn small tone="primary" active={!mock && s.status?.mode === "live"} disabled={liveRunning} onClick={() => sendCommand({ kind: "live" })}>
             {liveRunning ? "● Live (camera + mic)" : "● Go live (camera + mic)"}
           </Btn>
-          <span className="font-mono text-xs text-muted-foreground">mode: <span className="text-foreground" data-testid="backend-mode">{String(s.status?.mode ?? "—").toUpperCase()}</span></span>
+          <span className="font-mono text-xs text-muted-foreground">mode: <span className="text-foreground" data-testid="backend-mode">{mock ? "MOCK (GENERATED)" : String(s.status?.mode ?? "—").toUpperCase()}</span></span>
         </div>
         {errors}
         <div className="flex flex-wrap items-center gap-2">
@@ -313,7 +315,7 @@ export function CameraView() {
         {tour && (
           <div data-testid="room-view-tour"
             className={`flex flex-col items-center justify-center gap-3 px-4 py-6 text-center sm:flex-row sm:text-left ${s.running === "running" ? "" : "invisible"}`}>
-            <p className="text-sm text-muted-foreground">Tour: scripted, simulated people; no camera. Boxes appear here with your own camera.</p>
+            <p className="text-sm text-muted-foreground">Tour: a scripted, simulated session; no camera. Boxes appear here with your own camera.</p>
             <Btn small tone="primary" onClick={() => startBrowserSource("live")}>● Use my camera (on-device)</Btn>
           </div>
         )}
@@ -335,7 +337,7 @@ export function CameraView() {
         })}
         {s.running !== "running" && (
           <div className={`absolute inset-0 flex items-center justify-center bg-background/80 text-center font-bold ${tour ? "text-xl" : "text-3xl"}`}>
-            {s.running === "paused" ? "PAUSED · camera and mic released" : "STOPPED · privacy kill switch"}
+            {s.running === "paused" ? (tour ? "PAUSED · simulated tour" : "PAUSED · camera and mic released") : "STOPPED · privacy kill switch"}
           </div>
         )}
       </div>
@@ -361,8 +363,9 @@ function AuditChainLine() {
     </div>
   );
 }
-/** Camera frames plus audio blocks purged so far (the log's purge line is only true on a tick where this moved). */
-const rawPurged = (m: GovernanceMsg) => m.frames_purged + m.audio_blocks_purged;
+/** Whether a purge counter moved on this tick (a log line may only say "purged" for what it counts). */
+const purgedOn = (m: GovernanceMsg, prev: GovernanceMsg | undefined, k: "frames_purged" | "audio_blocks_purged") =>
+  m[k] > 0 && m[k] !== (prev ? prev[k] : 0);
 export function Governance() {
   const s = useValence();
   const ref = useRef<HTMLDivElement>(null);
@@ -379,8 +382,9 @@ export function Governance() {
     <div className="panel flex flex-col">
       <div className="panel-title">Governance · purge log</div>
       <div className="mb-3 grid grid-cols-2 gap-2">
-        {counters.map(([k, v]) => (
-          <div key={k} className="rounded-md bg-muted px-3 py-2">
+        {/* An odd count (no transcripts tile in the browser) lets the last tile span both columns. */}
+        {counters.map(([k, v], i) => (
+          <div key={k} className={`rounded-md bg-muted px-3 py-2 ${counters.length % 2 && i === counters.length - 1 ? "col-span-2" : ""}`}>
             <div className="text-xs text-muted-foreground">{k}</div>
             <div className={`font-mono text-2xl font-bold ${k === "Violations" ? (v ? "text-destructive" : "text-ok") : ""}`}>{v?.toLocaleString() ?? "—"}</div>
           </div>
@@ -398,21 +402,23 @@ export function Governance() {
             : <>Each purge counter ticks where its step ends: a camera frame is closed, an audio chunk zeroed, once its features
               are taken, so decoded = purged by construction{isMockPerception() ? " (mock perception: synthetic frames)" : ""}.
               They show every step finished; Violations counts raw buffers still open when one ended.</>}
-          {" "}Log lines are 5 s engine ticks; audit entries are label changes, 30 s checkpoints and operator actions.
+          {" "}{tour ? `Log lines are engine ticks of 5 s tour time each (about ${+(5 / getTourSpeed()).toFixed(2)} s apart at ${getTourSpeed()}× speed)`
+            : "Log lines are 5 s engine ticks"}; audit entries are label changes, 30 s checkpoints and operator actions.
         </p>
       )}
       {inBrowser && <AuditChainLine />}
       <div ref={ref} className="h-52 overflow-y-auto rounded-md bg-terminal p-3 font-mono text-[13px] leading-relaxed text-ok">
         {s.govLog.length === 0 && <div className="text-muted-foreground">waiting for governance events…</div>}
         {s.govLog.map((m, i) => {
-          // The engine sends its fixed purge line (GOVERNANCE_LINE, identical to Python's) on every tick: shown only
-          // for a tick whose purge counters moved, so the tour or a blocked camera never reads "purged" under zeros.
+          // The engine sends its fixed purge line (GOVERNANCE_LINE, identical to Python's: "Raw biometric frame
+          // purged") on every tick: shown only for a tick whose frame counter moved, so the tour, a blocked camera or
+          // a mic-only run never reads "frame purged" under a frame counter that stays put.
           const prev = s.govLog[i - 1];
-          const purged = rawPurged(m) > 0 && rawPurged(m) !== (prev ? rawPurged(prev) : 0);
+          const text = purgedOn(m, prev, "frames_purged") ? m.message
+            : purgedOn(m, prev, "audio_blocks_purged") ? "[GOVERNANCE] No camera frame this tick; audio reduced to levels and purged. Appended state vector to timeline."
+            : `[GOVERNANCE] ${tour ? "Simulated tour: no camera or mic" : "No camera frame or audio block this tick"}, so nothing to purge. Appended state vector to timeline.`;
           return (
-            <div key={i}><span className="text-muted-foreground">tick {m.tick} </span>
-              {purged ? m.message : `[GOVERNANCE] ${tour ? "Simulated tour: no camera or mic" : "No camera frame or audio block this tick"}, so nothing to purge. Appended state vector to timeline.`}
-            </div>
+            <div key={i}><span className="text-muted-foreground">tick {m.tick} </span>{text}</div>
           );
         })}
       </div>
@@ -483,7 +489,7 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
     <div className="panel border-l-8" style={{ borderLeftColor: color }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-xl text-muted-foreground">{p.person_id === 0 ? "Room (aggregate)" : `Person #${p.person_id}`}</div>
-        <div className="font-mono text-xs text-muted-foreground" title={`event ${p.event_id}`}>{s.states.length}-state context model</div>
+        <div className="font-mono text-xs text-muted-foreground" title={`event ${p.event_id}`}>{s.states.length}-state context model · {p.event_id}</div>
       </div>
       {/* The smoother makes no claim before its window holds warmup_s (60 s): the label is provisional until then. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-3">
@@ -917,14 +923,14 @@ export function AffectMap() {
             {s.affectStates.map((a) => {
               // Negative-valence states label to the left of their dot, the rest to the right (ANCHOR_FLIP swaps a
               // few); the crowded negative / high-arousal corner gets small vertical nudges. The halo keeps a name
-              // readable over a ring or a trail.
+              // readable over a ring or a trail: only the fills are dimmed, so the halo stays fully opaque.
               const left = (a.valence < 0) !== ANCHOR_FLIP.has(a.id), dy = ANCHOR_NUDGE[a.id] ?? 0;
               return (
-                <g key={a.id} opacity="0.6">
+                <g key={a.id}>
                   <title>{`${a.display}: valence ${a.valence}, arousal ${a.arousal} (assumed anchor)`}</title>
-                  <circle cx={vaX(a.valence)} cy={vaY(a.arousal)} r="1" fill={stateColor(a.id, "currentColor")} />
+                  <circle cx={vaX(a.valence)} cy={vaY(a.arousal)} r="1" fill={stateColor(a.id, "currentColor")} fillOpacity="0.6" />
                   <text x={vaX(a.valence) + (left ? -1.6 : 1.6)} y={vaY(a.arousal) + 1 + dy} fontSize="2.8" textAnchor={left ? "end" : "start"} fill="currentColor"
-                    stroke="var(--card)" strokeWidth="0.6" paintOrder="stroke">
+                    fillOpacity="0.6" stroke="var(--card)" strokeWidth="0.6" paintOrder="stroke">
                     {a.display.split(" /")[0]}
                   </text>
                 </g>
@@ -1057,18 +1063,20 @@ export function Welcome() {
     // full sentence (mediaErrorText, NO_MEDIA_API, STALE_BUILD) and Start is in Controls, right below.
     : s.edgeError && !devices ? `Not running. ${s.edgeError}${s.micError ? ` ${s.micError}` : ""}`
     : isMockPerception() ? "Now running on the mock perception (no camera or microphone; for testing)."
-    : devices ? `Now running on your ${devices}.${st?.camera ? " Keep a relaxed, neutral face for the first 20 s: that becomes your face baseline." : ""}`
+    // One device running: the other's error says why it is missing.
+    : devices ? `Now running on your ${devices}.${!st?.camera && s.edgeError ? ` ${s.edgeError}` : ""}${!st?.mic && s.micError ? ` ${s.micError}` : ""}`
+      + `${st?.camera ? " Keep a relaxed, neutral face for the first 20 s: that becomes your face baseline." : ""}`
       + " Labels are provisional for the first minute, and the models were trained and tested on simulated sessions only: read every number as a signal, not a measurement."
     : st ? `Camera and microphone are not running. ${s.micError ?? "Press Start to try again."}` : "Starting…";
   return (
     <section className="mx-6 mt-5 rounded-lg border border-primary/60 bg-primary/5 p-5" data-testid="welcome">
       <div className="flex flex-wrap items-start gap-4">
         <div className="min-w-[18rem] flex-1">
-          <h2 className="text-2xl font-bold">Valence Web <span className="font-mono text-sm font-normal text-muted-foreground">context-aware affect, entirely in your browser</span></h2>
+          {/* The header above already names Valence Web: the hero says what it does. */}
+          <h2 className="text-2xl font-bold">Emotion signals, entirely in your browser</h2>
           {/* Phones get a short version, so the readings start sooner; the full text from sm up. */}
           <p className="mt-2 text-base text-muted-foreground sm:hidden">
-            Emotion signals from the room, the body and the face over 15 minutes, computed entirely in this page: camera
-            and microphone never leave your device.
+            Signals from the room, the body and the face over a 15-minute window; camera and microphone never leave your device.
           </p>
           <p className="mt-2 hidden max-w-3xl text-base text-muted-foreground sm:block">
             Valence reads how a person is doing from the <em>context</em> around the face: room noise and light, posture,

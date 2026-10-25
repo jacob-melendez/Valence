@@ -80,12 +80,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       // The page's only title, description and social preview (the index route sets none): they are prerendered
-      // into dist/client/index.html, so link unfurls show them. Keep to the pitch's wording: signals, simulated data.
+      // into dist/client/index.html, so link unfurls show them. Keep to the pitch's wording: signals, simulated data,
+      // both within the description's first ~150 characters (what search results show; test/head-meta.test.ts).
       { title: "Valence Web — emotion signals, entirely in your browser" },
       {
         name: "description",
         content:
-          "Valence Web reads emotion signals from room context, body behavior and the face over a 15-minute window, entirely in your browser: nothing is uploaded. It opens on a scripted, simulated tour; models are trained and scored on simulated data.",
+          "Valence Web: emotion signals from the room, the body and the face, computed entirely in your browser on models trained on simulated data. Opens on a scripted, simulated tour; nothing is uploaded.",
       },
       { property: "og:title", content: "Valence Web" },
       {

@@ -38,7 +38,11 @@ describe("boot and the camera preview", () => {
     expect([v.getState().source, v.getBrowserMode()]).toEqual(["browser", "tour"]);
     expect(calls).toEqual([]);
     // No empty camera frame: the Room view says the tour has no camera.
-    expect(screen.getByTestId("room-view-tour").textContent).toMatch(/^Tour: scripted, simulated people; no camera\./);
+    expect(screen.getByTestId("room-view-tour").textContent).toMatch(/^Tour: a scripted, simulated session; no camera\./);
+    // Pausing the tour releases no camera or mic (none was opened): the overlay says what is paused.
+    await act(async () => { await v.sendCommand({ kind: "control", action: "pause" }); });
+    expect(screen.getByText("PAUSED · simulated tour")).toBeInTheDocument();
+    expect(screen.queryByText(/camera and mic released/)).toBeNull();
     v.setSource("mock");
   });
 
@@ -161,6 +165,48 @@ describe("console state around the in-browser source", () => {
     }
   });
 
+  it("camera busy, mic fine: Welcome runs on the microphone and says why the camera is missing", async () => {
+    vi.doMock("@/engine/browser-engine", () => ({ createBrowserEngine: async () => ({
+      states: [], featureVersion: "", push: () => null, tick: () => [], setRoomOnly() {}, setOverlay() {}, logBreak() {}, startBaseline() {},
+      resetPeople() {}, baseline: () => ({ mode: "auto", complete: false, target_samples: 90, db_samples: 0, lux_samples: 0, db_median: null, db_iqr: null, lux_median: null }),
+    }) }));
+    vi.doMock("@/perception/index", () => ({ createPerception: () => ({ start() {}, stop() {}, onObservation() {}, counters: () => ({ frames_decoded: 0, frames_purged: 0, audio_blocks_purged: 0 }) }) }));
+    // The combined call and the camera alone fail as busy (NotReadableError); the microphone alone opens.
+    vi.stubGlobal("MediaStream", class {
+      tracks: { kind: string; readyState: string; stop(): void }[] = [];
+      getTracks() { return this.tracks; }
+      getVideoTracks() { return this.tracks.filter((t) => t.kind === "video"); }
+      getAudioTracks() { return this.tracks.filter((t) => t.kind === "audio"); }
+      addTrack(t: { kind: string; readyState: string; stop(): void }) { this.tracks.push(t); }
+    });
+    const calls: MediaStreamConstraints[] = [];
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async (c: MediaStreamConstraints) => {
+      calls.push(c);
+      if (c.video) throw Object.assign(new Error("busy"), { name: "NotReadableError" });
+      const tracks = [{ kind: "audio", readyState: "live", stop() { this.readyState = "ended"; } }];
+      return { getTracks: () => tracks, getVideoTracks: () => [], getAudioTracks: () => tracks };
+    } } });
+    try {
+      const { v, panels } = await fresh();
+      v.startBrowserSource("live");
+      // The (mocked) engine chunk loads first; then the three opens and perception run.
+      for (let i = 0; i < 100 && !(v.getState().status?.mic && !(v.getState().status as { loading?: string }).loading); i++) await wait(10);
+      render(h("div", null, h(panels.SourceControls), h(panels.Welcome)));
+      expect(calls.map((c) => [!!c.video, !!c.audio])).toEqual([[true, true], [true, false], [false, true]]);
+      expect(v.getState().status).toMatchObject({ camera: false, mic: true });
+      const CAMERA_ERR = "Camera could not start: another app may be using it, or the system blocked access.";
+      expect(v.getState().edgeError).toBe(CAMERA_ERR);
+      expect(screen.getByTestId("welcome-now").textContent).toMatch(/^Now running on your microphone \(no camera\)\. Camera could not start: another app may be using it/);
+      expect(screen.getByTestId("welcome-now").textContent).toContain(CAMERA_ERR);
+      expect(screen.getByTestId("welcome-now").textContent).not.toMatch(/Keep a relaxed, neutral face/);
+      v.setSource("mock");
+    } finally {
+      vi.doUnmock("@/engine/browser-engine");
+      vi.doUnmock("@/perception/index");
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("the tour disables the room-baseline capture", async () => {
     const { v, panels } = await fresh();
     v.startBrowserSource("tour");
@@ -204,6 +250,30 @@ describe("what the in-browser panels claim", () => {
     v.setSource("mock");
   });
 
+  it("the mock stream reads MOCK (GENERATED) in Source and System status, never Live or mode: LIVE", async () => {
+    const { v, panels } = await fresh();
+    v.setSource("mock");
+    // The mock's own status says live with a camera (what its generator stands in for).
+    act(() => { v.handleMessage(status({ mode: "live", camera: true, mic: true })); });
+    render(h("div", null, h(panels.SourceControls), h(panels.SystemStatus)));
+    expect(screen.getByTestId("backend-mode").textContent).toBe("MOCK (GENERATED)");
+    expect(screen.getAllByText("MOCK (GENERATED)")).toHaveLength(2);
+    expect(screen.getByTestId("source-controls").textContent).not.toMatch(/mode: LIVE/);
+    expect(screen.queryByText("● Live (camera + mic)")).toBeNull();
+    expect(screen.getByRole("button", { name: "● Go live (camera + mic)" }).className).not.toMatch(/ring-2/);
+    v.setSource("mock");
+  });
+
+  it("the in-browser camera reads CAMERA (ON-DEVICE) in System status", async () => {
+    const { v, panels } = await fresh();
+    v.startBrowserSource("live");
+    act(() => { v.handleMessage(status({})); });
+    render(h(panels.SystemStatus));
+    expect(screen.getByText("CAMERA (ON-DEVICE)")).toBeInTheDocument();
+    expect(screen.queryByText("LIVE")).toBeNull();
+    v.setSource("mock");
+  });
+
   it("the purge line shows only on ticks that purged something; no transcripts tile or compliment count live", async () => {
     const { v, panels } = await fresh();
     if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {}; // jsdom: the log scrolls to its end
@@ -217,6 +287,11 @@ describe("what the in-browser panels claim", () => {
     expect(screen.getAllByText(/Simulated tour: no camera or mic, so nothing to purge/)).toHaveLength(2);
     expect(screen.queryByText("Transcripts purged")).toBeNull();
     expect(screen.getByTestId("governance-note").textContent).toMatch(/^Tour: no camera or mic/);
+    // Tour ticks are 5 s of tour time, not of wall time.
+    expect(screen.getByTestId("governance-note").textContent).toMatch(/engine ticks of 5 s tour time each \(about 0\.5 s apart at 10× speed\)/);
+    // Three tiles in the browser: the last one spans both columns instead of sitting alone.
+    expect(screen.getByText("Violations").parentElement?.className).toMatch(/col-span-2/);
+    expect(screen.getByText("Frames purged").parentElement?.className).not.toMatch(/col-span-2/);
     unmount();
     v.startBrowserSource("live");
     act(() => { v.handleMessage(gov(1, 0)); v.handleMessage(gov(2, 50)); v.handleMessage(gov(3, 50)); });
@@ -227,7 +302,24 @@ describe("what the in-browser panels claim", () => {
     expect(screen.getAllByText(LINE)).toHaveLength(1); // tick 2 only
     expect(screen.getAllByText(/No camera frame or audio block this tick, so nothing to purge/)).toHaveLength(2);
     expect(screen.getByTestId("governance-note").textContent).toMatch(/decoded = purged by construction/);
+    expect(screen.getByTestId("governance-note").textContent).toMatch(/Log lines are 5 s engine ticks;/);
     expect(screen.getByText("n/a (no speech)")).toBeInTheDocument();
+    v.setSource("mock");
+  });
+
+  it("a mic-only run (no camera frame) never shows the raw-frame purge line while its audio counter climbs", async () => {
+    const { v, panels } = await fresh();
+    if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {};
+    const LINE = "[GOVERNANCE] Raw biometric frame purged successfully. Appended state vector to timeline.";
+    const gov = (tick: number, audio: number) => ({ type: "governance" as const, t: tick * 5, tick, message: LINE, frames_decoded: 0,
+      frames_purged: 0, audio_blocks_purged: audio, transcripts_purged: 0, violations: 0, live_raw_buffers: 0, audit_hash: null, retention_s: 0, purge_gap: 0 });
+    v.startBrowserSource("live");
+    act(() => { v.handleMessage(gov(1, 40)); v.handleMessage(gov(2, 80)); v.handleMessage(gov(3, 80)); });
+    render(h(panels.Governance));
+    expect(screen.queryByText(LINE)).toBeNull();
+    expect(screen.queryByText(/Raw biometric frame/)).toBeNull();
+    expect(screen.getAllByText("[GOVERNANCE] No camera frame this tick; audio reduced to levels and purged. Appended state vector to timeline.")).toHaveLength(2);
+    expect(screen.getAllByText(/No camera frame or audio block this tick, so nothing to purge/)).toHaveLength(1); // tick 3
     v.setSource("mock");
   });
 
@@ -247,11 +339,16 @@ describe("what the in-browser panels claim", () => {
     act(() => { v.handleMessage(pred(true)); });
     const Card = () => { const p = v.useValence().predictions[1]; return p ? h(panels.PersonCard, { p }) : null; };
     render(h("div", null, h(Card), h(panels.AffectMap), h(panels.Welcome)));
-    expect(screen.getByText("4-state context model")).toHaveAttribute("title", "event p1-000005");
+    expect(screen.getByText("4-state context model · p1-000005")).toHaveAttribute("title", "event p1-000005");
     expect(screen.getByText("Context model · 4 states")).toBeInTheDocument();
     expect(screen.getByText("2-state emotion model · emotion-v1@test")).toBeInTheDocument();
     // Alone on the emotion map, the person gets no "#1" tag over the anchor names (the card beside it names them).
     expect([...screen.getByTestId("affect-map").querySelectorAll("svg text")].map((t) => t.textContent)).not.toContain("#1");
+    // Anchor names dim their fill only: a group opacity would also thin the halo that keeps them readable over a ring.
+    expect(screen.getByTestId("affect-map").querySelector("svg g[opacity]")).toBeNull();
+    const anchorNames = [...screen.getByTestId("affect-map").querySelectorAll("svg g")].filter((g) => g.querySelector("title")).map((g) => g.querySelector("text"));
+    expect(anchorNames.length).toBeGreaterThan(0);
+    expect(anchorNames.every((t) => t?.getAttribute("fill-opacity") === "0.6")).toBe(true);
     expect(screen.getByTestId("model-note").textContent).toBe(
       "This card is the 4-state context model. The emotion map below reads 2 states with its own model (now Focused 84%), so the two can differ.");
     // Warm-up: a provisional label, and the 20 s face baseline asked for on the card and in the Welcome line.

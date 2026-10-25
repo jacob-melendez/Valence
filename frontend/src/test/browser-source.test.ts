@@ -8,6 +8,8 @@ import {
 } from "@/lib/browser-source";
 import type { EvalMetricRow, RoomBaseline, ServerMessage } from "@/lib/valence";
 
+import metrics from "../../../reports/metrics.json";
+
 const BASELINE: RoomBaseline = { mode: "auto", complete: false, target_samples: 90, db_samples: 0, lux_samples: 0, db_median: null, db_iqr: null, lux_median: null };
 
 function fakeEngine(log: string[]): BrowserEngine {
@@ -469,7 +471,7 @@ describe("in-browser source", () => {
     expect(await cspSealed((async () => { throw new TypeError("offline"); }) as typeof fetch)).toBe(false);
   });
 
-  it("live, the break clock reads as time on camera until a break is logged (the engine's text stays Python's); the tour is untouched", async () => {
+  it("live, the break clock reads as time on camera until a break restarts that person's clock (the engine's text stays Python's); the tour is untouched", async () => {
     vi.useFakeTimers();
     const LINE = "Person #1 reads as Focused. Main evidence: 0.0 hours since the last break and room light 336 lux.";
     const pred = { type: "prediction", event_id: "p1-1", t: 1, person_id: 1, label: "Focused", label_display: "Focused", confidence: 0.9,
@@ -478,25 +480,65 @@ describe("in-browser source", () => {
       data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: LINE, source: "template" },
       source: "live", simulated_fields: [] } satisfies ServerMessage;
     const engine = () => ({ ...fakeEngine([]), tick: (): ServerMessage[] => [structuredClone(pred)] });
-    const said = (out: ServerMessage[]) => out.filter((m) => m.type === "prediction").map((m) => [m.explanation.text, m.layers[0]?.drivers[0]?.display]);
-    const live = source({ needsMedia: false, createEngine: async () => engine() });
+    const said = (out: ServerMessage[]) => out.filter((m) => m.type === "prediction").map((m) => [m.person_id, m.explanation.text, m.layers[0]?.drivers[0]?.display]);
+    // Live, the engine predicts everyone it has seen on camera (each one gets a break clock when first seen).
+    const seen = new Set<number>();
+    const liveEngine = () => ({ ...fakeEngine([]),
+      push: (o: ObsLike) => { if ("persons" in o) o.persons.forEach((p) => seen.add(p.track_id)); return null; },
+      tick: (): ServerMessage[] => [...seen].sort((a, b) => a - b).map((id) => ({ ...structuredClone(pred), person_id: id, event_id: `p${id}-1` })) });
+    const perceptions: FakePerception[] = [];
+    const live = source({ needsMedia: false, perceptions, createEngine: async () => liveEngine() });
     await live.src.start();
+    live.src.command({ kind: "break" }); // before anyone is on camera: restarts no one's clock
+    perceptions[0]?.emit(video(1, [0.5]));
     await vi.advanceTimersByTimeAsync(5000);
-    live.src.command({ kind: "break" });
+    live.src.command({ kind: "break" }); // restarts person 1's clock
+    perceptions[0]?.emit(video(2, [0.5, 0.5])); // person 2 first appears after the break: a clock from arrival
     await vi.advanceTimersByTimeAsync(5000);
     live.src.command({ kind: "demo_reset" }); // fresh clocks: time on camera again
     await vi.advanceTimersByTimeAsync(5000);
     const arrival = "0.0 hours since you appeared on camera (no break logged)";
+    const onCamera = [LINE.replace("0.0 hours since the last break", arrival), arrival];
     expect(said(live.out)).toEqual([
-      [LINE.replace("0.0 hours since the last break", arrival), arrival],
-      [LINE, "0.0 hours since the last break"],
-      [LINE.replace("0.0 hours since the last break", arrival), arrival],
+      [1, ...onCamera],
+      [1, LINE, "0.0 hours since the last break"], [2, ...onCamera],
+      [1, ...onCamera], [2, ...onCamera],
     ]);
     live.src.stop();
     const tour = source({ mode: "tour", tourSpeed: 1, createEngine: async () => engine() });
     await tour.src.start();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(said(tour.out)).toEqual([[LINE, "0.0 hours since the last break"]]);
+    expect(said(tour.out)).toEqual([[1, LINE, "0.0 hours since the last break"]]);
+    tour.src.stop();
+  });
+
+  it("live, the compliment count is marked as not measured (no speech recognition in the browser); the tour's scripted ones stay", async () => {
+    vi.useFakeTimers();
+    // Every compliment phrasing describe.ts has (compl_cnt_*, compl_since_s, the unnarrated compl_cnt_now).
+    const shown = ["no compliments in the room in the last 15 minutes", "1 compliment in the room in the last minute",
+      "3 compliments in the room in the last 5 minutes", "no compliment in the last 15 minutes", "last compliment 40 s ago",
+      "compl_cnt_now = 0", "no laughter events in the room in the last 5 minutes"];
+    const LINE = `Person #1 reads as Focused. Main evidence: ${shown[0]}, ${shown[6]} and ${shown[3]}.`;
+    const pred = { type: "prediction", event_id: "p1-1", t: 1, person_id: 1, label: "Focused", label_display: "Focused", confidence: 0.9,
+      probabilities: { Focused: 0.9 }, face_only: { label: null, confidence: null }, mask_override: false, warming_up: false,
+      layers: [{ name: "Ambient Physics", contribution: 1, drivers: shown.map((display, i) => ({ feature: `f${i}`, display, value: 0, unit: "", shap: 0.1 })) }],
+      data_quality: { face_visible_frac: 1, lux: null, ood_features: [] }, explanation: { text: LINE, source: "template" },
+      source: "live", simulated_fields: [] } satisfies ServerMessage;
+    const engine = async () => ({ ...fakeEngine([]), tick: (): ServerMessage[] => [structuredClone(pred)] });
+    const said = (out: ServerMessage[]) => out.filter((m) => m.type === "prediction").map((m) => [m.explanation.text, m.layers[0]?.drivers.map((d) => d.display)]);
+    const NOT = " (not measured: no speech recognition)";
+    const live = source({ needsMedia: false, createEngine: engine });
+    await live.src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(said(live.out)).toEqual([[
+      `Person #1 reads as Focused. Main evidence: ${shown[0]}${NOT}, ${shown[6]} and ${shown[3]}${NOT}.`,
+      [...shown.slice(0, 6).map((s) => `${s}${NOT}`), shown[6]],
+    ]]);
+    live.src.stop();
+    const tour = source({ mode: "tour", tourSpeed: 1, createEngine: engine });
+    await tour.src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(said(tour.out)).toEqual([[LINE, shown]]);
     tour.src.stop();
   });
 
@@ -534,6 +576,9 @@ describe("in-browser source", () => {
     expect(rows.map((r) => r.macro_f1)).toEqual([0.7911, 0.4153, 0.6815, 0.6155, 0.4248]);
     expect(e.disclosure).toMatch(/^Held-out test scores on simulated sessions/);
     expect(e.disclosure).toMatch(/context \+ face scores 0\.79 macro-F1 against 0\.42 for the face snapshot alone\. Those two rows are the trainer's test score over mixed history lengths/);
+    // The ladder figures it quotes are MODEL_CARD section 5's, from the tracked reports/metrics.json: a re-run that
+    // changes them fails here until the disclosure is updated.
+    expect(e.disclosure).toContain(`reads ${metrics.models.m2.macro_f1.toFixed(3)} and ${metrics.models.m0.macro_f1.toFixed(3)}.`);
   });
 
   it("latestInputs gives nothing while paused or stopped", async () => {
