@@ -293,6 +293,42 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   Safari/Firefox, and the console contract.
 - `REAL_CAMERA.md` now starts the camera from the welcome card (`acdd410`).
 
+### 22:15 — Bug hunt on perception; counters per source; the finish line written down
+
+**Cloud A (web):**
+- **Governance counters per source** (`e403179`). Cloud C's bug hunt found that after Pause → Start the governance
+  counters fell back to 0, including any recorded violation, because every Start opens a new perception that counts
+  from 0. The desktop keeps them per source. The browser source now does too; the new test fails on the old code.
+- **One reason per stalled device** (`5f2a8fd`). When perception names the cause ("camera muted: video paused",
+  "microphone muted"), the status no longer also lists the bare device name.
+- **Tour clip re-recorded** on the current page (`4ab5ea6`).
+- **Finish-line checklist** for the user (`378ee86`, `64c0c00`). `docs/HACKOHIO_FINISH.md` lists the six steps only
+  a person can do: deploy, live check, demo video, Devpost, final tag, and an optional self-report session.
+  `docs/DEPLOY_WEB.md` now has a browser-support note.
+- **Integration gate:**
+  - Python: 725 passed, 22 skipped.
+  - Frontend: 928 tests pass; the build passes; the tour, hosted and mock-perception checks are clean.
+
+**Cloud B (emotion):**
+- **One command from taps to model card** (`474628f`): `python -m valence.eval.self_report <taps.jsonl>` writes the
+  report, the figure and model card §9.6. It labels fewer than 20 taps as a smoke test.
+- No new data and no number changes (`emotion-v1@006a8d7d`).
+
+**Cloud C (perception):**
+- **Bug hunt** (six finders, each finding adversarially verified): 14 of 16 findings held, which come to 11
+  issues, fixed in `ad7082e`. Among them:
+  - a camera that never sends a frame hung the start;
+  - Safari muting the camera for another tab gave frozen frames;
+  - ended tracks left the status live;
+  - the worker died on iOS Chrome/Firefox;
+  - the pose cap let small bystanders hide the participant.
+- **Review of those fixes:** 4 more issues, fixed in `c34942f`.
+- **Person box** (`48694ef`): measured against the desktop's YOLO, it stays full-extent.
+- **Browser support for camera mode, from code and published support:**
+  - Chrome/Edge (tested), Safari 17+ and iOS browsers: in a worker.
+  - Safari 16.4–16.x and Firefox < 114: on the page's thread, which works but is slower.
+  - A real Safari or phone still has to be checked by hand after the deploy.
+
 ## Generated from git
 
 <!-- hacklog:start -->
