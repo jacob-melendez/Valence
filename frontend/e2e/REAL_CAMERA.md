@@ -10,7 +10,8 @@ scalars only.
 
 ## 1. Load (Chrome on the Mac first, then Safari on the iPhone)
 
-1. Open the deployed site over **https** and switch the source to **IN-BROWSER** (or add `?source=browser`).
+1. Open the deployed site over **https** and press **Use my camera (on-device)** in the welcome card, or **Live
+   (camera + mic)** in the Source panel (or add `?source=browser`).
 2. Allow the camera and the microphone.
 3. In DevTools → Network: every request goes to the site's own origin. The first load fetches `/mediapipe/wasm/*`
    (about 18 MB) and `/mediapipe/models/*` (about 22 MB); a reload serves them from the cache.
