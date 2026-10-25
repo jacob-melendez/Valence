@@ -190,3 +190,15 @@ Blockers: none on this side. Real data needs a person.
 Next:
 - Taps, if they come.
 - Otherwise check-ins every ~90 min, then a final entry after the 08:00 freeze.
+
+### 01:21 ET — Quiet night: no taps, no contract changes
+
+- No self-report taps or new recordings. Perception changes since 23:16 (pause/resume and new display ids)
+  leave the cue semantics alone. The new display id after Pause → Start starts a new calibrator, as the spec says.
+- Model, artifacts and model card unchanged (`emotion-v1@006a8d7d`, macro-F1 0.681, face only 0.616, ECE 0.007).
+- Ready for real data: `python -m valence.eval.self_report <taps.jsonl>` → `self_report.json`, figure, model card
+  §9.6.
+
+Next:
+- Check-ins at 02:50, 04:20, 05:50 and 07:20.
+- Final entry after the 08:00 freeze.
