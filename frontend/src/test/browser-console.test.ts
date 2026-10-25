@@ -399,7 +399,7 @@ describe("what the in-browser panels claim", () => {
     expect(now()).toBe("Starting: waiting for camera and microphone…");
     await act(async () => { await v.sendCommand({ kind: "control", action: "stop" }); });
     act(() => { v.handleMessage(loading); }); // a status from before the Stop
-    expect(now()).toBe("Stopped: camera and microphone are released. Press Start to resume.");
+    expect(now()).toBe("Stopped: camera and microphone are released. Press Start to begin again (people start fresh).");
     act(() => { v.startBrowserSource("tour"); });
     await act(async () => { await v.sendCommand({ kind: "control", action: "pause" }); });
     expect(now()).toBe("Paused: press Start to resume the tour.");

@@ -606,7 +606,7 @@ describe("in-browser source", () => {
     src.stop();
   });
 
-  it("Pause → Start forgets the people when two or more were seated (a new perception may swap their ids); one person keeps theirs", async () => {
+  it("Pause → Start forgets the people, keeping the room (a new perception numbers them from 1 again)", async () => {
     installMedia();
     const run = async (heights: number[]) => {
       const perceptions: FakePerception[] = [];
@@ -620,8 +620,7 @@ describe("in-browser source", () => {
       return log.filter((l) => l.startsWith("reset"));
     };
     expect(await run([0.6, 0.55])).toEqual(["reset keep_room=true"]);
-    expect(await run([0.6])).toEqual([]);
-    expect(await run([0.6, 0.2])).toEqual([]); // the small box is background, not a participant
+    expect(await run([0.6])).toEqual(["reset keep_room=true"]); // alone too: they may come back under another id
   });
 
   it("keeps governance counters per source across Pause → Start (a reopened perception counts from 0 again)", async () => {

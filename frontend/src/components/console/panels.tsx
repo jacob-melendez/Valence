@@ -1056,7 +1056,8 @@ export function Welcome() {
   const devices = st?.camera && st.mic ? "camera and microphone" : st?.camera ? "camera (no microphone)" : st?.mic ? "microphone (no camera)" : null;
   // Paused or stopped first: the store has it at once, while status (still "loading") may be a second old.
   const halted = s.running === "paused" ? "Paused" : "Stopped";
-  const now = s.running !== "running" ? (tour ? `${halted}: press Start to resume the tour.` : `${halted}: camera and microphone are released. Press Start to resume.`)
+  // Start after a pause or stop opens a new perception, so people start fresh (browser-source.ts command start).
+  const now = s.running !== "running" ? (tour ? `${halted}: press Start to resume the tour.` : `${halted}: camera and microphone are released. Press Start to begin again (people start fresh).`)
     : st?.loading ? `${tour ? "Loading the tour" : "Starting"}: ${st.loading}…`
     : tour ? `Now playing: a scripted, simulated session walking through the 10 states at ${getTourSpeed()}× speed (no camera).`
     // The error itself, not a pointer: on phones the Source panel sits at the end of the page. Each message is a

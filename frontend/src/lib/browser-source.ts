@@ -234,8 +234,6 @@ export class BrowserSource {
   /** Of those, the ones whose clock "Log a break" restarted: for them (and for the room slot, once any break is
    *  logged) the break clock means what it says. Someone first seen after the break has a clock from arrival. */
   private onBreak = new Set<number>();
-  /** Participants in the last published tracks (the engine's >= 0.55x-tallest boxes). */
-  private seated = 0;
   // Operator toggles, kept so a toggle pressed while the engine loads still reaches it.
   private roomOnly = false;
   private readonly overlays = { face_occlusion: false, low_light: false };
@@ -391,7 +389,7 @@ export class BrowserSource {
     // The engine's push_obs publishes the participants' boxes (valence/runtime/engine.py: >= 0.55x the tallest,
     // at most every 0.1 s).
     const tracks = this.engine.push(o);
-    if (tracks) { this.deps.emit(tracks); if (tracks.type === "tracks") this.seated = tracks.persons.length; }
+    if (tracks) this.deps.emit(tracks);
     if (isVideo(o)) {
       this.lastVideoAt = this.now();
       for (const p of o.persons) this.clocked.add(p.track_id);
@@ -494,15 +492,16 @@ export class BrowserSource {
         const was = this.running;
         if (c.action === "start") {
           this.running = "running";
-          // Start opens a new perception, whose ids follow the pose model's order again: with two or more people
-          // seated before the pause, they could swap 15-minute histories. Forget the people then (the room stays);
-          // someone alone keeps theirs, since their id comes back as 1.
-          if (!this.tour && e && was === "paused" && this.seated > 1) { e.resetPeople(true); this.clocked.clear(); this.onBreak.clear(); this.seated = 0; }
+          // Start opens a new perception, which numbers people from 1 in the pose model's order again: a returning
+          // person could inherit someone else's 15-minute history (two people swapping, a presenter who was #2
+          // coming back as #1, a large background box listed first). Forget the people (the room stays).
+          if (!this.tour && e && was === "paused") { e.resetPeople(true); this.clocked.clear(); this.onBreak.clear(); }
           // From pause or stop (or after a refused prompt) reopen camera and mic; before the engine exists start() does.
           if (!this.tour && e && (was !== "running" || (!this.perception && !this.sensorLoading))) void this.openSensors(this.generation);
         } else {
-          // Pause releases camera and mic too (app.py control: stop_edge) but keeps the window and people; the kill
-          // switch also forgets everyone, room history included (reset_people(keep_room=False)).
+          // Pause releases camera and mic too (app.py control: stop_edge) and keeps the window and people until
+          // Start (which forgets the people, above); the kill switch forgets everyone at once, room history included
+          // (reset_people(keep_room=False)).
           this.running = c.action === "pause" ? "paused" : "stopped";
           this.closeSensors();
           if (c.action === "stop") { e?.resetPeople(false); this.clocked.clear(); this.onBreak.clear(); }
