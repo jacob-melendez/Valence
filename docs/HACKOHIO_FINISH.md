@@ -80,4 +80,10 @@ This is the first real labeled data for the emotion map; until now every model n
 4. Commit the file under `data/self_report/`, or hand it to Cloud B. Cloud B runs
    `python -m valence.eval.self_report <file>.jsonl`, and the model card's real-data table fills in.
 
-Five taps is a smoke test, not an evaluation; the model card will say so.
+   If no cloud session is running by then, run it yourself from the repo root, then commit the file together with
+   the three outputs:
+   - `artifacts/emotion/self_report.json`;
+   - `artifacts/emotion/figs/self_report.png`;
+   - `docs/MODEL_CARD.md` (section 9.6 is re-rendered).
+
+Five taps is a smoke test, not an evaluation. Under 20 taps, the model card labels the result as one.
