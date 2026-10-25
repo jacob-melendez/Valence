@@ -136,6 +136,32 @@ describe("createMockPerception", () => {
     expect(Math.min(...valences)).toBeLessThan(-0.5);
   });
 
+  it("status follows the real contract: no load time or rate before the first frame, both rates 0 after stop()", async () => {
+    const { clock, advance } = fakeClock();
+    const p = createMockPerception({ clock });
+    await p.start();
+    expect(p.status()).toMatchObject({ phase: "running", load_ms: null, fps: 0, face_hz: 0 });
+    advance(0.1);
+    vi.advanceTimersByTime(100);
+    expect(p.status()).toMatchObject({ load_ms: 100, fps: 10, face_hz: 10 });
+    p.stop();
+    expect(p.status()).toMatchObject({ phase: "stopped", fps: 0, face_hz: 0 });
+  });
+
+  it("tired eyes still blink, and every person's cues are relative to the neutral face (people 2 and 3 start mid-script)", async () => {
+    const { seen } = await run(180, { people: 3 });
+    const video = seen.filter((o): o is VideoObs => o.type === "video");
+    const at = (id: number) => video.map((v, i) => ({ s: (i + 1) / 10, p: v.persons.find((q) => q.track_id === id)! }));
+    // person 1 (offset 0): blinks per minute while worn out (140-180 s) above focused (0-60 s)
+    const rate = (from: number, to: number) =>
+      (at(1).filter(({ s, p }) => s >= from && s < to).reduce((n, { p }) => n + p.blink_onsets, 0) * 60) / (to - from);
+    expect(rate(140, 180)).toBeGreaterThan(rate(0, 60));
+    // person 3 (offset 94 s) is upbeat at first, yet focused (script 0-60 s = 86-146 s here) reads near the neutral
+    const focused = at(3).filter(({ s, p }) => s >= 90 && s < 140 && p.face_visible).map(({ p }) => p);
+    const mean = (k: "smile" | "brow_down" | "mouth_frown") => focused.reduce((n, p) => n + p[k], 0) / focused.length;
+    for (const k of ["smile", "brow_down", "mouth_frown"] as const) expect(Math.abs(mean(k))).toBeLessThan(0.05);
+  });
+
   it("repeats exactly for the same seed and clock", async () => {
     const ra = await run(5, { seed: 3 });
     ra.p.stop();

@@ -1,5 +1,6 @@
 /**
- * Where the video pipeline runs: in a Web Worker (default when the browser has Worker + OffscreenCanvas, keeping
+ * Where the video pipeline runs: in a Web Worker (default when the browser has Worker, OffscreenCanvas, createImageBitmap and WebGL on an OffscreenCanvas, i.e. not
+ * Safari before 17, keeping
  * MediaPipe's ~10-100 ms per frame off the console's main thread) or inline on the main thread (fallback, tests).
  * Either way one ImageBitmap goes in per step and is closed after processing; the caller counts it as purged when
  * `process` settles.
@@ -130,7 +131,10 @@ export async function workerBackend(opts: VisionBackendOptions, timeoutMs = 6000
   };
 }
 
-/** Worker when the browser has Worker, OffscreenCanvas and createImageBitmap (and the worker starts), else inline. */
+/**
+ * Worker when the browser has Worker, OffscreenCanvas and createImageBitmap and the worker starts MediaPipe (it needs
+ * WebGL on an OffscreenCanvas: not Safari before 17), else inline.
+ */
 export async function createVisionBackend(opts: VisionBackendOptions & { worker?: boolean }): Promise<VisionBackend> {
   const canWorker = typeof Worker !== "undefined" && typeof OffscreenCanvas !== "undefined"
     && typeof createImageBitmap !== "undefined";

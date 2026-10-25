@@ -12,7 +12,7 @@ const perception = createPerception();                 // createMockPerception()
 perception.onObservation((obs) => engine.push(obs));
 await perception.start(stream);
 perception.counters();                                 // governance: frames decoded / purged, audio blocks purged
-perception.status();                                   // fps, load time, where the models run, degradations
+perception.status();                                   // fps, time to first observation, where the models run, degradations
 perception.stop();
 ```
 

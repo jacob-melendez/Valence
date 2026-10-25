@@ -5,7 +5,7 @@
  * Each person loops through a 180 s script (offset per person): focused, upbeat (smiles, laughter in the room),
  * frustrated (brow down, fists), worn out (slump, head in hands, eyes closing). Blendshapes are drawn from that
  * script and face_valence is computed from them with the real formula (face_valence.py), so the extras and the
- * valence agree.
+ * valence agree. The face cues go through the real FaceCueTracker, calibrated on the script's neutral face.
  */
 import { FaceCueTracker, NO_CUES, rawCues } from "./faceCues";
 import { valenceRaw } from "./faceValence";
@@ -56,6 +56,25 @@ function rng(seed: number): () => number {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * A face-cue tracker already calibrated on the script's neutral face (what face_valence's fixed baseline assumes):
+ * people 2 and 3 start mid-script, and calibrating on their first 20 s would take a smile or a frown as neutral.
+ * Uses no random numbers, so the rest of the stream is unchanged.
+ */
+function neutralCues(): FaceCueTracker {
+  const tracker = new FaceCueTracker();
+  const bs: Record<string, number> = {};
+  for (const name of BLENDSHAPE_NAMES) bs[name] = 0;
+  for (const side of ["Left", "Right"]) {
+    bs[`mouthSmile${side}`] = 0.018;
+    bs[`eyeBlink${side}`] = 0.05;
+    bs[`eyeSquint${side}`] = 0.03;
+  }
+  const neutral = { ...rawCues(bs, null), yaw: 0, pitch: -3 };
+  for (let k = -220; k <= 0; k++) tracker.update(neutral, k * 100 - 100); // 22 s of visible face, ending just before t = 0
+  return tracker;
+}
 const round = (v: number, digits = 4) => Math.round(v * 10 ** digits) / 10 ** digits;
 
 interface MockPerson {
@@ -114,7 +133,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
     return centres.slice(0, nPeople).map((cx, i) => ({
       id: i + 1, offsetS: i * 47, cx, width: nPeople === 3 ? 0.22 : 0.3, jitter: [0, 0], motion: 0.04,
       dropoutUntil: -Infinity, fistActiveUntil: -Infinity, nextFistAt: 105 + i * 47, slumpSince: null,
-      nextBlinkAt: 2 + i, baseline: 0.02, cues: new FaceCueTracker(),
+      nextBlinkAt: 2 + i, baseline: 0.02, cues: neutralCues(),
     }));
   };
 
@@ -123,7 +142,8 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
     const v = target + 0.08 * gauss();
     const blink = s >= p.nextBlinkAt && s < p.nextBlinkAt + 0.15;
     if (s >= p.nextBlinkAt + 0.15) p.nextBlinkAt = s + (phase === "worn_out" ? 1.5 : 3.5) + 2 * rand();
-    const eyesHeavy = phase === "worn_out" ? 0.35 : 0.05;
+    // Heavy eyes stay under the blink detector's reopen level (neutral + 0.15), so tired blinks still count.
+    const eyesHeavy = phase === "worn_out" ? 0.18 : 0.05;
     const bs: Record<string, number> = {};
     for (const name of BLENDSHAPE_NAMES) bs[name] = clamp(0.03 * rand(), 0, 1);
     const both = (stem: string, value: number) => {
@@ -203,6 +223,7 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
       luxQ = round(clamp(0.42 + 0.02 * gauss(), 0, 1), 3);
       counters.derived_purged += 1;
     }
+    if (status.load_ms === null) setStatus({ load_ms: Math.round(s * 1000), fps, face_hz: fps });
     const obs: VideoObs = {
       type: "video", t, wall: clock.wall(), frame_seq: frameSeq++, frames_decoded: counters.frames_decoded, lux,
       lux_quality: luxQ, frame_w: frameW, frame_h: frameH, mirrored: false, persons: people.map((p) => person(p, s)),
@@ -247,12 +268,12 @@ export function createMockPerception(opts: MockPerceptionOptions = {}): Percepti
       laughUntil = -Infinity;
       nextLaughAt = 0;
       timers = [setInterval(videoTick, 1000 / fps), setInterval(audioTick, 1000 * blockS)];
-      setStatus({ ...idleStatus(true), phase: "running", camera: true, mic: true, fps, face_hz: fps, load_ms: 0 });
+      setStatus({ ...idleStatus(true), phase: "running", camera: true, mic: true }); // rates and load_ms: first frame
     },
     stop() {
       for (const id of timers) clearInterval(id);
       timers = [];
-      if (status.phase === "running") setStatus({ phase: "stopped", camera: false, mic: false, fps: 0 });
+      if (status.phase === "running") setStatus({ phase: "stopped", camera: false, mic: false, fps: 0, face_hz: 0 });
     },
     onObservation: (cb) => obsHub.on(cb),
     counters: (): PerceptionCounters => ({ ...counters }),

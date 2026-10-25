@@ -47,7 +47,9 @@ export interface PersonObs {
   /** [-1, 1] relative to the person's neutral baseline; NaN when the face is not visible. */
   face_valence: number;
   // Emotion-map face cues (docs/EMOTION_FEATURES.md section 1), relative to the person's neutral (first 20 s of
-  // visible face); NaN (blink_onsets 0) when the face is not visible. Python defaults them to NaN / 0.
+  // visible face); NaN (blink_onsets 0) when the face is not visible. Python defaults them to NaN / 0. head_yaw and
+  // head_pitch are also NaN on a visible face found only by the head-crop retry (no pose), and a channel that had no
+  // samples at the 20 s freeze (in practice yaw/pitch) stays NaN until it has 20 s of its own, its neutral.
   /** browDown L/R mean minus neutral, -1..1. */
   brow_down: number;
   /** Neutral eyeBlink L/R mean minus this frame's, -1..1 (> 0 eyes wider than neutral). */
@@ -75,7 +77,7 @@ export interface VideoObs {
   t: number;
   wall: number;
   frame_seq: number;
-  /** Cumulative frames taken from the camera since start(); must equal frames purged. */
+  /** Cumulative frames taken from the camera since start(); frames purged follows once the step ends (≤ 1 behind). */
   frames_decoded: number;
   /** Estimated lux (10 s median, updated at 1 Hz, repeated on every frame); NaN before the first reading. */
   lux: number;
@@ -108,7 +110,10 @@ export type Obs = VideoObs | AudioObs;
 
 /** Governance counters (what the console's governance panel shows). */
 export interface PerceptionCounters {
-  /** Camera frames taken for processing since start() (each becomes one ImageBitmap). */
+  /**
+   * Camera frames taken for processing since start() (each becomes one ImageBitmap). Counted when the step starts,
+   * so it may lead frames_purged by the one frame in flight.
+   */
   frames_decoded: number;
   /** Of those, frames released: bitmap closed and every pixel copy zero-filled. */
   frames_purged: number;

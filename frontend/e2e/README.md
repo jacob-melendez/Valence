@@ -5,10 +5,10 @@ fake camera and microphone fed from files, behind a strict CSP, and checks that:
 
 - faces are detected and observations flow (video ~10 Hz, audio 1 Hz), with all 52 blendshapes;
 - YAMNet hears speech in the speech clip;
-- every frame taken is purged (`frames_decoded == frames_purged`);
+- every frame taken is purged (`frames_decoded − frames_purged ≤ 1`: at most the frame in flight);
 - **no request leaves the origin**, **nothing violates the CSP** and the page throws no error.
 
-It also records fps, model load time and download size in `.out/report-<scenario>.json`.
+It also records fps, the time to the first observation and download size in `.out/report-<scenario>.json`.
 
 ```
 cd frontend
@@ -18,8 +18,8 @@ node e2e/run.mjs --scenario two           # two people side by side
 node e2e/run.mjs --scenario roll_cw       # portrait rotated 15 degrees clockwise (head roll sign check)
 node e2e/run.mjs --csp deploy             # the CSP the Cloudflare deploy writes (scripts/security-headers.mjs)
 node e2e/run.mjs --delegate GPU           # the GPU delegate (on headless Chromium's software WebGL: < 1 fps, fails)
-node e2e/run.mjs --deny camera            # the user refuses the camera (getUserMedia: NotAllowedError): audio alone
-node e2e/run.mjs --deny mic               # the user refuses the mic: video alone
+node e2e/run.mjs --deny camera            # getUserMedia refuses the camera (NotAllowedError): audio alone (harness only)
+node e2e/run.mjs --deny mic               # it refuses the mic: video alone (harness only, see below)
 node e2e/run.mjs --python-cadence         # faces on every other frame, as the Python edge
 node e2e/run.mjs --main-thread            # no Web Worker: the video models on the page's main thread
 node e2e/run.mjs --no-build               # reuse e2e/dist (rebuild after changing src/perception)
@@ -36,8 +36,11 @@ From a fresh clone it needs, besides `npm install`:
   imageio-ffmpeg`;
 - internet access the first time, for the MediaPipe models.
 
-The page under test is `index.html` + `harness.ts`: it opens the camera and mic with `openMediaStream()` exactly as
-the console does, starts `createPerception()`, and exposes compact summaries on `window.__e2e`.
+The page under test is `index.html` + `harness.ts`: it opens the camera and mic with perception's `openMediaStream()`,
+starts `createPerception()`, and exposes compact summaries on `window.__e2e`. The console opens them itself
+(`src/lib/browser-source.ts` `openMedia`: the same raw-audio constraints, no frameRate/facingMode, and no per-device
+retry after a refusal), so `--deny camera|mic` tests `openMediaStream`'s fallback and perception's "no camera" /
+"no microphone" paths, not what the console does when one device is refused.
 
 ## Test media and licenses
 
