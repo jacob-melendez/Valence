@@ -63,12 +63,14 @@ export function headersFile(html) {
     "/assets/*",
     "  Cache-Control: public, max-age=31536000, immutable",
     "",
-    // MediaPipe's WASM (~11 MB, fetched by each vision task) and models are not content-hashed: cache for a day.
+    // MediaPipe's WASM, glue and worklet and the engine's models have unversioned URLs, while the hashed bundles that
+    // load them change on every deploy: revalidate on each load (Cloudflare answers 304 from the ETag, so the ~11 MB
+    // WASM downloads again only when it changed). A max-age would pair new code with cached old files after a deploy.
     "/mediapipe/*",
-    "  Cache-Control: public, max-age=86400",
+    "  Cache-Control: no-cache",
     "",
     "/models/*",
-    "  Cache-Control: public, max-age=3600",
+    "  Cache-Control: no-cache",
     "",
   ].join("\n");
 }
