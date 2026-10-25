@@ -476,6 +476,26 @@ describe("headPoseDeg / headRollDeg", () => {
 });
 
 describe("FaceCueTracker (test_emotion_features.py)", () => {
+  it("emptyFreezesNaN (the browser's setting): a crop-only calibration leaves yaw and pitch missing, not absolute", () => {
+    const bs = {
+      browDownLeft: 0.1, browDownRight: 0.1, eyeBlinkLeft: 0.1, eyeBlinkRight: 0.1,
+      mouthFrownLeft: 0, mouthFrownRight: 0, mouthSmileLeft: 0, mouthSmileRight: 0,
+    };
+    const a = (30 * Math.PI) / 180; // turned 30 degrees about y, 50 cm away
+    const turned = [Math.cos(a), 0, -Math.sin(a), 0, 0, 1, 0, 0, Math.sin(a), 0, Math.cos(a), 0, 0, 0, -50, 1];
+    const feed = (tr: FaceCueTracker) => {
+      for (let i = 0; i < 300; i++) tr.update(rawCues(bs, null), i * 100); // 30 s of head-crop faces: no yaw
+      let out: FaceCues | undefined;
+      for (let i = 300; i < 310; i++) out = tr.update(rawCues(bs, turned), i * 100); // then full-frame faces
+      return out!;
+    };
+    expect(feed(new FaceCueTracker()).head_yaw).toBeCloseTo(30, 6); // face_cues.py's 0 neutral (kept for parity)
+    const browser = feed(new FaceCueTracker(20, true));
+    expect(browser.head_yaw).toBeNaN();
+    expect(browser.head_pitch).toBeNaN();
+    expect(browser.brow_down).toBeCloseTo(0, 9); // the channels that had samples froze as usual
+  });
+
   it("calibrates a baseline and counts blinks", () => {
     const tr = new FaceCueTracker();
     const neutral = {

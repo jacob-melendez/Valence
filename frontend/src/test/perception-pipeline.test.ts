@@ -4,6 +4,7 @@ import { BLAZEPOSE_TO_COCO, blazeposeToCoco, poseBoxPx, type Landmark } from "@/
 import { PostureTracker } from "@/perception/posture";
 import { IouTracker, iou } from "@/perception/tracker";
 import { BLENDSHAPE_NAMES, type VideoObs } from "@/perception/types";
+import { DisplayIdMapper } from "@/perception/ids";
 import { FACE_HOLD_S, VisionPipeline, type FrameInput, type PixelSource } from "@/perception/video";
 
 // ---------- synthetic MediaPipe outputs ----------
@@ -309,6 +310,48 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     expect(persons.map((p, i) => p.face_visible === (i >= 1 && i !== 22))).not.toContain(false);
     expect(persons.map((p) => p.blink_onsets)).toEqual(persons.map((_, i) => (i === 13 ? 1 : 0)));
     expect(persons[22]!.eye_open).toBeNaN();
+  });
+
+  it("a gap longer than the id reuse window (tab hidden, camera muted) releases everyone: the next person starts fresh", () => {
+    let smile = 0.6;
+    const { models } = fakeModels(() => ({ poses: [seated()], faces: [{ nose: [0.5, 0.3], smile }], hands: [] }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels, { faceEveryFrame: true });
+    const a = run(pipe, 400).at(-1)!.persons[0]!; // A for 40 s: A's neutral face is frozen
+    smile = 0.05; // B sits down while nothing was processed
+    const b = run(pipe, 5, 100 + 40 + 600).map((o) => o.persons[0]!);
+    expect(b[0]!.track_id).toBe(a.track_id); // the seat's id, as on the edge after a long absence
+    // ...but B's face is read against B's own neutral, not A's (which would read strongly negative)
+    expect(b.every((p) => Number.isNaN(p.face_valence) || Math.abs(p.face_valence) < 0.1)).toBe(true);
+  });
+
+  it("measures display-id reuse distances in real frame widths, whatever the aspect (a phone sends portrait)", () => {
+    const newcomer = (m: DisplayIdMapper) => {
+      m.update([[1, [0.25, 0.15, 0.75, 1.0]]], 0);
+      m.update([], 0.5);
+      return m.update([[2, [0.4, 0.05, 0.6, 0.5]]], 1.5).get(2);
+    };
+    expect(newcomer(new DisplayIdMapper())).toBe(1); // 16:9: 0.17 frame widths away, the same seat
+    const portrait = new DisplayIdMapper();
+    portrait.aspect = 1280 / 720;
+    expect(newcomer(portrait)).toBe(2); // 720x1280: 0.53 frame widths away, someone else
+    const { models } = fakeModels(() => ({ poses: [seated()], faces: [], hands: [] }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels);
+    pipe.process({ image: {} as never, width: 720, height: 1280 }, 100, 0, 0, 1);
+    expect((pipe as unknown as { ids: DisplayIdMapper }).ids.aspect).toBeCloseTo(1280 / 720, 12);
+  });
+
+  it("scrub() runs one blank frame of the last size through every model, with fresh timestamps", () => {
+    const { models, calls } = fakeModels(() => ({ poses: [seated()], faces: [], hands: [] }));
+    const pipe = new VisionPipeline(models, fakePixels().pixels, { faceEveryFrame: true });
+    const sizes: number[][] = [];
+    pipe.scrub((w, h) => (sizes.push([w, h]), {} as CanvasImageSource)); // nothing processed yet: nothing to scrub
+    expect(sizes).toEqual([]);
+    run(pipe, 3);
+    const before = { pose: calls.pose.at(-1)!, crop: calls.crop };
+    pipe.scrub((w, h) => (sizes.push([w, h]), {} as CanvasImageSource));
+    expect(sizes).toEqual([[1280, 720], [256, 256]]);
+    expect(calls.pose.at(-1)!).toBeGreaterThan(before.pose);
+    expect(calls.crop).toBe(before.crop + 1);
   });
 
   it("emotion cues: the neutral baseline freezes after 20 s of visible face when every other face pass misses", () => {

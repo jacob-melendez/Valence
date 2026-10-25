@@ -67,6 +67,12 @@ export function autoDelegate(): Delegate {
 export async function loadVisionModels(
   assetBase: string, opts: { delegate?: Delegate; maxPeople?: number; useModule?: boolean } = {},
 ): Promise<VisionModels> {
+  // MediaPipe sends every image through WebGL, on either delegate. In a worker that needs WebGL on an OffscreenCanvas,
+  // which Safari only has from 17: there MediaPipe would start and then fail on every frame, so fail now and let the
+  // page's thread take over (createVisionBackend).
+  const inWorker = typeof document === "undefined";
+  const offscreenGl = typeof OffscreenCanvas !== "undefined" && hasWebGl(new OffscreenCanvas(1, 1));
+  if (inWorker && !offscreenGl) throw new Error("no WebGL in a worker (Safari before 17): video runs on the page");
   const mp = await import("@mediapipe/tasks-vision");
   // useModule: the ES-module WASM loader, for module workers (no importScripts there).
   const fileset = await mp.FilesetResolver.forVisionTasks(join(assetBase, "wasm"), opts.useModule ?? false);
@@ -81,14 +87,22 @@ export async function loadVisionModels(
     [MODEL.face, MODEL.pose, MODEL.gesture].map((file) => fetchModel(join(assetBase, file))),
   );
   const buffers: Record<string, Uint8Array> = { [MODEL.face]: faceBuf!, [MODEL.pose]: poseBuf!, [MODEL.gesture]: gestureBuf! };
-  // In a worker (no DOM) give each task an OffscreenCanvas, as MediaPipe does itself when its user-agent check passes.
-  // That check fails for Chrome and Firefox on iOS (WebKit without "Version/N" in the UA), where MediaPipe then
-  // calls document.createElement inside the worker and every task fails, sending video to the main thread.
-  const canvas = () =>
-    typeof document === "undefined" && typeof OffscreenCanvas !== "undefined" ? { canvas: new OffscreenCanvas(1, 1) } : {};
   const build = async (delegate: Delegate): Promise<VisionModels> => {
     const base = (file: string) => ({ modelAssetBuffer: buffers[file]!, delegate });
     const created: { close(): void }[] = [];
+    // Each task gets a canvas of ours, chosen by capability as MediaPipe chooses by user agent (its check fails for
+    // Chrome and Firefox on iOS, where it then calls document.createElement inside the worker). After a lost WebGL
+    // context (a GPU reset, a phone reclaiming GPU memory) MediaPipe keeps returning its last results without an
+    // error, a frozen face or a phantom person: watch every canvas and fail the calls instead.
+    let lost = false;
+    const canvas = () => {
+      const c = offscreenGl ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+      c.addEventListener("webglcontextlost", () => (lost = true));
+      return { canvas: c };
+    };
+    const live = () => {
+      if (lost) throw new Error("WebGL context lost: restart the camera");
+    };
     try {
       const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(filesetFor(), {
         ...canvas(), baseOptions: base(MODEL.pose), runningMode: "VIDEO",
@@ -121,10 +135,22 @@ export async function loadVisionModels(
       created.push(gestures);
       return {
         delegate,
-        pose: (image, ts) => pose.detectForVideo(image, ts),
-        faces: (image) => faces.detect(image),
-        faceCrop: (image) => faceCrop.detect(image),
-        gestures: (image, ts) => gestures.recognizeForVideo(image, ts),
+        pose: (image, ts) => {
+          live();
+          return pose.detectForVideo(image, ts);
+        },
+        faces: (image) => {
+          live();
+          return faces.detect(image);
+        },
+        faceCrop: (image) => {
+          live();
+          return faceCrop.detect(image);
+        },
+        gestures: (image, ts) => {
+          live();
+          return gestures.recognizeForVideo(image, ts);
+        },
         close: () => created.forEach((t) => t.close()),
       };
     } catch (e) {
@@ -138,6 +164,16 @@ export async function loadVisionModels(
   } catch (e) {
     console.warn("[perception] GPU delegate failed, falling back to CPU", e);
     return build("CPU");
+  }
+}
+
+function hasWebGl(canvas: OffscreenCanvas): boolean {
+  try {
+    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as WebGLRenderingContext | null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    return gl !== null;
+  } catch {
+    return false;
   }
 }
 

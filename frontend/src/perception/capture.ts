@@ -9,7 +9,7 @@
 
 type Canvas2D = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D;
 
-function makeCanvas(w: number, h: number): { canvas: OffscreenCanvas | HTMLCanvasElement; ctx: Canvas2D } {
+export function makeCanvas(w: number, h: number): { canvas: OffscreenCanvas | HTMLCanvasElement; ctx: Canvas2D } {
   if (typeof OffscreenCanvas !== "undefined") {
     const canvas = new OffscreenCanvas(w, h);
     const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: false });

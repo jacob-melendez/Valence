@@ -259,6 +259,7 @@ class BrowserPerception implements Perception {
     const schedule = (delay: number) => {
       if (gen === this.gen) timer = setTimeout(() => void tick(), delay);
     };
+    let paused = false;
     const tick = async () => {
       if (gen !== this.gen) return;
       if (!frames.live) {
@@ -275,9 +276,16 @@ class BrowserPerception implements Perception {
       this.degrade(HIDDEN, hidden);
       this.degrade(CAMERA_MUTED, muted && !hidden);
       if (hidden || muted) {
-        nextT = performance.now() + period;
+        // No observations while paused: the rates read 0, and the first step after it starts them afresh.
+        this.lastVideoT = null;
+        if (this.st.fps || this.st.face_hz) this.setStatus({ fps: 0, face_hz: 0 });
+        paused = true;
         schedule(500);
         return;
+      }
+      if (paused) {
+        paused = false;
+        nextT = performance.now(); // resume on the beat, not with a step to catch up
       }
       let bitmap: ImageBitmap | null = null;
       try {

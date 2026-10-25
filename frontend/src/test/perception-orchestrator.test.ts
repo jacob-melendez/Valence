@@ -497,6 +497,25 @@ describe("createPerception orchestration", () => {
     p.stop();
   });
 
+  it("fps and face_hz read 0 while video is paused, then restart from the real rate without a catch-up step", async () => {
+    const { deps } = harness();
+    const v = track("video");
+    const p = createPerception({ fps: 20 }, deps);
+    await p.start(stream(v));
+    await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(5), { timeout: 3000 });
+    v.muted = true;
+    await vi.waitFor(() => expect(p.status()).toMatchObject({ fps: 0, face_hz: 0 }));
+    v.muted = false;
+    const seen: number[] = [];
+    for (let i = 0; i < 50; i++) {
+      seen.push(p.status().fps);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(Math.max(...seen)).toBeLessThan(40); // two steps back to back would read ~1000 Hz
+    expect(seen.at(-1)!).toBeGreaterThan(5);
+    p.stop();
+  });
+
   it("fps counts observations: a backend failing on every frame decays toward 0 instead of reading the step rate", async () => {
     const { deps } = harness();
     let failing = false;
@@ -700,6 +719,54 @@ describe("loadAudioModels (fake MediaPipe)", () => {
     models.classify(Float32Array.from({ length: 15600 }, () => 0.1), 16000);
     models.close();
     expect(calls).toEqual(["classify 15600 16000 audio", "classify 15600 16000 silent", "close"]);
+  });
+});
+
+describe("loadVisionModels (fake MediaPipe)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.doUnmock("@mediapipe/tasks-vision");
+    vi.resetModules();
+  });
+
+  it("in a worker without WebGL on OffscreenCanvas (Safari before 17) it fails at once, so the page's thread takes over", async () => {
+    vi.resetModules();
+    const { loadVisionModels } = await import("@/perception/models");
+    vi.stubGlobal("OffscreenCanvas", class {
+      getContext() {
+        return null;
+      }
+    });
+    vi.stubGlobal("document", undefined);
+    const loading = loadVisionModels("/mediapipe/");
+    vi.unstubAllGlobals();
+    await expect(loading).rejects.toThrow(/no WebGL in a worker/);
+  });
+
+  it("a lost WebGL context makes every model call fail instead of returning MediaPipe's last results", async () => {
+    const canvases: EventTarget[] = [];
+    const task = (kind: string) => ({
+      createFromOptions: async (_fileset: unknown, o: { canvas: EventTarget }) => {
+        canvases.push(o.canvas);
+        return { detect: () => kind, detectForVideo: () => kind, recognizeForVideo: () => kind, close() {} };
+      },
+    });
+    vi.resetModules();
+    vi.doMock("@mediapipe/tasks-vision", () => ({
+      FilesetResolver: { forVisionTasks: async () => ({ wasmLoaderPath: "/mediapipe/wasm/x.js" }) },
+      PoseLandmarker: task("pose"), FaceLandmarker: task("faces"), GestureRecognizer: task("gestures"),
+    }));
+    vi.stubGlobal("fetch", async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) }));
+    const { loadVisionModels } = await import("@/perception/models");
+    const models = await loadVisionModels("/mediapipe/", { delegate: "CPU" });
+    expect(canvases).toHaveLength(4); // a canvas of ours per task, so it can be watched
+    expect(models.pose({} as never, 1)).toBe("pose");
+    canvases[2]!.dispatchEvent(new Event("webglcontextlost"));
+    for (const call of [() => models.pose({} as never, 2), () => models.faces({} as never, 2),
+      () => models.faceCrop({} as never), () => models.gestures({} as never, 2)]) {
+      expect(call).toThrow(/WebGL context lost/);
+    }
+    models.close();
   });
 });
 

@@ -16,7 +16,7 @@
  * person, held like face_valence for FACE_HOLD_S after the face pass that produced them.
  */
 import { blazeposeToCoco, poseBoxPx } from "./coco";
-import { FaceCueTracker, headPoseDeg, headRollDeg, NO_CUES, rawCues, type FaceCues } from "./faceCues";
+import { CUE_CALIBRATION_S, FaceCueTracker, headPoseDeg, headRollDeg, NO_CUES, rawCues, type FaceCues } from "./faceCues";
 import { assignFaces, blendshapeScores, FaceValenceCalibrator, noseTipPx, valenceRaw } from "./faceValence";
 import { assignHands, FistTracker, isCurlFist, type Side } from "./hands";
 import { DisplayIdMapper } from "./ids";
@@ -90,7 +90,7 @@ class Person {
   posture = new PostureTracker({ motionPoints: [5, 6] });
   smoother = new KeypointSmoother();
   face = new FaceValenceCalibrator();
-  cues = new FaceCueTracker();
+  cues = new FaceCueTracker(CUE_CALIBRATION_S, true); // crop-only calibration leaves yaw/pitch missing, not 0
   faceValence = NaN;
   faceSeenT = -Infinity;
   lastCues: FaceCues = { ...NO_CUES };
@@ -123,6 +123,8 @@ export class VisionPipeline {
   private readonly minPersonH: number;
   private readonly faceEveryFrame: boolean;
   private iter = 0;
+  private lastProcessT: number | null = null;
+  private lastSize: readonly [number, number] | null = null;
   private readonly lastTs = { pose: -1, faces: -1, gestures: -1 };
   private lastLuxT = -Infinity;
   private lastFacePassT: number | null = null;
@@ -143,6 +145,13 @@ export class VisionPipeline {
   process(frame: FrameInput, t: number, wall: number, seq: number, framesDecoded = 0): VideoObs {
     const { width: w, height: h } = frame;
     const it = this.iter++;
+    // Nothing seen for the id reuse window (tab hidden, camera muted): as on the edge after that long an absence,
+    // everyone's id and per-person state are released, so whoever sits there next starts fresh (not on the previous
+    // person's frozen baselines).
+    if (this.lastProcessT !== null && t - this.lastProcessT >= this.ids.reuseWindowS) this.ids.reset();
+    this.lastProcessT = t;
+    this.lastSize = [w, h];
+    if (w > 0 && h > 0) this.ids.aspect = h / w;
 
     const allDets = this.track(frame, w, h, t);
     const dets = allDets
@@ -205,6 +214,31 @@ export class VisionPipeline {
   }
 
   /** VIDEO mode (pose, gestures) needs strictly increasing ms timestamps per task; IMAGE-mode faces ignore it. */
+  /**
+   * One blank frame of the last frame's size, and a blank head crop, through every model. MediaPipe copies each input
+   * into its WASM heap and close() leaves it there; on the page's thread, where no worker dies with the heap, that
+   * would keep the last camera frame. Best effort, before closing the models.
+   */
+  scrub(blank: (w: number, h: number) => CanvasImageSource): void {
+    if (!this.lastSize) return;
+    const [w, h] = this.lastSize;
+    const frame = blank(w, h) as TexImageSource;
+    const crop = blank(FACE_CROP_PX, FACE_CROP_PX) as TexImageSource;
+    const runs = [
+      () => this.models.pose(frame, this.ts("pose", 0)),
+      () => this.models.gestures(frame, this.ts("gestures", 0)),
+      () => this.models.faces(frame, this.ts("faces", 0)),
+      () => this.models.faceCrop(crop),
+    ];
+    for (const run of runs) {
+      try {
+        run();
+      } catch {
+        // the models are closed next either way
+      }
+    }
+  }
+
   private ts(task: keyof VisionPipeline["lastTs"], t: number): number {
     this.lastTs[task] = Math.max(Math.floor(t * 1000), this.lastTs[task] + 1);
     return this.lastTs[task];

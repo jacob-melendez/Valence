@@ -53,7 +53,8 @@ export class DisplayIdMapper {
   constructor(
     readonly reuseWindowS = 3.0,
     readonly reuseDist = 0.25,
-    readonly aspect = 9 / 16,
+    /** Frame h / w; the browser sets it from each frame (a phone in portrait sends 720x1280). */
+    public aspect = 9 / 16,
   ) {
     if (reuseWindowS < 0 || reuseDist < 0 || aspect <= 0) {
       throw new Error("reuseWindowS, reuseDist must be >= 0 and aspect > 0");

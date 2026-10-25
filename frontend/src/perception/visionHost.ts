@@ -4,7 +4,7 @@
  * Either way one ImageBitmap goes in per step and is closed after processing; the caller counts it as purged when
  * `process` settles.
  */
-import { PixelReader } from "./capture";
+import { makeCanvas, PixelReader } from "./capture";
 import { loadVisionModels, type Delegate } from "./models";
 import type { VideoObs } from "./types";
 import { VisionPipeline } from "./video";
@@ -58,6 +58,15 @@ export async function inlineBackend(opts: VisionBackendOptions): Promise<VisionB
       }
     },
     close() {
+      // The worker's heap dies with it; this thread's stays, so overwrite MediaPipe's copy of the last frame first.
+      const blanks: { width: number; height: number }[] = [];
+      pipeline.scrub((w, h) => {
+        const { canvas, ctx } = makeCanvas(w, h);
+        ctx.fillRect(0, 0, w, h);
+        blanks.push(canvas);
+        return canvas;
+      });
+      for (const c of blanks) c.width = c.height = 0;
       models.close();
       reader.close();
     },

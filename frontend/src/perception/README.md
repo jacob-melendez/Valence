@@ -53,7 +53,9 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 ## Privacy
 
 - Each frame exists as one `ImageBitmap` for one step and is closed in the worker right after. The luminance read
-  (1 Hz) and head crops go through canvases that are cleared, and their buffers are zero-filled. There is no
+  (1 Hz) and head crops go through canvases that are cleared, and their buffers are zero-filled. MediaPipe copies each
+  frame into its WASM heap; the worker's heap dies with the worker, and on the page's thread (the fallback) one blank
+  frame goes through every model before they close. There is no
   MediaRecorder, and no canvas or image data is kept or persisted.
 - Mic chunks are zero-filled once copied into the 1 s block. The block and its 16 kHz copy are zero-filled after
   analysis. MediaPipe keeps its own copy of the last YAMNet window in its WASM heap; closing the classifier (stop(),
@@ -87,6 +89,15 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   come slower than every 0.2 s (a slow device), it stretches to 2.25 measured pass intervals.
 - **Workers and delegates.** The video models run in a Web Worker, on MediaPipe's CPU delegate by default. On
   identical frames that matches the native edge to ~1e-4. `?delegate=GPU` on the page URL tries the GPU instead.
+  MediaPipe sends images through WebGL on either delegate: a worker without WebGL on OffscreenCanvas (Safari before 17)
+  hands video to the page's thread, and a lost WebGL context fails every later step ("video step failing") instead of
+  repeating MediaPipe's last results.
+- **Pauses.** A gap of 3 s (the id reuse window) or more without a processed frame (tab hidden, camera muted)
+  releases every display id and its per-person state, as an absence that long does on the edge, which processes
+  every frame.
+- **Frame shape.** Display-id reuse distances use the real frame aspect (Python: 16:9, the edge's capture size), so
+  portrait phone frames measure vertical distance correctly. A face-cue channel with no samples at the 20 s freeze
+  stays missing (Python: 0): only the browser's head-crop retry, which gives no yaw or pitch, can leave one empty.
 - **Muted and stalled cameras.** A muted track (Safari giving the camera to another tab, an OS privacy toggle,
   Chromium after ~25 missed frames) pauses video like a hidden tab, and a muted mic is purged instead of analysed,
   both reported in `status().degraded`. A camera that stalls without being muted repeats its last frame until the

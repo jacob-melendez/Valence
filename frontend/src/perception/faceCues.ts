@@ -103,7 +103,15 @@ export class FaceCueTracker {
   private prevVisible = false;
   private closedAt: number | null = null;
 
-  constructor(readonly calibrationS = CUE_CALIBRATION_S) {}
+  /**
+   * `emptyFreezesNaN`: a channel with no samples at freeze time freezes as missing instead of 0 (face_cues.py's
+   * default, kept here for parity). The browser pipeline sets it: when every face so far came from its head-crop retry,
+   * which gives no yaw or pitch, a 0 neutral would turn later readings into absolute angles to the camera.
+   */
+  constructor(
+    readonly calibrationS = CUE_CALIBRATION_S,
+    private readonly emptyFreezesNaN = false,
+  ) {}
 
   baseline(): RawCues {
     if (this.frozen) return this.frozen;
@@ -129,7 +137,9 @@ export class FaceCueTracker {
       if (this.visibleS < this.calibrationS) {
         for (const k of RAW_CHANNELS) if (!Number.isNaN(raw[k])) this.samples[k].push(raw[k]);
       } else {
-        this.frozen = this.baseline();
+        const frozen = this.baseline();
+        if (this.emptyFreezesNaN) for (const k of RAW_CHANNELS) if (!this.samples[k].length) frozen[k] = NaN;
+        this.frozen = frozen;
         this.samples = emptySamples();
       }
     }
