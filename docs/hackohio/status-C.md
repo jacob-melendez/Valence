@@ -407,3 +407,13 @@ Chromium process's RSS sampled every 30 s.
   checked hashes (72 MB in `dist/client/mediapipe`, largest file 11 MB). `scripts/check-static.mjs` with the
   production CSP, real perception and the fake camera then passes: "Top drivers by layer" appears, with 0 off-origin
   requests, 0 CSP violations and 0 page errors.
+
+### 05:45 — check-in
+
+- **Health.** No fixture drift. 944 frontend tests pass. `e2e/run-all.mjs` passes all seven scenarios with 0
+  off-origin requests and 0 CSP violations; both cross checks hold.
+- **fps.** 3.7–5.8 (worker/CPU), a little under the earlier runs (4.3–7.7). No perception code changed since 03:45
+  (only other teams' docs), so this is load on the shared container, not a regression.
+- **Review of e276b25** (main-thread rest): nothing confirmed. The one claim, that the face-hold stretch is lost on
+  very slow devices, only applies to the Python face cadence, which nothing ships.
+- **Next.** Last check-in at 07:45; freeze at 08:00. After that, only fixes, docs and status.
