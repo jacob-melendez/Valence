@@ -259,10 +259,12 @@ One JSON line per tap, appended by the console's capture; **never media, never a
 
 **Session protocol** (what makes the taps usable):
 
-1. Consent first: the person knows that only the feature numbers and their taps are kept, in the browser's memory
-   until they press Download, and that they can stop and clear at any time.
-2. Sit at the desk for ≥ 1 minute before the first tap, looking at the screen normally: the face cues' neutral
-   baseline is the first 20 s of visible face, and the window needs a minute to warm up.
+1. Consent first: the person knows that only the feature numbers and their taps are kept, in this tab's memory until
+   they press Clear or close the tab (Download saves a copy and keeps them), and that they can stop and clear at any
+   time.
+2. Sit at the desk looking at the screen normally until the console asks for the first tap: it waits until the
+   warm-up is over (the face cues' neutral baseline is the first 20 s of visible face, and the window needs a minute),
+   so no tap carries a warm-up input vector.
 3. Tap every ~2 minutes (the console reminds), from how you feel *right now*: left–right = unpleasant–pleasant,
    down–up = calm/tired–activated. Optionally pick a state name.
 4. Aim for ≥ 30 minutes and some variety (a hard task, a break, a chat, a boring stretch); the evaluator needs
