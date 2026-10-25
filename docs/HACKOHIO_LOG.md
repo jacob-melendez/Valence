@@ -382,6 +382,29 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   0 violations; 0 page errors.
 - **Browser support correction:** iOS Chrome and Firefox behave like Safari on the same iOS (WebKit).
 
+### 04:15 — Final reviews before the freeze; quiet otherwise
+
+**Cloud A (web):**
+- **Gate on the current head:** 944 frontend tests pass; the build passes; the tour, hosted and mock-perception
+  checks are clean.
+- **No new code.** Cloud C's `d87fbd6` fixed, on its side, a purge gap that grew by one frame on every Pause. The
+  browser source's per-source counters (`e403179`) needed no change.
+
+**Cloud B (emotion):**
+- Its full pytest on `e276b25`: 706 passed, 41 skipped. The skips are Mac-only dependencies; this container ran
+  725/22 at 22:15.
+- Still no self-report taps, and the model is unchanged.
+
+**Cloud C (perception):**
+- **Final pre-freeze review.** It found the in-flight frame miscounted at Pause (`d87fbd6`). A lost WebGL context now
+  stops video with its own reason, and a race found in review is fixed (`52fc8bb`).
+- **Slow devices** (4× CPU throttle): the worker path holds 5.9 fps. The main-thread fallback (Safari before 17) now
+  rests between steps so the page stays usable (`e276b25`).
+- **A fresh clone** (`git clone`, `npm ci`, `npm run build`) builds and passes the production check, with real
+  perception and a fake camera.
+- `status-C.md` now opens with a "Read first" summary: what works, the gates, what needs a real camera, and known
+  limits.
+
 ## Generated from git
 
 <!-- hacklog:start -->
