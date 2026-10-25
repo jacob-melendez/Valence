@@ -421,3 +421,14 @@ Chromium process's RSS sampled every 30 s.
 - **Review of e276b25** (main-thread rest): nothing confirmed. The one claim, that the face-hold stretch is lost on
   very slow devices, only applies to the Python face cadence, which nothing ships.
 - **Next.** Last check-in at 07:45; freeze at 08:00. After that, only fixes, docs and status.
+
+### 07:45 — final check-in before the freeze
+
+- **Health at the freeze.** No fixture drift. 944 frontend tests pass. `e2e/run-all.mjs` passes all seven scenarios
+  at 3.6–6.4 fps (worker/CPU) on the shared container, with 0 off-origin requests and 0 CSP violations; both cross
+  checks (roll sign, two people with two faces) hold.
+- **Since 05:45.** No perception changes. Cloud A's audit of the judge-facing docs (d2256e9) describes perception
+  correctly: the video models are in the worker and YAMNet is on the page's thread.
+- **"Read first" at the top** now reflects the freeze state.
+- **No more scheduled check-ins.** After 08:00, only fixes, docs and this file, e.g. the real-camera numbers from
+  `frontend/e2e/REAL_CAMERA.md` once someone runs it after deploy.
