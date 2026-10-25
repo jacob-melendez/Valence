@@ -56,7 +56,8 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   (1 Hz) and head crops go through canvases that are cleared, and their buffers are zero-filled. There is no
   MediaRecorder, and no canvas or image data is kept or persisted.
 - Mic chunks are zero-filled once copied into the 1 s block. The block and its 16 kHz copy are zero-filled after
-  analysis.
+  analysis. MediaPipe keeps its own copy of the last YAMNet window in its WASM heap; closing the classifier (stop(),
+  or a mic that ends) first overwrites it with a silent window.
 - `counters()` reports frames decoded and purged, raw audio buffers purged, derived buffers wiped, and buffers alive
   at the end of a step (`violations`). This mirrors the Python purge gate's numbers.
 - No request leaves the origin. WASM and models come from `/mediapipe/` (`scripts/mediapipe-assets.mjs`: WASM
@@ -70,7 +71,8 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 
 - **Pose.** PoseLandmarker lite + an IoU tracker replace YOLO26n-pose + ByteTrack. BlazePose `visibility` is used as
   keypoint confidence; it is 0 outside the frame and for hips and legs, which BlazePose extrapolates with visibility
-  ~1. Detection and presence thresholds are 0.4, YOLO's `conf`.
+  ~1. Detection and presence thresholds are 0.4, YOLO's `conf`. It tracks up to 6 poses (YOLO: every detection), then
+  the same 25% height filter and largest 3 apply.
 - **Posture.** BlazePose keypoints jitter where YOLO's do not, so posture runs on One Euro-smoothed keypoints and
   motion is measured on the shoulders only (`smoothing.ts`; Python: raw keypoints, COCO 5-12).
 - **Faces.** FaceLandmarker in IMAGE mode as on the edge, up to 3 faces, plus the transformation matrix for head
@@ -81,6 +83,10 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   come slower than every 0.2 s (a slow device), it stretches to 2.25 measured pass intervals.
 - **Workers and delegates.** The video models run in a Web Worker, on MediaPipe's CPU delegate by default. On
   identical frames that matches the native edge to ~1e-4. `?delegate=GPU` on the page URL tries the GPU instead.
+- **Muted and stalled cameras.** A muted track (Safari giving the camera to another tab, an OS privacy toggle,
+  Chromium after ~25 missed frames) pauses video like a hidden tab, and a muted mic is purged instead of analysed,
+  both reported in `status().degraded`. A camera that stalls without being muted repeats its last frame until the
+  browser mutes it (Python: `take()` never returns a frame twice).
 - **Not included.** No compliment keywords, no lux or SPL calibration (the uncalibrated defaults, as on a fresh
   desktop install).
 

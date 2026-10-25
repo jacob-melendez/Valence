@@ -14,6 +14,7 @@ import type {
   PoseLandmarkerResult,
 } from "@mediapipe/tasks-vision";
 import type { AudioClassifier, AudioClassifierResult } from "@mediapipe/tasks-audio";
+import { SR, YAMNET_WINDOW } from "./audio";
 import { YAMNET_ALLOWLIST } from "./audioFeatures";
 
 export type Delegate = "GPU" | "CPU";
@@ -80,12 +81,21 @@ export async function loadVisionModels(
     [MODEL.face, MODEL.pose, MODEL.gesture].map((file) => fetchModel(join(assetBase, file))),
   );
   const buffers: Record<string, Uint8Array> = { [MODEL.face]: faceBuf!, [MODEL.pose]: poseBuf!, [MODEL.gesture]: gestureBuf! };
+  // In a worker (no DOM) give each task an OffscreenCanvas, as MediaPipe does itself when its user-agent check passes.
+  // That check fails for Chrome and Firefox on iOS (WebKit without "Version/N" in the UA), where MediaPipe then
+  // calls document.createElement inside the worker and every task fails, sending video to the main thread.
+  const canvas = () =>
+    typeof document === "undefined" && typeof OffscreenCanvas !== "undefined" ? { canvas: new OffscreenCanvas(1, 1) } : {};
   const build = async (delegate: Delegate): Promise<VisionModels> => {
     const base = (file: string) => ({ modelAssetBuffer: buffers[file]!, delegate });
     const created: { close(): void }[] = [];
     try {
       const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(filesetFor(), {
-        baseOptions: base(MODEL.pose), runningMode: "VIDEO", numPoses: opts.maxPeople ?? 3,
+        ...canvas(), baseOptions: base(MODEL.pose), runningMode: "VIDEO",
+        // More poses than people kept: the pipeline drops short ones and keeps the largest maxPeople, as video.py
+        // does with YOLO's uncapped list. Capped at maxPeople, three small bystanders tracked first would hide a
+        // participant who sits down close to the camera (in VIDEO mode the detector stops while numPoses are tracked).
+        numPoses: Math.max(6, 2 * (opts.maxPeople ?? 3)),
         // The Python edge's YOLO person threshold (conf=0.4). MediaPipe's default 0.5 found only one of the two
         // people in the e2e two-person scene; 0.4 finds both.
         minPoseDetectionConfidence: 0.4, minPosePresenceConfidence: 0.4,
@@ -95,17 +105,17 @@ export async function loadVisionModels(
       // runs on every frame either way with fewer than numFaces faces), and only added a stale "ghost" face about once
       // per 2000 frames.
       const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
-        baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 3, outputFaceBlendshapes: true,
+        ...canvas(), baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 3, outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
       created.push(faces);
       const faceCrop: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
-        baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 1, outputFaceBlendshapes: true,
+        ...canvas(), baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 1, outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
       created.push(faceCrop);
       const gestures: GestureRecognizer = await mp.GestureRecognizer.createFromOptions(filesetFor(), {
-        baseOptions: base(MODEL.gesture), runningMode: "VIDEO", numHands: 8,
+        ...canvas(), baseOptions: base(MODEL.gesture), runningMode: "VIDEO", numHands: 8,
         cannedGesturesClassifierOptions: { maxResults: 8 },
       });
       created.push(gestures);
@@ -146,7 +156,16 @@ export async function loadAudioModels(assetBase: string): Promise<AudioModels> {
   });
   return {
     classify: (samples, sampleRate) => classifier.classify(samples, sampleRate),
-    close: () => classifier.close(),
+    close: () => {
+      // MediaPipe copies each window into a WASM-heap buffer it reuses and never clears (close() keeps it):
+      // overwrite it with one silent window so the last second of speech does not outlive the session.
+      try {
+        classifier.classify(new Float32Array(YAMNET_WINDOW), SR);
+      } catch {
+        // best effort: the classifier is closed next either way
+      }
+      classifier.close();
+    },
   };
 }
 

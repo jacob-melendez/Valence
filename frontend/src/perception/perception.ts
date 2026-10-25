@@ -9,8 +9,10 @@
  * Every raw buffer is zero-filled or closed right after its step and counted (counters()), and nothing leaves memory.
  *
  * Robustness: no camera or no mic runs the other alone; a tab in the background pauses video (browsers throttle its
- * timers and may stop decoding) while audio continues; a track that ends (permission revoked, device unplugged) stops
- * its loop and is reported in status().degraded. Models run on the CPU delegate by default; a GPU delegate (opt-in)
+ * timers and may stop decoding) while audio continues; a muted track (the browser or OS stopped delivering, e.g.
+ * Safari giving the camera to another tab) pauses its loop instead of reporting frozen frames or a silent room; a
+ * track that ends (permission revoked, device unplugged) stops its loop, releases its models and is reported in
+ * status().degraded. Models run on the CPU delegate by default; a GPU delegate (opt-in)
  * that fails to start falls back to CPU.
  */
 import { AudioPipeline } from "./audio";
@@ -31,8 +33,10 @@ export interface PerceptionDeps {
   visionBackend: typeof createVisionBackend;
   audioModels: typeof loadAudioModels;
   videoFrames: (track: MediaStreamTrack) => Pick<VideoFrames, "open" | "grab" | "close" | "live">;
-  micTap: (track: MediaStreamTrack, workletUrl: string, onChunk: (chunk: Float32Array, sampleRate: number) => void) =>
-    Pick<MicTap, "open" | "close" | "state">;
+  micTap: (
+    track: MediaStreamTrack, workletUrl: string, onChunk: (chunk: Float32Array, sampleRate: number) => void,
+    onState: (state: string) => void,
+  ) => Pick<MicTap, "open" | "close" | "state">;
   /** document.hidden (the tab is in the background). */
   hidden: () => boolean;
 }
@@ -41,7 +45,7 @@ const BROWSER: PerceptionDeps = {
   visionBackend: createVisionBackend,
   audioModels: loadAudioModels,
   videoFrames: (track) => new VideoFrames(track),
-  micTap: (track, url, onChunk) => new MicTap(track, url, onChunk),
+  micTap: (track, url, onChunk, onState) => new MicTap(track, url, onChunk, onState),
   hidden: () => typeof document !== "undefined" && document.hidden,
 };
 /**
@@ -57,6 +61,12 @@ export function message(e: unknown): string {
   }
   return String(e);
 }
+
+const HIDDEN = "tab hidden: video paused";
+const CAMERA_MUTED = "camera muted: video paused";
+const VIDEO_FAILING = "video step failing";
+const MIC_MUTED = "microphone muted";
+const AUDIO_SUSPENDED = "audio waits for a click on the page";
 
 class BrowserPerception implements Perception {
   private readonly obsHub = new Hub<Obs>();
@@ -138,8 +148,9 @@ class BrowserPerception implements Perception {
     const failures: string[] = [];
     if (video.status === "rejected") failures.push(`camera: ${message(video.reason)}`);
     if (audio.status === "rejected") failures.push(`microphone: ${message(audio.reason)}`);
-    const camera = video.status === "fulfilled" && video.value;
-    const mic = audio.status === "fulfilled" && audio.value;
+    // A track can end while the other side still loads (its loop has already reported it): don't call it live.
+    const camera = video.status === "fulfilled" && video.value && vTrack?.readyState === "live";
+    const mic = audio.status === "fulfilled" && audio.value && aTrack?.readyState === "live";
     if (!camera && !mic) {
       this.teardown();
       const error = failures.join("; ") || "nothing to process";
@@ -156,7 +167,7 @@ class BrowserPerception implements Perception {
     this.teardown();
     // The kill switch leaves no observation behind either (the DevTools handle reads `last`).
     this.last.video = this.last.audio = null;
-    if (this.st.phase !== "idle") this.setStatus({ phase: "stopped", camera: false, mic: false, fps: 0 });
+    if (this.st.phase !== "idle") this.setStatus({ phase: "stopped", camera: false, mic: false, fps: 0, face_hz: 0 });
   }
 
   private teardown(): void {
@@ -222,8 +233,9 @@ class BrowserPerception implements Perception {
     if (backend.delegate === "CPU" && this.opts.delegate === "GPU") this.degrade("GPU unavailable: CPU delegate", true);
 
     const onEnded = () => {
+      for (const reason of [HIDDEN, CAMERA_MUTED, VIDEO_FAILING]) this.degrade(reason, false);
       this.degrade("camera stopped", true);
-      this.setStatus({ camera: false });
+      this.setStatus({ camera: false, fps: 0, face_hz: 0 });
     };
     track.addEventListener("ended", onEnded);
     this.cleanups.push(() => track.removeEventListener("ended", onEnded));
@@ -237,10 +249,22 @@ class BrowserPerception implements Perception {
       if (gen === this.gen) timer = setTimeout(() => void tick(), delay);
     };
     const tick = async () => {
-      if (gen !== this.gen || !frames.live) return;
+      if (gen !== this.gen) return;
+      if (!frames.live) {
+        // Ended (with or without its event, e.g. stopped by the page): report it and release the camera element and
+        // the models now, not at stop(). No step is in flight here, so the worker can close.
+        onEnded();
+        closeFrames();
+        closeBackend();
+        return;
+      }
+      // A muted camera delivers no new frames (Chromium after ~25 missed frames, Safari when another tab or app takes
+      // it): the <video> would repeat its last frame, or black, so pause like a hidden tab.
       const hidden = this.deps.hidden();
-      this.degrade("tab hidden: video paused", hidden);
-      if (hidden) {
+      const muted = track.muted === true;
+      this.degrade(HIDDEN, hidden);
+      this.degrade(CAMERA_MUTED, muted && !hidden);
+      if (hidden || muted) {
         nextT = performance.now() + period;
         schedule(500);
         return;
@@ -279,7 +303,7 @@ class BrowserPerception implements Perception {
     } catch (e) {
       if (gen === this.gen) {
         console.error("[perception] video step failed", e);
-        this.degrade("video step failing", true);
+        this.degrade(VIDEO_FAILING, true);
       }
     } finally {
       // The backend closed the bitmap (in the worker after the transfer, or here on the main thread).
@@ -291,14 +315,16 @@ class BrowserPerception implements Perception {
       cnt.live_raw_buffers = 0;
     }
     if (gen !== this.gen) return; // stopped (maybe restarted) meanwhile: the rest belongs to the current run
+    const ms = performance.now() - t0;
+    // fps counts observations: a failed step adds none, and the rate decays toward 0 while steps keep failing.
+    let fps = this.st.fps * 0.9;
     if (obs) {
       this.videoSeq += 1;
-      this.degrade("video step failing", false);
+      this.degrade(VIDEO_FAILING, false);
+      const hz = this.lastVideoT !== null && t > this.lastVideoT ? 1 / (t - this.lastVideoT) : 0;
+      this.lastVideoT = t;
+      fps = hz ? (this.st.fps ? 0.9 * this.st.fps + 0.1 * hz : hz) : this.st.fps;
     }
-    const ms = performance.now() - t0;
-    const hz = this.lastVideoT !== null && t > this.lastVideoT ? 1 / (t - this.lastVideoT) : 0;
-    this.lastVideoT = t;
-    const fps = hz ? (this.st.fps ? 0.9 * this.st.fps + 0.1 * hz : hz) : this.st.fps;
     this.setStatus({
       video_ms: this.st.video_ms ? 0.9 * this.st.video_ms + 0.1 * ms : ms,
       fps, face_hz: (this.opts.faceEveryFrame ?? true) ? fps : fps / 2,
@@ -318,9 +344,28 @@ class BrowserPerception implements Perception {
     }
     const closeModels = this.onTeardown(() => models.close());
     const pipeline = new AudioPipeline(models, { splOffsetDb: this.opts.splOffsetDb ?? 94 });
+    const onState = (state: string) => {
+      if (gen !== this.gen || state === "closed") return;
+      const running = state === "running";
+      if (!running) this.dropBlock(); // the next chunks come after a gap: don't join them to audio from before it
+      this.degrade(AUDIO_SUSPENDED, !running);
+    };
     const tap = this.deps.micTap(track, join(base, "pcm-tap.worklet.js"),
-      (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen, cnt, track));
+      (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen, cnt, track, () => onEnded()), onState);
     const closeTap = this.onTeardown(() => tap.close());
+    let ended = false;
+    const onEnded = () => {
+      // An ended track still feeds the worklet (silence): close the tap, release YAMNet and drop the partial block
+      // rather than report a silent room.
+      if (ended) return;
+      ended = true;
+      closeTap();
+      closeModels();
+      this.dropBlock();
+      for (const reason of [AUDIO_SUSPENDED, MIC_MUTED]) this.degrade(reason, false);
+      this.degrade("microphone stopped", true);
+      this.setStatus({ mic: false });
+    };
     try {
       await tap.open();
     } catch (e) {
@@ -329,15 +374,14 @@ class BrowserPerception implements Perception {
       throw e;
     }
     if (gen !== this.gen) return false; // stopped while the tap opened (teardown closed it)
-    if (tap.state === "suspended") this.degrade("audio waits for a click on the page", true);
-    const onEnded = () => {
-      // An ended track still feeds the worklet (silence): close the tap and drop the partial block rather than
-      // report a silent room.
+    if (track.readyState !== "live") {
+      // Ended while the models or the tap were loading (its event came before anyone listened), as the camera's
+      // open() reports it.
       closeTap();
-      this.dropBlock();
-      this.degrade("microphone stopped", true);
-      this.setStatus({ mic: false });
-    };
+      closeModels();
+      throw new Error("the microphone track ended");
+    }
+    if (tap.state === "suspended") this.degrade(AUDIO_SUSPENDED, true);
     track.addEventListener("ended", onEnded);
     this.cleanups.push(() => track.removeEventListener("ended", onEnded));
     return true;
@@ -346,12 +390,24 @@ class BrowserPerception implements Perception {
   /** One ~100 ms raw chunk: copy into the 1 s block, zero-fill it; a full block is analysed and zero-filled too. */
   private onChunk(
     chunk: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number, cnt: PerceptionCounters,
-    track: MediaStreamTrack,
+    track: MediaStreamTrack, onEnded: () => void,
   ): void {
     cnt.live_raw_buffers += 1;
     try {
-      if (gen !== this.gen || track.readyState !== "live") return; // late chunks (stopped, mic ended): purge only
-      this.degrade("audio waits for a click on the page", false);
+      if (gen !== this.gen) return; // late chunks of a stopped run: purge only
+      if (track.readyState !== "live") {
+        onEnded(); // ended, maybe without its event (stopped by the page): purge, close the tap, report it
+        return;
+      }
+      // A muted mic renders silence (Safari giving it to another tab, an OS-level mute): purge rather than report a
+      // silent room, and start the next block afresh once it unmutes.
+      const muted = track.muted === true;
+      this.degrade(MIC_MUTED, muted);
+      if (muted) {
+        this.dropBlock();
+        return;
+      }
+      this.degrade(AUDIO_SUSPENDED, false);
       if (!this.block || this.block.length !== sampleRate) {
         this.block?.fill(0);
         this.block = new Float32Array(sampleRate);

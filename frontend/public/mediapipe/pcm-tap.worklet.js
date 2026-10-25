@@ -12,6 +12,10 @@ class PcmTap extends AudioWorkletProcessor {
       if (e.data === "stop") {
         this.running = false;
         this.buf.fill(0);
+      } else if (e.data === "flush") {
+        // The context was suspended mid-chunk: drop the partial chunk instead of joining it to later audio.
+        this.buf.fill(0);
+        this.n = 0;
       }
     };
   }

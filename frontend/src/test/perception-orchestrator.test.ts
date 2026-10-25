@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MicTap } from "@/perception/capture";
+import { MicTap, VideoFrames } from "@/perception/capture";
 import { createPerception, type PerceptionDeps } from "@/perception/perception";
 import type { Obs, PerceptionStatus, VideoObs } from "@/perception/types";
 import { workerBackend, type VisionBackend, type WorkerReply, type WorkerRequest } from "@/perception/visionHost";
@@ -9,7 +9,7 @@ import { workerBackend, type VisionBackend, type WorkerReply, type WorkerRequest
 function track(kind: "video" | "audio") {
   const listeners = new Map<string, () => void>();
   return {
-    kind, readyState: "live" as MediaStreamTrackState, listeners,
+    kind, readyState: "live" as MediaStreamTrackState, muted: false, listeners,
     addEventListener: (ev: string, cb: () => void) => listeners.set(ev, cb),
     removeEventListener: (ev: string) => listeners.delete(ev),
     end() {
@@ -28,8 +28,11 @@ function stream(...tracks: ReturnType<typeof track>[]): MediaStream {
 }
 
 function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
-  const state = { hidden: false, bitmapsClosed: 0, bitmapsMade: 0, backendClosed: 0, tapClosed: 0, live: true };
+  const state = {
+    hidden: false, bitmapsClosed: 0, bitmapsMade: 0, backendClosed: 0, tapClosed: 0, modelsClosed: 0, live: true,
+  };
   let onChunk: ((chunk: Float32Array, sr: number) => void) | null = null;
+  let onState: ((s: string) => void) | null = null;
   const backend: VisionBackend = {
     where: "main", delegate: "CPU",
     async process(bitmap, t, wall, seq, decoded) {
@@ -49,7 +52,7 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
     },
     audioModels: async () => {
       if (opts.audioFails) throw new Error("yamnet missing");
-      return { classify: () => [], close: () => {} };
+      return { classify: () => [], close: () => void state.modelsClosed++ };
     },
     videoFrames: () => ({
       open: async () => {},
@@ -62,8 +65,9 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
         return state.live;
       },
     }),
-    micTap: (_t, _url, cb) => {
+    micTap: (_t, _url, cb, st) => {
       onChunk = cb;
+      onState = st;
       return { open: async () => {}, close: () => void state.tapClosed++, state: "running" as const };
     },
     hidden: () => state.hidden,
@@ -75,7 +79,9 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
       onChunk!(chunk, 48000);
       return chunk;
     });
-  return { deps, state, pushAudio };
+  /** The AudioContext changes state after open() (an iOS interruption, a resume). */
+  const audioState = (s: string) => onState!(s);
+  return { deps, state, pushAudio, audioState };
 }
 
 const collect = (p: ReturnType<typeof createPerception>) => {
@@ -279,7 +285,7 @@ describe("createPerception orchestration", () => {
     const opening: (() => void)[] = [];
     const frames = deps.videoFrames!, tap = deps.micTap!;
     deps.videoFrames = (t) => Object.assign(frames(t), { open: () => new Promise<void>((r) => opening.push(r)) });
-    deps.micTap = (t, u, cb) => Object.assign(tap(t, u, cb), { open: () => new Promise<void>((r) => opening.push(r)) });
+    deps.micTap = (t, u, cb, st) => Object.assign(tap(t, u, cb, st), { open: () => new Promise<void>((r) => opening.push(r)) });
     const v = track("video"), a = track("audio");
     const p = createPerception({ fps: 20 }, deps);
     const started = p.start(stream(v, a));
@@ -331,14 +337,190 @@ describe("createPerception orchestration", () => {
     p.stop();
     expect([state.backendClosed, framesClosed]).toEqual([1, 1]); // once
   });
+
+  it("a muted camera pauses video instead of repeating its last frame, and says so; unmuting resumes", async () => {
+    const { deps } = harness();
+    const v = track("video");
+    const p = createPerception({ fps: 20 }, deps);
+    const seen = collect(p);
+    await p.start(stream(v));
+    await vi.waitFor(() => expect(videos(seen).length).toBeGreaterThan(1));
+    v.muted = true; // Safari gave the camera to another tab; Chromium after ~25 missed frames
+    await vi.waitFor(() => expect(p.status().degraded).toContain("camera muted: video paused"));
+    const n = videos(seen).length;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(videos(seen).length).toBeLessThanOrEqual(n + 1); // at most the step already in flight
+    v.muted = false;
+    await vi.waitFor(() => expect(videos(seen).length).toBeGreaterThan(n + 1), { timeout: 3000 });
+    expect(p.status().degraded).not.toContain("camera muted: video paused");
+    p.stop();
+  });
+
+  it("a muted mic is purged, not reported as a silent room; the next block starts afresh once it unmutes", async () => {
+    const { deps, pushAudio } = harness();
+    const a = track("audio");
+    const p = createPerception({}, deps);
+    const seen = collect(p);
+    await p.start(stream(a));
+    pushAudio(5); // half a block before the mute
+    a.muted = true;
+    const muted = pushAudio(20); // the silence a muted track renders
+    expect(seen.filter((o) => o.type === "audio")).toEqual([]);
+    expect(p.status().degraded).toContain("microphone muted");
+    expect(muted.every((c) => c.every((x) => x === 0))).toBe(true);
+    a.muted = false;
+    pushAudio(9);
+    expect(seen.filter((o) => o.type === "audio")).toEqual([]); // the half block from before the mute was dropped
+    pushAudio(1);
+    expect(seen.filter((o) => o.type === "audio")).toHaveLength(1);
+    expect(p.status().degraded).not.toContain("microphone muted");
+    expect(p.counters()).toMatchObject({ audio_blocks_purged: 35, live_raw_buffers: 0 });
+    p.stop();
+  });
+
+  it("an audio context suspended mid-run (an iOS interruption) drops the partial block and says so until it runs", async () => {
+    const { deps, pushAudio, audioState } = harness();
+    const p = createPerception({}, deps);
+    const seen = collect(p);
+    await p.start(stream(track("audio")));
+    pushAudio(5);
+    audioState("interrupted");
+    expect(p.status().degraded).toContain("audio waits for a click on the page");
+    audioState("running");
+    expect(p.status().degraded).not.toContain("audio waits for a click on the page");
+    pushAudio(9);
+    expect(seen.filter((o) => o.type === "audio")).toEqual([]); // the 0.5 s from before the gap was dropped
+    pushAudio(1);
+    expect(seen.filter((o) => o.type === "audio")).toHaveLength(1);
+    p.stop();
+  });
+
+  it("tracks stopped by the page (no 'ended' event) are reported and released, and stale video status is cleared", async () => {
+    const { deps, state, pushAudio } = harness();
+    const v = track("video"), a = track("audio");
+    const p = createPerception({ fps: 20 }, deps);
+    await p.start(stream(v, a));
+    await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(0));
+    state.hidden = true;
+    await vi.waitFor(() => expect(p.status().degraded).toContain("tab hidden: video paused"));
+    v.readyState = a.readyState = "ended"; // track.stop() fires no event
+    state.live = false;
+    await vi.waitFor(() => expect(p.status().camera).toBe(false), { timeout: 2000 });
+    expect(p.status()).toMatchObject({ fps: 0, face_hz: 0 });
+    expect(p.status().degraded).toContain("camera stopped");
+    expect(p.status().degraded).not.toContain("tab hidden: video paused");
+    expect(state.backendClosed).toBe(1); // released now, not at stop()
+    const late = pushAudio(1);
+    expect(late[0]!.every((x) => x === 0)).toBe(true);
+    expect(p.status()).toMatchObject({ mic: false });
+    expect(p.status().degraded).toContain("microphone stopped");
+    expect([state.tapClosed, state.modelsClosed]).toEqual([1, 1]);
+    p.stop();
+    expect([state.backendClosed, state.tapClosed, state.modelsClosed]).toEqual([1, 1, 1]); // once each
+  });
+
+  it("a mic that ends while YAMNet loads is reported when loading finishes (its 'ended' event came too early)", async () => {
+    const { deps, state } = harness();
+    const a = track("audio");
+    let loaded: (() => void) | null = null;
+    const models = deps.audioModels!;
+    deps.audioModels = (b) => new Promise((r) => (loaded = () => r(models(b))));
+    const p = createPerception({ fps: 20 }, deps);
+    const started = p.start(stream(track("video"), a));
+    await vi.waitFor(() => expect(loaded).not.toBeNull());
+    a.end(); // nobody listens yet
+    loaded!();
+    await started;
+    expect(p.status()).toMatchObject({ phase: "running", camera: true, mic: false });
+    expect(p.status().degraded).toContain("microphone: the microphone track ended");
+    expect([state.tapClosed, state.modelsClosed]).toEqual([1, 1]);
+    p.stop();
+  });
+
+  it("a camera that ends while the audio still loads is not reported live when start() finishes", async () => {
+    const { deps, state } = harness();
+    const v = track("video");
+    let loaded: (() => void) | null = null;
+    const models = deps.audioModels!;
+    deps.audioModels = (b) => new Promise((r) => (loaded = () => r(models(b))));
+    const p = createPerception({ fps: 20 }, deps);
+    const started = p.start(stream(v, track("audio")));
+    await vi.waitFor(() => expect(state.bitmapsMade).toBeGreaterThan(0)); // video runs while YAMNet still loads
+    expect(loaded).not.toBeNull();
+    state.live = false;
+    v.end();
+    loaded!();
+    await started;
+    expect(p.status()).toMatchObject({ phase: "running", camera: false, mic: true });
+    expect(p.status().degraded).toContain("camera stopped");
+    p.stop();
+  });
+
+  it("fps counts observations: a backend failing on every frame decays toward 0 instead of reading the step rate", async () => {
+    const { deps } = harness();
+    let failing = false;
+    const ok = await deps.visionBackend!({} as never);
+    deps.visionBackend = async () => ({
+      ...ok,
+      process: async (bitmap, ...rest) => {
+        if (!failing) return ok.process(bitmap, ...rest);
+        bitmap.close();
+        throw new Error("wasm abort");
+      },
+    });
+    const p = createPerception({ fps: 20 }, deps);
+    await p.start(stream(track("video")));
+    await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(5), { timeout: 3000 });
+    failing = true;
+    await vi.waitFor(() => expect(p.status().fps).toBeLessThan(1), { timeout: 5000 });
+    expect(p.status().degraded).toContain("video step failing");
+    expect(p.counters().frames_decoded).toBe(p.counters().frames_purged);
+    p.stop();
+  });
+});
+
+describe("VideoFrames (fake <video>)", () => {
+  const cam = () => track("video") as unknown as MediaStreamTrack;
+  function fakeMedia() {
+    vi.stubGlobal("MediaStream", class {
+      constructor(readonly tracks: unknown[]) {}
+    });
+    // A MediaStream's play() settles once the first frame arrives: with a camera that sends none, never.
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockReturnValue(new Promise<void>(() => {}));
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("a camera that never sends a frame fails after the timeout instead of hanging on play()", async () => {
+    fakeMedia();
+    await expect(new VideoFrames(cam()).open(200)).rejects.toThrow("the camera delivered no frames");
+  });
+
+  it("close() while waiting for the first frame ends the wait at once", async () => {
+    fakeMedia();
+    const frames = new VideoFrames(cam());
+    const opening = frames.open(10_000);
+    frames.close();
+    await expect(opening).rejects.toThrow("the camera was closed");
+  });
 });
 
 describe("MicTap (fake Web Audio)", () => {
   function fakeWebAudio(opts: { allowed: boolean }) {
     type Port = { onmessage: ((e: MessageEvent) => void) | null; postMessage: (m: unknown) => void };
-    const audio = { allowed: opts.allowed, resumes: 0, nodes: [] as { port: Port }[] };
+    const audio = {
+      allowed: opts.allowed, resumes: 0, nodes: [] as { port: Port }[],
+      contexts: [] as { state: string; onstatechange: (() => void) | null }[],
+    };
     class FakeContext {
       state: AudioContextState = audio.allowed ? "running" : "suspended";
+      onstatechange: (() => void) | null = null;
+      constructor() {
+        audio.contexts.push(this);
+      }
       sampleRate = 48000;
       audioWorklet = { addModule: async () => {} };
       createMediaStreamSource() {
@@ -409,6 +591,33 @@ describe("MicTap (fake Web Audio)", () => {
     document.dispatchEvent(new Event("keydown"));
     expect(audio.resumes).toBe(n + 2); // running: no longer listening
     tap.close();
+  });
+
+  it("a context suspended or interrupted mid-run: the worklet's partial chunk is flushed, gestures resume it", async () => {
+    const audio = fakeWebAudio({ allowed: true });
+    const states: string[] = [];
+    const tap = new MicTap(mic(), "/mediapipe/pcm-tap.worklet.js", () => {}, (s) => states.push(s));
+    await tap.open();
+    const posted: unknown[] = [];
+    audio.nodes[0]!.port.postMessage = (m) => posted.push(m);
+    const ctx = audio.contexts[0]!;
+    audio.allowed = false; // iOS: after an interruption only a gesture (or the system) resumes it
+    ctx.state = "interrupted";
+    ctx.onstatechange?.();
+    expect(posted).toEqual(["flush"]);
+    expect(states).toEqual(["interrupted"]);
+    const n = audio.resumes;
+    audio.allowed = true;
+    document.dispatchEvent(new Event("click"));
+    expect(audio.resumes).toBe(n + 1);
+    await Promise.resolve();
+    ctx.onstatechange?.();
+    expect(states).toEqual(["interrupted", "running"]);
+    document.dispatchEvent(new Event("click"));
+    expect(audio.resumes).toBe(n + 1); // running: no longer listening
+    tap.close();
+    expect(ctx.onstatechange).toBeNull();
+    expect(states).toEqual(["interrupted", "running"]); // closing is not reported
   });
 });
 

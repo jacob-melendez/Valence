@@ -98,9 +98,12 @@ export class VideoFrames {
     video.autoplay = true;
     video.srcObject = new MediaStream([this.track]);
     this.video = video;
-    await video.play().catch(() => undefined);
+    // Not awaited: play() settles only once a frame has arrived, so a camera that never sends one would hang here
+    // instead of reaching the deadline below.
+    void video.play().catch(() => undefined);
     const deadline = performance.now() + timeoutMs;
     while (video.readyState < 2 || !video.videoWidth) {
+      if (this.video !== video) throw new Error("the camera was closed");
       if (performance.now() > deadline) throw new Error("the camera delivered no frames");
       if (this.track.readyState === "ended") throw new Error("the camera track ended");
       await new Promise((r) => setTimeout(r, 50));
@@ -132,7 +135,11 @@ const GESTURES = ["pointerdown", "pointerup", "keydown", "click"] as const;
 /** How long open() waits for a suspended context to start by itself. */
 const RESUME_WAIT_MS = 1000;
 
-/** Mic tap: ~100 ms raw chunks at the context's native rate, delivered to `onChunk` (which must zero-fill them). */
+/**
+ * Mic tap: ~100 ms raw chunks at the context's native rate, delivered to `onChunk` (which must zero-fill them).
+ * `onState` hears the context's state changes after open(): "suspended" (or Safari's "interrupted", e.g. an iOS call
+ * or another app taking the audio session) stops the chunks until a gesture or the browser resumes it.
+ */
 export class MicTap {
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
@@ -143,6 +150,7 @@ export class MicTap {
     private readonly track: MediaStreamTrack,
     private readonly workletUrl: string,
     private readonly onChunk: (chunk: Float32Array, sampleRate: number) => void,
+    private readonly onState?: (state: string) => void,
   ) {}
 
   /** "running", or "suspended" while the browser waits for a user gesture to allow audio. */
@@ -169,14 +177,31 @@ export class MicTap {
       // it suspended).
       const wait = new Promise((r) => setTimeout(r, RESUME_WAIT_MS));
       await Promise.race([ctx.resume(), wait]).catch(() => undefined);
-      if (ctx.state === "suspended" && typeof document !== "undefined") {
-        const resume = () => void ctx.resume().then(() => {
-          if (ctx.state === "running") this.stopResumeOnGesture();
-        }, () => undefined);
-        this.resumeOnGesture = resume;
-        for (const ev of GESTURES) document.addEventListener(ev, resume);
-      }
+      if (this.ctx !== ctx) return; // closed meanwhile (stopped, or the mic ended): arm nothing on a dead context
+      if (ctx.state === "suspended") this.resumeOnGestures(ctx);
     }
+    ctx.onstatechange = () => {
+      if (this.ctx !== ctx) return;
+      const state = ctx.state as string;
+      if (state === "suspended" || state === "interrupted") {
+        // The worklet's partial chunk holds audio from before the gap: wipe it rather than send it with what follows.
+        this.node?.port.postMessage("flush");
+        this.resumeOnGestures(ctx);
+        void ctx.resume().catch(() => undefined);
+      } else if (state === "running") {
+        this.stopResumeOnGesture();
+      }
+      this.onState?.(state);
+    };
+  }
+
+  private resumeOnGestures(ctx: AudioContext): void {
+    if (this.resumeOnGesture || typeof document === "undefined") return;
+    const resume = () => void ctx.resume().then(() => {
+      if (ctx.state === "running") this.stopResumeOnGesture();
+    }, () => undefined);
+    this.resumeOnGesture = resume;
+    for (const ev of GESTURES) document.addEventListener(ev, resume);
   }
 
   private stopResumeOnGesture(): void {
@@ -192,6 +217,7 @@ export class MicTap {
     this.source?.disconnect();
     this.node?.disconnect();
     this.stopResumeOnGesture();
+    if (this.ctx) this.ctx.onstatechange = null;
     void this.ctx?.close().catch(() => undefined);
     this.ctx = this.node = this.source = null;
   }

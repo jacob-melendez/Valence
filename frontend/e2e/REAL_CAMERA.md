@@ -54,6 +54,9 @@ scalars only.
 2. Switch to another tab for 10 s and back: video pauses ("tab hidden: video paused") and resumes; audio continues.
 3. Governance panel: frames decoded = frames purged at every tick; audio blocks purged grows by ~10 per second.
 4. Optional: unplug an external camera: "camera stopped".
+5. Safari: start the camera in another tab (e.g. a second copy of the site) and come back: while the other tab has
+   it, status shows "camera muted: video paused" (and "microphone muted") rather than frozen readings. Note whether
+   it resumes on its own when you return.
 
 ## 6. GPU vs CPU (Mac, 3 minutes)
 
