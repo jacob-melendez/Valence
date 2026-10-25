@@ -249,6 +249,50 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   there to try.
 - **Features-only captures** of both clips for Cloud B (`data/browser/`).
 
+### 20:15 — A judge's-eye pass on the hosted page
+
+**Cloud A (web):**
+- **Evaluation panel in the browser** (`a889852`). It used to say "Evaluation summary unavailable". It now shows
+  the loaded models' held-out scores, labelled as simulated data: m2/m0 macro-F1 and emotion-v1 accuracy, F1 and ECE.
+- **README** (`89ce0a2`): a Valence Web section at the top, covering what moved into the browser, how to try it and
+  where the docs are.
+- **Judge-view review** (42 agents, four lenses: phone, laptop, live camera, claims). Each finding was
+  adversarially verified: 35 confirmed, 3 rejected. They were fixed in six batches (`a075b9c`). Fresh reviewers then
+  listed 19 follow-ups, all fixed and re-reviewed (`4f808e1`). The ones that mattered:
+  - **Dead controls on the hosted site.** It showed the MOCK/LIVE switch and a `127.0.0.1:8000` Connect form.
+    LIVE led to a dead backend that the CSP blocks. The hosted site now shows one badge and no operator chrome;
+    localhost keeps every control.
+  - **Readings buried.** On a phone the first reading sat more than 2 screens down, behind an empty Room view and
+    the operator panels. On a laptop it was below the fold. The person card is now on the first laptop screen, and
+    phones see the readings before the operator panels.
+  - **Purge log contradicting its counters.** The tour's governance log said "raw biometric frame purged" while
+    every counter read 0, and a mic-only live run did the same. The engine's line (kept byte-identical for parity)
+    now shows only when a frame really was purged.
+  - **Two unlabelled confidences** for the same person: the 4-state card and the 10-state map. Each now names its
+    model, and a warm-up badge covers the first minute and the 20 s face baseline.
+  - **The page's own clock as evidence.** The live explanation's top evidence was "0.0 hours since the last break",
+    which is just time since the page opened. Until a break is logged it now reads as time on camera, per person.
+    Compliments are marked unmeasured, because there is no speech recognition in the browser.
+  - **Page metadata** still carried template strings and the forbidden phrasing "not faces". It now says signals,
+    in-browser and simulated, and a test guards it.
+
+  913 frontend tests pass. tsc is clean. The build and the tour, hosted, mock-perception and localhost checks pass,
+  and phones at 390 px no longer scroll sideways.
+
+**Cloud B (emotion):**
+- The model card is ready to report real self-report results as soon as taps exist.
+- **Public dataset blocked again.** RAVDESS is unreachable: the network policy denies zenodo.org and
+  huggingface.co. Recorded in model card §9.6.
+- Cross-checked the browser Evaluation panel against `meta.json`.
+- Fixed the consent wording in the spec: taps stay in the tab until Clear or close (`b0c10c5`).
+
+**Cloud C (perception):**
+- **19:45 check-in, healthy.** All six end-to-end scenarios run at 4.5–7.5 fps with 0 off-origin requests and 0 CSP
+  violations, and there is no fixture drift.
+- **Bug hunt in progress** across six areas: lifecycle, privacy and purge counts, non-48 kHz audio, video parity,
+  Safari/Firefox, and the console contract.
+- `REAL_CAMERA.md` now starts the camera from the welcome card (`acdd410`).
+
 ## Generated from git
 
 <!-- hacklog:start -->
