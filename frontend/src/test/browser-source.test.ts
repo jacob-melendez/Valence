@@ -591,6 +591,19 @@ describe("in-browser source", () => {
     src.stop();
   });
 
+  it("status names a muted camera or mic once (perception's reason, not also the bare device name)", async () => {
+    installMedia();
+    let degraded: string[] = [];
+    const { src } = source({ createPerception: async () => fakePerception({ status: () => ({ degraded }) }) });
+    await src.start();
+    expect(src.status().degraded).toEqual(["camera", "mic"]); // open, nothing arrived yet, no reason given
+    degraded = ["camera muted: video paused", "microphone muted"];
+    expect(src.status().degraded).toEqual(["camera muted: video paused", "microphone muted"]);
+    degraded = ["tab hidden: video paused"];
+    expect(src.status().degraded).toEqual(["mic", "tab hidden: video paused"]);
+    src.stop();
+  });
+
   it("keeps governance counters per source across Pause → Start (a reopened perception counts from 0 again)", async () => {
     vi.useFakeTimers();
     installMedia();

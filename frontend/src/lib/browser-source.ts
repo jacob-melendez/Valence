@@ -464,7 +464,12 @@ export class BrowserSource {
     const flowing = (on: boolean, at: number) => on && t - at < 3000;
     const degraded = this.tour || this.running !== "running" || loading ? []
       : this.deps.needsMedia === false ? ["mock perception (no camera or mic)", ...(ps?.degraded ?? [])]
-      : [...(flowing(camera, this.lastVideoAt) ? [] : ["camera"]), ...(flowing(mic, this.lastAudioAt) ? [] : ["mic"]), ...(ps?.degraded ?? [])];
+      : (() => {
+          // Perception names the cause when it knows it ("camera muted: video paused"); skip the bare device name then.
+          const named = ps?.degraded ?? [], says = (re: RegExp) => named.some((d) => re.test(d));
+          return [...(flowing(camera, this.lastVideoAt) || says(/^(camera|video|tab hidden)/) ? [] : ["camera"]),
+            ...(flowing(mic, this.lastAudioAt) || says(/^(microphone|mic|audio)/) ? [] : ["mic"]), ...named];
+        })();
     const r1 = (v: number | undefined) => Math.round((v ?? 0) * 10) / 10;
     return { type: "status", mode: this.tour ? "replay" : "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
       // Face passes per second: blink numbers are only comparable at the same face rate (docs/EMOTION_FEATURES.md 1.3).
