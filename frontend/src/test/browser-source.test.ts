@@ -4,7 +4,7 @@ import { evalSummaryOf } from "@/engine/browser-engine";
 import type { EmotionModel } from "@/engine/emotion-model";
 import {
   BrowserSource, NO_MEDIA_API, cspSealed, getBrowserStream, mediaErrorText, plainEval, sealsConnect,
-  type BrowserEngine, type BrowserSourceDeps, type BrowserStatus, type ObsLike, type PerceptionLike,
+  type BrowserEngine, type BrowserSourceDeps, type BrowserStatus, type ObsLike, type PerceptionCounters, type PerceptionLike,
 } from "@/lib/browser-source";
 import type { EvalMetricRow, RoomBaseline, ServerMessage } from "@/lib/valence";
 
@@ -588,6 +588,31 @@ describe("in-browser source", () => {
     expect(src.latestInputs(1)).not.toBeNull();
     src.command({ kind: "control", action: "pause" });
     expect(src.latestInputs(1)).toBeNull();
+    src.stop();
+  });
+
+  it("keeps governance counters per source across Pause → Start (a reopened perception counts from 0 again)", async () => {
+    vi.useFakeTimers();
+    installMedia();
+    const seen: PerceptionCounters[] = [];
+    const engine: BrowserEngine = { ...fakeEngine([]), tick: (wall, _mono, c) => { seen.push({ ...c }); return []; } };
+    const counts: [PerceptionCounters, PerceptionCounters] = [
+      { frames_decoded: 40, frames_purged: 39, audio_blocks_purged: 70, violations: 1, live_raw_buffers: 1, fps: 9 },
+      { frames_decoded: 5, frames_purged: 5, audio_blocks_purged: 8, live_raw_buffers: 0, fps: 8 },
+    ];
+    let n = 0;
+    const { src } = source({
+      createEngine: async () => engine, now: () => Date.now(), mono: () => Date.now(),
+      createPerception: async () => { const p = fakePerception(), c = n++ === 0 ? counts[0] : counts[1]; return { ...p, counters: () => ({ ...c }) }; },
+    });
+    await src.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(seen.at(-1)).toMatchObject({ frames_decoded: 40, frames_purged: 39, audio_blocks_purged: 70, violations: 1 });
+    src.command({ kind: "control", action: "pause" });
+    src.command({ kind: "control", action: "start" });
+    await vi.advanceTimersByTimeAsync(5000);
+    // the second perception's 5/5/8 on top of the first one's totals; the violation is not forgotten; buffers are a gauge
+    expect(seen.at(-1)).toMatchObject({ frames_decoded: 45, frames_purged: 44, audio_blocks_purged: 78, violations: 1, live_raw_buffers: 0 });
     src.stop();
   });
 

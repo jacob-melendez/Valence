@@ -330,7 +330,7 @@ export class BrowserSource {
   private release(media: MediaStream | null, p: PerceptionLike | null) {
     p?.stop();
     stopTracks(media);
-    if (p && this.perception === p) this.perception = null;
+    if (p && this.perception === p) { this.retire(p); this.perception = null; }
     if (media && this.media === media) this.media = null;
     if (media && stream === media) setStream(null);
   }
@@ -341,9 +341,32 @@ export class BrowserSource {
     const p = this.perception, media = this.media;
     this.perception = this.media = null;
     p?.stop();
+    if (p) this.retire(p);
     stopTracks(media);
     stopTracks(stream);
     setStream(null);
+  }
+
+  /**
+   * Counts of the perceptions closed since this source started. A perception counts from 0 (Pause → Start opens a
+   * new one), while the backend keeps decoded, purged and violations per source across capture restarts
+   * (valence/runtime/engine.py _new_source_counters runs only when a source starts), so a past violation never resets.
+   */
+  private counterBase = { frames_decoded: 0, frames_purged: 0, audio_blocks_purged: 0, transcripts_purged: 0, violations: 0 };
+  private retire(p: PerceptionLike) {
+    const c = p.counters(), b = this.counterBase;
+    b.frames_decoded += c.frames_decoded; b.frames_purged += c.frames_purged; b.audio_blocks_purged += c.audio_blocks_purged;
+    b.transcripts_purged += c.transcripts_purged ?? 0; b.violations += c.violations ?? 0;
+  }
+  /** This source's cumulative counters; live_raw_buffers and fps are the open perception's gauges. */
+  private counters(): PerceptionCounters {
+    const c = this.perception?.counters(), b = this.counterBase;
+    return {
+      frames_decoded: b.frames_decoded + (c?.frames_decoded ?? 0), frames_purged: b.frames_purged + (c?.frames_purged ?? 0),
+      audio_blocks_purged: b.audio_blocks_purged + (c?.audio_blocks_purged ?? 0),
+      transcripts_purged: b.transcripts_purged + (c?.transcripts_purged ?? 0), violations: b.violations + (c?.violations ?? 0),
+      live_raw_buffers: c?.live_raw_buffers ?? 0, ...(c?.fps === undefined ? {} : { fps: c.fps }),
+    };
   }
 
   private clearTimers() {
@@ -390,7 +413,7 @@ export class BrowserSource {
   private tick() {
     if (this.running !== "running" || !this.engine) return;
     const t0 = this.mono();
-    const counters = this.perception?.counters() ?? { frames_decoded: 0, frames_purged: 0, audio_blocks_purged: 0 };
+    const counters = this.counters();
     let msgs: ServerMessage[] = [];
     // The tour runs on a virtual clock (5 s per tick) so the 15-minute window and timeline read like real time.
     const [wall, mono] = this.tour
