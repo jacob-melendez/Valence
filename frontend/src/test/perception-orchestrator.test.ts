@@ -522,6 +522,58 @@ describe("createPerception orchestration", () => {
     p.stop();
   });
 
+  it("stop() during a worker step settles the counters at once (the console keeps them per source across Pause)", async () => {
+    const { deps } = harness();
+    let rejectPending: ((e: Error) => void) | null = null;
+    deps.visionBackend = async () => ({
+      where: "worker", delegate: "CPU",
+      // Like the worker backend: the step waits on the worker, and close() rejects it (the worker dies with the frame).
+      process: (bitmap) => new Promise((_resolve, reject) => {
+        bitmap.close();
+        rejectPending = reject;
+      }),
+      close: () => rejectPending?.(new Error("vision worker closed")),
+    });
+    const p = createPerception({ fps: 20 }, deps);
+    await p.start(stream(track("video")));
+    await vi.waitFor(() => expect(p.counters().frames_decoded).toBe(1)); // a frame in flight
+    expect(p.counters()).toMatchObject({ frames_purged: 0, live_raw_buffers: 1 });
+    p.stop();
+    const atStop = p.counters(); // read synchronously, as the console does right after stop()
+    expect(atStop).toMatchObject({ frames_decoded: 1, frames_purged: 1, live_raw_buffers: 0, violations: 0 });
+    await new Promise((r) => setTimeout(r, 20)); // the step's late rejection does not count it twice
+    expect(p.counters()).toEqual(atStop);
+  });
+
+  it("a lost WebGL context stops video with its own reason and releases the models instead of failing every frame", async () => {
+    const { deps, state } = harness();
+    let lost = false;
+    const ok = await deps.visionBackend!({} as never);
+    deps.visionBackend = async () => ({
+      ...ok,
+      process: async (bitmap, ...rest) => {
+        if (!lost) return ok.process(bitmap, ...rest);
+        bitmap.close();
+        throw new Error("WebGL context lost: restart the camera");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const p = createPerception({ fps: 20 }, deps);
+    await p.start(stream(track("video")));
+    await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(5), { timeout: 3000 });
+    lost = true;
+    await vi.waitFor(() => expect(p.status().degraded).toContain("video stopped: WebGL context lost (restart the camera)"));
+    expect(p.status()).toMatchObject({ camera: false, fps: 0, face_hz: 0 });
+    expect(p.status().degraded).not.toContain("video step failing");
+    expect(state.backendClosed).toBe(1); // released now, not at stop()
+    const grabs = state.bitmapsMade;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(state.bitmapsMade).toBe(grabs); // no more frames taken
+    expect(p.counters().frames_decoded).toBe(p.counters().frames_purged);
+    p.stop();
+    warn.mockRestore();
+  });
+
   it("fps counts observations: a backend failing on every frame decays toward 0 instead of reading the step rate", async () => {
     const { deps } = harness();
     let failing = false;

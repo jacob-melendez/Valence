@@ -90,8 +90,8 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 - **Workers and delegates.** The video models run in a Web Worker, on MediaPipe's CPU delegate by default. On
   identical frames that matches the native edge to ~1e-4. `?delegate=GPU` on the page URL tries the GPU instead.
   MediaPipe sends images through WebGL on either delegate: a worker without WebGL on OffscreenCanvas (Safari before 17)
-  hands video to the page's thread, and a lost WebGL context fails every later step ("video step failing") instead of
-  repeating MediaPipe's last results.
+  hands video to the page's thread, and a lost WebGL context stops video and releases the models ("video stopped: WebGL
+  context lost (restart the camera)") instead of repeating MediaPipe's last results.
 - **Pauses.** While nothing is processed (tab hidden, camera muted) nobody is seen leaving, so people reattach to their
   seats afterwards with their ids and baselines. A pause as long as the engine's break (`break_absent_min`, 10 min,
   on wall time like the engine's clock, so a computer's sleep counts) restarts the per-person baselines, since someone

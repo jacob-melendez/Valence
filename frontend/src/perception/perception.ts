@@ -65,6 +65,7 @@ export function message(e: unknown): string {
 const HIDDEN = "tab hidden: video paused";
 const CAMERA_MUTED = "camera muted: video paused";
 const VIDEO_FAILING = "video step failing";
+const CONTEXT_LOST = "video stopped: WebGL context lost (restart the camera)";
 const MIC_MUTED = "microphone muted";
 const AUDIO_SUSPENDED = "audio waits for a click on the page";
 const AUDIO_FAILING = "audio step failing";
@@ -92,6 +93,8 @@ class BrowserPerception implements Perception {
   // video
   private videoSeq = 0;
   private lastVideoT: number | null = null;
+  /** Settles the accounting of the frame in flight (once); stop() calls it, since closing the backend releases it. */
+  private inFlight: (() => void) | null = null;
   // audio
   private block: Float32Array | null = null;
   /** Latest observations (scalars only), for the DevTools handle. */
@@ -177,6 +180,10 @@ class BrowserPerception implements Perception {
   stop(): void {
     this.gen++;
     this.teardown();
+    // A frame still in the closed worker is gone with it: count it now, so counters() read right after stop() (the
+    // console keeps them per source) are settled rather than one frame short until the step's late rejection.
+    this.inFlight?.();
+    this.inFlight = null;
     // The kill switch leaves no observation behind either (the DevTools handle reads `last`).
     this.last.video = this.last.audio = null;
     if (this.st.phase !== "idle") this.setStatus({ phase: "stopped", camera: false, mic: false, fps: 0, face_hz: 0 });
@@ -294,7 +301,14 @@ class BrowserPerception implements Perception {
         console.warn("[perception] frame grab failed", e);
       }
       if (bitmap && gen !== this.gen) bitmap.close();
-      else if (bitmap) await this.videoStep(bitmap, backend, gen, cnt);
+      else if (bitmap && (await this.videoStep(bitmap, backend, gen, cnt)) === "lost") {
+        // MediaPipe lost its WebGL context (models.ts) and every later step would fail: stop video and say so.
+        this.degrade(VIDEO_FAILING, false);
+        this.degrade(CONTEXT_LOST, true);
+        this.setStatus({ camera: false, fps: 0, face_hz: 0 });
+        release(closeFrames, closeBackend);
+        return;
+      }
       nextT += period;
       let delay = nextT - performance.now();
       if (delay < 0) {
@@ -309,30 +323,42 @@ class BrowserPerception implements Perception {
 
   private async videoStep(
     bitmap: ImageBitmap, backend: VisionBackend, gen: number, cnt: PerceptionCounters,
-  ): Promise<void> {
+  ): Promise<"lost" | undefined> {
     const t = performance.now() / 1000;
     const wall = Date.now() / 1000;
     cnt.frames_decoded += 1;
     cnt.live_raw_buffers += 1;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      // The backend closed the bitmap (in the worker after the transfer, or here on the main thread).
+      cnt.frames_purged += 1;
+      cnt.live_raw_buffers -= 1;
+    };
+    this.inFlight = settle;
     const t0 = performance.now();
     let obs: VideoObs | null = null;
+    let lost = false;
     try {
       obs = await backend.process(bitmap, t, wall, this.videoSeq, cnt.frames_decoded);
     } catch (e) {
-      if (gen === this.gen) {
+      if (gen === this.gen && message(e).includes("WebGL context lost")) {
+        console.warn("[perception] video models lost their WebGL context", e);
+        lost = true;
+      } else if (gen === this.gen) {
         console.error("[perception] video step failed", e);
         this.degrade(VIDEO_FAILING, true);
       }
     } finally {
-      // The backend closed the bitmap (in the worker after the transfer, or here on the main thread).
-      cnt.frames_purged += 1;
-      cnt.live_raw_buffers -= 1;
+      settle();
+      if (this.inFlight === settle) this.inFlight = null;
     }
     if (cnt.live_raw_buffers !== 0) {
       cnt.violations += cnt.live_raw_buffers;
       cnt.live_raw_buffers = 0;
     }
-    if (gen !== this.gen) return; // stopped (maybe restarted) meanwhile: the rest belongs to the current run
+    if (gen !== this.gen) return undefined; // stopped (maybe restarted) meanwhile: the rest belongs to the current run
     const ms = performance.now() - t0;
     // fps counts observations: a failed step adds none, and the rate decays toward 0 while steps keep failing.
     let fps = this.st.fps * 0.9;
@@ -348,6 +374,7 @@ class BrowserPerception implements Perception {
       fps, face_hz: (this.opts.faceEveryFrame ?? true) ? fps : fps / 2,
     }, false);
     if (obs) this.emit(obs, gen);
+    return lost ? "lost" : undefined;
   }
 
   // ---------- audio ----------
