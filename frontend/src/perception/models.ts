@@ -151,10 +151,10 @@ export async function loadVisionModels(
           live();
           return gestures.recognizeForVideo(image, ts);
         },
-        close: () => created.forEach((t) => t.close()),
+        close: () => closeAndWipe(created, !inWorker),
       };
     } catch (e) {
-      created.forEach((t) => t.close());
+      closeAndWipe(created, !inWorker);
       throw e;
     }
   };
@@ -164,6 +164,41 @@ export async function loadVisionModels(
   } catch (e) {
     console.warn("[perception] GPU delegate failed, falling back to CPU", e);
     return build("CPU");
+  }
+}
+
+/**
+ * The Emscripten heap behind a MediaPipe task, found by shape because the bundles are minified (and differently in
+ * tasks-vision and tasks-audio): the task holds a graph runner (the object with closeGraph), which holds the module
+ * (the object with HEAPU8). Null if the shape is not there.
+ */
+export function wasmHeap(task: object): Uint8Array | null {
+  for (const runner of Object.values(task)) {
+    if (!runner || typeof runner !== "object" || typeof (runner as { closeGraph?: unknown }).closeGraph !== "function") {
+      continue;
+    }
+    for (const mod of Object.values(runner)) {
+      const heap = (mod as { HEAPU8?: unknown } | null)?.HEAPU8;
+      if (heap instanceof Uint8Array) return heap;
+    }
+  }
+  return null;
+}
+
+/**
+ * Closes each task (one that throws does not stop the others) and, with `wipe`, zero-fills its WASM heap afterwards.
+ * MediaPipe copies every input (the frame, its face crops, the audio window) into that heap and close() leaves it there;
+ * in a worker the heap dies with the worker, on the page's thread it would outlive the session.
+ */
+function closeAndWipe(tasks: { close(): void }[], wipe: boolean): void {
+  for (const task of tasks) {
+    const heap = wipe ? wasmHeap(task) : null;
+    try {
+      task.close();
+    } catch (e) {
+      console.warn("[perception] closing a MediaPipe task failed", e);
+    }
+    (wipe ? wasmHeap(task) ?? heap : null)?.fill(0);
   }
 }
 
@@ -200,7 +235,7 @@ export async function loadAudioModels(assetBase: string): Promise<AudioModels> {
       } catch {
         // best effort: the classifier is closed next either way
       }
-      classifier.close();
+      closeAndWipe([classifier], true);
     },
   };
 }

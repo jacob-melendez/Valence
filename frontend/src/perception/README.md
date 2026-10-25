@@ -54,12 +54,12 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 
 - Each frame exists as one `ImageBitmap` for one step and is closed in the worker right after. The luminance read
   (1 Hz) and head crops go through canvases that are cleared, and their buffers are zero-filled. MediaPipe copies each
-  frame into its WASM heap; the worker's heap dies with the worker, and on the page's thread (the fallback) one blank
-  frame goes through every model before they close. There is no
+  frame and its face crops into its WASM heap; the worker's heap dies with the worker, and on the page's thread (the
+  fallback) each task's heap is zero-filled when it closes. There is no
   MediaRecorder, and no canvas or image data is kept or persisted.
 - Mic chunks are zero-filled once copied into the 1 s block. The block and its 16 kHz copy are zero-filled after
   analysis. MediaPipe keeps its own copy of the last YAMNet window in its WASM heap; closing the classifier (stop(),
-  or a mic that ends) first overwrites it with a silent window.
+  or a mic that ends) overwrites it with a silent window and then zero-fills the heap.
 - `counters()` reports frames decoded and purged, raw audio buffers purged, derived buffers wiped, and buffers alive
   at the end of a step (`violations`). This mirrors the Python purge gate's numbers.
 - No request leaves the origin. WASM and models come from `/mediapipe/` (`scripts/mediapipe-assets.mjs`: WASM
@@ -92,12 +92,13 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   MediaPipe sends images through WebGL on either delegate: a worker without WebGL on OffscreenCanvas (Safari before 17)
   hands video to the page's thread, and a lost WebGL context fails every later step ("video step failing") instead of
   repeating MediaPipe's last results.
-- **Pauses.** A gap of 3 s (the id reuse window) or more without a processed frame (tab hidden, camera muted)
-  releases every display id and its per-person state, as an absence that long does on the edge, which processes
-  every frame.
+- **Pauses.** While nothing is processed (tab hidden, camera muted) nobody is seen leaving, so people reattach to their
+  seats afterwards with their ids and baselines. A pause as long as the engine's break (`break_absent_min`, 10 min)
+  restarts the per-person baselines, since someone else may be sitting there; the display ids stay.
 - **Frame shape.** Display-id reuse distances use the real frame aspect (Python: 16:9, the edge's capture size), so
   portrait phone frames measure vertical distance correctly. A face-cue channel with no samples at the 20 s freeze
-  stays missing (Python: 0): only the browser's head-crop retry, which gives no yaw or pitch, can leave one empty.
+  stays missing (Python: 0) until it has 20 s of its own, then freezes: only the browser's head-crop retry, which gives
+  no yaw or pitch, can leave one empty.
 - **Muted and stalled cameras.** A muted track (Safari giving the camera to another tab, an OS privacy toggle,
   Chromium after ~25 missed frames) pauses video like a hidden tab, and a muted mic is purged instead of analysed,
   both reported in `status().degraded`. A camera that stalls without being muted repeats its last frame until the

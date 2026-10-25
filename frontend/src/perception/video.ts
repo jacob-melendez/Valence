@@ -33,6 +33,8 @@ const NOSE = 0, L_EYE = 1, R_EYE = 2, L_WRIST = 9, R_WRIST = 10;
 export const LUX_PERIOD_S = 1.0;
 export const FACE_CROP_SCALE = 2.2;
 export const FACE_CROP_PX = 256;
+/** A processing pause this long restarts per-person baselines: the engine's break_absent_min (10 min). */
+export const BREAK_GAP_S = 10 * 60;
 /**
  * A face seen within the last FACE_HOLD_S still counts as visible. At the edge's cadence (faces every other frame at
  * 10 Hz) that is 2.25 face-pass intervals; when passes come slower than every 0.2 s the hold stretches to 2.25
@@ -124,7 +126,6 @@ export class VisionPipeline {
   private readonly faceEveryFrame: boolean;
   private iter = 0;
   private lastProcessT: number | null = null;
-  private lastSize: readonly [number, number] | null = null;
   private readonly lastTs = { pose: -1, faces: -1, gestures: -1 };
   private lastLuxT = -Infinity;
   private lastFacePassT: number | null = null;
@@ -145,12 +146,15 @@ export class VisionPipeline {
   process(frame: FrameInput, t: number, wall: number, seq: number, framesDecoded = 0): VideoObs {
     const { width: w, height: h } = frame;
     const it = this.iter++;
-    // Nothing seen for the id reuse window (tab hidden, camera muted): as on the edge after that long an absence,
-    // everyone's id and per-person state are released, so whoever sits there next starts fresh (not on the previous
-    // person's frozen baselines).
-    if (this.lastProcessT !== null && t - this.lastProcessT >= this.ids.reuseWindowS) this.ids.reset();
+    // A pause in processing (tab hidden, camera muted) is missing data, not an absence: tracks reattach to their
+    // seats by tracker id or by position (ids.ts) and keep their baselines. Only a pause as long as the engine's break
+    // (break_absent_min) restarts the per-person baselines, since whoever sits there now may be someone else; the
+    // display ids stay where they are.
+    if (this.lastProcessT !== null && t - this.lastProcessT >= BREAK_GAP_S) {
+      for (const did of this.people.keys()) this.fists.drop(did);
+      this.people.clear();
+    }
     this.lastProcessT = t;
-    this.lastSize = [w, h];
     if (w > 0 && h > 0) this.ids.aspect = h / w;
 
     const allDets = this.track(frame, w, h, t);
@@ -214,31 +218,6 @@ export class VisionPipeline {
   }
 
   /** VIDEO mode (pose, gestures) needs strictly increasing ms timestamps per task; IMAGE-mode faces ignore it. */
-  /**
-   * One blank frame of the last frame's size, and a blank head crop, through every model. MediaPipe copies each input
-   * into its WASM heap and close() leaves it there; on the page's thread, where no worker dies with the heap, that
-   * would keep the last camera frame. Best effort, before closing the models.
-   */
-  scrub(blank: (w: number, h: number) => CanvasImageSource): void {
-    if (!this.lastSize) return;
-    const [w, h] = this.lastSize;
-    const frame = blank(w, h) as TexImageSource;
-    const crop = blank(FACE_CROP_PX, FACE_CROP_PX) as TexImageSource;
-    const runs = [
-      () => this.models.pose(frame, this.ts("pose", 0)),
-      () => this.models.gestures(frame, this.ts("gestures", 0)),
-      () => this.models.faces(frame, this.ts("faces", 0)),
-      () => this.models.faceCrop(crop),
-    ];
-    for (const run of runs) {
-      try {
-        run();
-      } catch {
-        // the models are closed next either way
-      }
-    }
-  }
-
   private ts(task: keyof VisionPipeline["lastTs"], t: number): number {
     this.lastTs[task] = Math.max(Math.floor(t * 1000), this.lastTs[task] + 1);
     return this.lastTs[task];

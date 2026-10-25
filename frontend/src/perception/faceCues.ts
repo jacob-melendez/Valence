@@ -98,6 +98,8 @@ const emptySamples = (): Record<RawChannel, SortedSamples> => ({
 export class FaceCueTracker {
   private samples = emptySamples();
   private frozen: RawCues | null = null;
+  /** emptyFreezesNaN: channels frozen as missing keep calibrating on their own visible time, then freeze too. */
+  private late = new Map<RawChannel, { samples: SortedSamples; visibleS: number }>();
   private visibleS = 0;
   private prevT: number | null = null;
   private prevVisible = false;
@@ -124,9 +126,8 @@ export class FaceCueTracker {
   update(raw: RawCues | null, tMs: number): FaceCues {
     const visible = raw !== null && !RAW_CHANNELS.every((k) => Number.isNaN(raw[k]));
     const t = tMs / 1000.0;
-    if (visible && this.prevVisible && this.prevT !== null) {
-      this.visibleS += pyMin(pyMax(t - this.prevT, 0.0), MAX_GAP_S);
-    }
+    const dt = visible && this.prevVisible && this.prevT !== null ? pyMin(pyMax(t - this.prevT, 0.0), MAX_GAP_S) : 0;
+    this.visibleS += dt;
     this.prevT = t;
     this.prevVisible = visible;
     if (!visible || raw === null) {
@@ -138,9 +139,25 @@ export class FaceCueTracker {
         for (const k of RAW_CHANNELS) if (!Number.isNaN(raw[k])) this.samples[k].push(raw[k]);
       } else {
         const frozen = this.baseline();
-        if (this.emptyFreezesNaN) for (const k of RAW_CHANNELS) if (!this.samples[k].length) frozen[k] = NaN;
+        if (this.emptyFreezesNaN) {
+          for (const k of RAW_CHANNELS) {
+            if (this.samples[k].length) continue;
+            frozen[k] = NaN;
+            this.late.set(k, { samples: new SortedSamples(), visibleS: 0 });
+          }
+        }
         this.frozen = frozen;
         this.samples = emptySamples();
+      }
+    } else {
+      for (const [k, late] of this.late) {
+        if (Number.isNaN(raw[k])) continue;
+        late.samples.push(raw[k]);
+        late.visibleS += dt;
+        if (late.visibleS >= this.calibrationS) {
+          this.frozen[k] = late.samples.median();
+          this.late.delete(k);
+        }
       }
     }
     const b = this.baseline();

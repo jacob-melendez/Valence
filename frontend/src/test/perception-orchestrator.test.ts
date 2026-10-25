@@ -497,22 +497,28 @@ describe("createPerception orchestration", () => {
     p.stop();
   });
 
-  it("fps and face_hz read 0 while video is paused, then restart from the real rate without a catch-up step", async () => {
+  it("fps and face_hz read 0 while video is paused, and the first step after it is on the beat, not a catch-up", async () => {
     const { deps } = harness();
+    const steps: number[] = [];
+    const ok = await deps.visionBackend!({} as never);
+    deps.visionBackend = async () => ({
+      ...ok,
+      process: async (bitmap, t, ...rest) => {
+        steps.push(t);
+        return ok.process(bitmap, t, ...rest);
+      },
+    });
     const v = track("video");
     const p = createPerception({ fps: 20 }, deps);
     await p.start(stream(v));
     await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(5), { timeout: 3000 });
     v.muted = true;
     await vi.waitFor(() => expect(p.status()).toMatchObject({ fps: 0, face_hz: 0 }));
+    const n = steps.length;
     v.muted = false;
-    const seen: number[] = [];
-    for (let i = 0; i < 50; i++) {
-      seen.push(p.status().fps);
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    expect(Math.max(...seen)).toBeLessThan(40); // two steps back to back would read ~1000 Hz
-    expect(seen.at(-1)!).toBeGreaterThan(5);
+    await vi.waitFor(() => expect(steps.length).toBeGreaterThanOrEqual(n + 2), { timeout: 3000 });
+    expect(steps[n + 1]! - steps[n]!).toBeGreaterThan(0.025); // a catch-up step would follow within a few ms
+    await vi.waitFor(() => expect(p.status().fps).toBeGreaterThan(5), { timeout: 3000 });
     p.stop();
   });
 
@@ -767,6 +773,30 @@ describe("loadVisionModels (fake MediaPipe)", () => {
       expect(call).toThrow(/WebGL context lost/);
     }
     models.close();
+  });
+
+  it("on the page's thread, closing wipes each task's WASM heap (MediaPipe's copies of frames and crops)", async () => {
+    const heaps: Uint8Array[] = [];
+    const task = () => ({
+      createFromOptions: async () => {
+        const heap = Uint8Array.from([7, 7, 7]);
+        heaps.push(heap);
+        return { g: { closeGraph() {}, i: { HEAPU8: heap } }, close() {} }; // the minified bundle's shape
+      },
+    });
+    vi.resetModules();
+    vi.doMock("@mediapipe/tasks-vision", () => ({
+      FilesetResolver: { forVisionTasks: async () => ({ wasmLoaderPath: "/mediapipe/wasm/x.js" }) },
+      PoseLandmarker: task(), FaceLandmarker: task(), GestureRecognizer: task(),
+    }));
+    vi.stubGlobal("fetch", async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) }));
+    const { loadVisionModels, wasmHeap } = await import("@/perception/models");
+    const models = await loadVisionModels("/mediapipe/", { delegate: "CPU" });
+    expect(heaps).toHaveLength(4);
+    models.close();
+    expect(heaps.every((h) => h.every((x) => x === 0))).toBe(true);
+    expect(wasmHeap({ h: { closeGraph() {}, j: { HEAPU8: heaps[0] } } })).toBe(heaps[0]); // tasks-audio's names
+    expect(wasmHeap({ g: {} })).toBeNull();
   });
 });
 

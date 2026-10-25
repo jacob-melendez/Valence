@@ -490,10 +490,16 @@ describe("FaceCueTracker (test_emotion_features.py)", () => {
       return out!;
     };
     expect(feed(new FaceCueTracker()).head_yaw).toBeCloseTo(30, 6); // face_cues.py's 0 neutral (kept for parity)
-    const browser = feed(new FaceCueTracker(20, true));
-    expect(browser.head_yaw).toBeNaN();
-    expect(browser.head_pitch).toBeNaN();
-    expect(browser.brow_down).toBeCloseTo(0, 9); // the channels that had samples froze as usual
+    const browser = new FaceCueTracker(20, true);
+    const out = feed(browser);
+    expect(out.head_yaw).toBeNaN();
+    expect(out.head_pitch).toBeNaN();
+    expect(out.brow_down).toBeCloseTo(0, 9); // the channels that had samples froze as usual
+    // ...and the missing ones calibrate on their own 20 s of full-frame faces, then read relative to that neutral
+    let late: FaceCues | undefined;
+    for (let i = 310; i < 520; i++) late = browser.update(rawCues(bs, turned), i * 100);
+    expect(late!.head_yaw).toBeCloseTo(0, 6);
+    expect(browser.baseline().yaw).toBeCloseTo(30, 6);
   });
 
   it("calibrates a baseline and counts blinks", () => {
