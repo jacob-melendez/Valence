@@ -177,3 +177,16 @@ Next: run the evaluator on any taps committed under `data/self_report/`. Otherwi
 freeze.
 
 Blockers: none on this side. Real data needs a person.
+
+### 23:18 ET — Quiet: no taps yet; spec notes the browser's late cue calibration
+
+- No self-report taps or new recordings in the repo. The finish-line checklist (`docs/HACKOHIO_FINISH.md` §6) has
+  the right command and lists the three outputs to commit if no cloud session is running.
+- **Spec:** records Cloud C's browser variant (`f1de56c`). A cue channel with no samples at the 20 s freeze (only the
+  head-crop retry, which gives no pose, can cause it) calibrates on its own 20 s afterwards. The Python reference
+  would freeze it at 0 instead. This is an edge case and parity is unaffected otherwise.
+- Numbers unchanged (`emotion-v1@006a8d7d`).
+
+Next:
+- Taps, if they come.
+- Otherwise check-ins every ~90 min, then a final entry after the 08:00 freeze.
