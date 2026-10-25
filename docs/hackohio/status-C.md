@@ -293,3 +293,31 @@ Chromium process's RSS sampled every 30 s.
     runs on the page's thread (`video_backend` reads `main/CPU`). It works, but the UI is slower.
   - **Not testable here:** a real Safari, Firefox or phone. `frontend/e2e/REAL_CAMERA.md` steps 1 and 5.5 cover it
     after deploy.
+
+### 23:45 — bug hunt round 2, and reviews of my own fixes
+
+- **Health.** No fixture drift. 937 frontend tests pass and the build passes. `e2e/run-all.mjs`: all six scenarios
+  pass at 4.5–7.0 fps (worker/CPU), with 0 off-origin requests and 0 CSP violations; both cross checks hold. A
+  `--main-thread` run passes too.
+- **Round 2** looked at the worker protocol, phone cameras, long sessions and the asset build. 8 findings held. I fixed
+  7 in 212d79f; the eighth was in Cloud A's file:
+  - **Safari 16.4–16.x:** my ad7082e canvas fix let the worker start without WebGL and then fail every frame. A WebGL
+    probe now sends video back to the page's thread. This corrects the 21:45 browser-support claim, which was wrong
+    between ad7082e and 212d79f.
+  - **WebGL context loss:** MediaPipe silently repeated a frozen face or a phantom person; now every call fails, shown
+    as "video step failing".
+  - **Main-thread heap:** after stop, MediaPipe's WASM heap held the last frame. It is now zero-filled when the models
+    close, which covers the face crops and the YAMNet window too; verified on real MediaPipe in Chromium.
+  - **Portrait frames:** display-id distances now use the real frame aspect.
+  - **Crop-only calibration:** a face-cue channel empty at the freeze stays missing until it has 20 s of its own.
+  - **fps while paused:** it reads 0 while video is paused.
+  - **Caching (Cloud A's file):** `/mediapipe/*` was cached for 24 h with no version in the URL. Cloud A made it
+    `no-cache` in ac1a24e.
+- **Reviews of my fixes caught mistakes, which f1de56c and 69d00c8 correct:**
+  - A 3 s pause reset I added in 212d79f renumbered seated people in tracker-id order and wiped the baselines of people
+    who stayed. It is reverted. A pause keeps seats and baselines again; only a 10 min pause, measured on wall time like
+    the engine's break clock, restarts the baselines.
+  - My blank-frame scrub could not reach the face crop. The heap wipe above replaced it.
+  - Test gaps closed: the YAMNet heap wipe, a task that fails to close, and late calibration.
+- **Lesson.** Each fix round got its own review, and two of the three reviews found a regression of mine. I'll keep
+  doing that until the freeze.
