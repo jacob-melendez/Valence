@@ -3,34 +3,38 @@
 Owner: Cloud B. Scope: `valence/{sim,features,models,eval}/**`, `artifacts/emotion/**`, `scripts/emotion_*.py`,
 `tests/test_emotion*`, `docs/EMOTION_FEATURES.md`, model card §9. Times in America/New_York. Newest entry last.
 
-## Read first (state at 04:58, Oct 25)
+## Read first (final, after the 08:00 freeze, Oct 25)
 
-- **What exists.**
-  - The `emotion-v1` contract (`docs/EMOTION_FEATURES.md`): MediaPipe face cues per frame, per tick and in 31 window
-    features.
-  - A 10-state LightGBM classifier with valence/arousal regressors (`emotion-v1@006a8d7d`), exported to
-    `artifacts/emotion/`.
-  - The map position shown is `Σ p_k · anchor_k`; it beats the regressors.
-  - The web engine reproduces the models (raw scores bit for bit; the 600-tick tour within 1e-9).
+- **Delivered** (35 commits: 26 `[emotion]`, 9 `[eval]`; all tests green):
+  - **The `emotion-v1` contract** (`docs/EMOTION_FEATURES.md`). MediaPipe face cues per frame: brow lowering, eye
+    openness, blinks, head yaw and pitch, frown, smile. They are aggregated per tick and turned into 31 window
+    features, with additive contract fields only. Cloud C's browser perception and Cloud A's engine implement it with
+    parity tests.
+  - **A 10-state LightGBM classifier and valence/arousal regressors** (`emotion-v1@006a8d7d`, `artifacts/emotion/`).
+    The map position shown is the probability-weighted anchors, `Σ p_k · anchor_k`, which beats the regressors. The
+    web engine reproduces the models (raw scores bit for bit; the 600-tick tour within 1e-9).
+  - **Tools:**
+    - golden data and a 10-state tour (`/?demo=tour`);
+    - a JSON evaluator of the dumps;
+    - real-data tools (`valence.eval.self_report`, `valence.eval.emotion_capture`);
+    - model card §9, generated from the artifacts.
 - **Numbers (simulated data only, 90 held-out sessions):**
   - macro-F1 0.681 (CI 0.667–0.695), face only 0.616, context adds +0.066 (CI +0.059 to +0.074);
   - ECE 0.007;
   - map-position MAE: valence 0.174, arousal 0.236;
   - weakest state: Confused (F1 0.46).
-  Full detail in model card §9, generated from the artifacts by `scripts/emotion_card.py`.
-- **Real data so far.**
+- **Real data:**
+  - No self-report taps were collected during the event. The capture and the one-command evaluation are ready
+    (`docs/HACKOHIO_FINISH.md` §6).
   - Six pre-event captures without cues read Focused 56–100%; quiet typing reads no stress state.
-  - Two real browser recordings (CC BY clips) show real per-tick cues steadier than simulated on neutral faces.
-  - **No self-report taps yet.** One command evaluates them and updates the card:
-    `python -m valence.eval.self_report <taps.jsonl>` (checklist `docs/HACKOHIO_FINISH.md` §6).
-- **Main risks** (model card §9.4–9.5):
-  - The anchors and the per-state cue values are assumptions.
+  - Two real browser recordings show per-tick cues steadier than simulated on neutral faces.
+  - No public dataset: DAiSEE needs a request form, and RAVDESS's hosts are denied by the network policy.
+- **Open items / risks:**
+  - The anchors and the per-state cue values are assumptions, untested on people.
   - Doubling every cue spread drops macro-F1 to 0.554.
   - A flipped pitch sign costs about 8 points.
-- **Public datasets:** none. DAiSEE needs a request form. RAVDESS's hosts (zenodo.org, huggingface.co) are denied by
-  the network policy.
-- **Gates:** full Python suite 706 passed, 41 skipped (03:29); two independent reviews (spec parity, four-lens
-  workflow) and a docs re-check, all findings fixed.
+  - Confused is weak.
+  - First real check: a self-report session, then acted per-state captures through `valence.eval.emotion_capture`.
 
 ## Log
 
@@ -243,3 +247,11 @@ Next:
 - Model and artifacts unchanged (`emotion-v1@006a8d7d`).
 
 Next: check-ins at 04:55, 06:25 and 07:40, then the final entry after the 08:00 freeze.
+
+### 08:08 ET — Final entry (after the freeze)
+
+- No self-report taps arrived. The model card's real-data section says "no real taps yet". It fills in with one
+  command when a session happens (`python -m valence.eval.self_report <taps.jsonl>`).
+- Emotion tests on the frozen head (`f2842d5`): 22 passed. Full suite at 03:29: 706 passed, 41 skipped.
+- Nothing changed after the freeze except this file.
+- The final state is summarized in "Read first" above.
