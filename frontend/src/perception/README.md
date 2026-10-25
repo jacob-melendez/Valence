@@ -73,6 +73,10 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   keypoint confidence; it is 0 outside the frame and for hips and legs, which BlazePose extrapolates with visibility
   ~1. Detection and presence thresholds are 0.4, YOLO's `conf`. It tracks up to 6 poses (YOLO: every detection), then
   the same 25% height filter and largest 3 apply.
+- **Person box.** The extent of all 33 landmarks, so it reaches legs BlazePose predicts behind a desk. Measured
+  against YOLO on 486 synthetic frames: the main participant's box is 0.05 shorter (mostly at the top), and desk-occluded
+  bystanders are 0.06 taller, though BlazePose finds only a third of them and none next to a close participant.
+  Gating hidden landmarks out (visibility < 0.5) shrank the main participant's box by up to 0.4, so the box stays.
 - **Posture.** BlazePose keypoints jitter where YOLO's do not, so posture runs on One Euro-smoothed keypoints and
   motion is measured on the shoulders only (`smoothing.ts`; Python: raw keypoints, COCO 5-12).
 - **Faces.** FaceLandmarker in IMAGE mode as on the edge, up to 3 faces, plus the transformation matrix for head
