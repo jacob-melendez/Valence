@@ -62,8 +62,10 @@ To exercise the in-browser source with a fake camera and microphone:
 ## Browser support
 
 The tour needs a browser with `DecompressionStream` to unpack the gzipped models and the tour script: Chrome/Edge 80+,
-Firefox 113+, Safari 16.4+ (iOS 16.4, March 2023). Camera mode also needs MediaPipe's WASM in a Web Worker; Safari and
-Firefox findings for that path are in `docs/hackohio/status-C.md`. The cloud tests run Chromium only, so check an
+Firefox 113+, Safari 16.4+ (iOS 16.4, March 2023). Camera mode runs MediaPipe in a Web Worker where the browser has module
+workers and WebGL on an OffscreenCanvas (Chrome/Edge, Firefox 114+, Safari 17+). Elsewhere it runs on the page's main
+thread (Safari 16.4–16.x, Firefox < 114: `video_backend` reads `main/CPU`, and the UI is slower). Details are in
+`docs/hackohio/status-C.md`. The cloud tests run Chromium only, so check an
 iPhone by hand after deploying (`docs/HACKOHIO_FINISH.md` step 2).
 
 ## Verifying the privacy claim on the live site

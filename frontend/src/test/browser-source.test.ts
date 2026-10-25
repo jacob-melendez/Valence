@@ -601,7 +601,27 @@ describe("in-browser source", () => {
     expect(src.status().degraded).toEqual(["camera muted: video paused", "microphone muted"]);
     degraded = ["tab hidden: video paused"];
     expect(src.status().degraded).toEqual(["mic", "tab hidden: video paused"]);
+    degraded = ["no microphone"]; // perception's own "no camera" / "no microphone"
+    expect(src.status().degraded).toEqual(["camera", "no microphone"]);
     src.stop();
+  });
+
+  it("Pause → Start forgets the people when two or more were seated (a new perception may swap their ids); one person keeps theirs", async () => {
+    installMedia();
+    const run = async (heights: number[]) => {
+      const perceptions: FakePerception[] = [];
+      const { src, log } = source({ perceptions, now: () => Date.now(), mono: () => Date.now() });
+      await src.start();
+      perceptions[0]?.emit(video(Date.now() / 1000, heights));
+      src.command({ kind: "control", action: "pause" });
+      src.command({ kind: "control", action: "start" });
+      await flush();
+      src.stop();
+      return log.filter((l) => l.startsWith("reset"));
+    };
+    expect(await run([0.6, 0.55])).toEqual(["reset keep_room=true"]);
+    expect(await run([0.6])).toEqual([]);
+    expect(await run([0.6, 0.2])).toEqual([]); // the small box is background, not a participant
   });
 
   it("keeps governance counters per source across Pause → Start (a reopened perception counts from 0 again)", async () => {

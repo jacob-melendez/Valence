@@ -234,6 +234,8 @@ export class BrowserSource {
   /** Of those, the ones whose clock "Log a break" restarted: for them (and for the room slot, once any break is
    *  logged) the break clock means what it says. Someone first seen after the break has a clock from arrival. */
   private onBreak = new Set<number>();
+  /** Participants in the last published tracks (the engine's >= 0.55x-tallest boxes). */
+  private seated = 0;
   // Operator toggles, kept so a toggle pressed while the engine loads still reaches it.
   private roomOnly = false;
   private readonly overlays = { face_occlusion: false, low_light: false };
@@ -389,7 +391,7 @@ export class BrowserSource {
     // The engine's push_obs publishes the participants' boxes (valence/runtime/engine.py: >= 0.55x the tallest,
     // at most every 0.1 s).
     const tracks = this.engine.push(o);
-    if (tracks) this.deps.emit(tracks);
+    if (tracks) { this.deps.emit(tracks); if (tracks.type === "tracks") this.seated = tracks.persons.length; }
     if (isVideo(o)) {
       this.lastVideoAt = this.now();
       for (const p of o.persons) this.clocked.add(p.track_id);
@@ -467,8 +469,8 @@ export class BrowserSource {
       : (() => {
           // Perception names the cause when it knows it ("camera muted: video paused"); skip the bare device name then.
           const named = ps?.degraded ?? [], says = (re: RegExp) => named.some((d) => re.test(d));
-          return [...(flowing(camera, this.lastVideoAt) || says(/^(camera|video|tab hidden)/) ? [] : ["camera"]),
-            ...(flowing(mic, this.lastAudioAt) || says(/^(microphone|mic|audio)/) ? [] : ["mic"]), ...named];
+          return [...(flowing(camera, this.lastVideoAt) || says(/^(no )?(camera|video|tab hidden)/) ? [] : ["camera"]),
+            ...(flowing(mic, this.lastAudioAt) || says(/^(no )?(microphone|mic|audio)/) ? [] : ["mic"]), ...named];
         })();
     const r1 = (v: number | undefined) => Math.round((v ?? 0) * 10) / 10;
     return { type: "status", mode: this.tour ? "replay" : "live", camera, mic, fps: r1(ps?.fps ?? c?.fps),
@@ -492,6 +494,10 @@ export class BrowserSource {
         const was = this.running;
         if (c.action === "start") {
           this.running = "running";
+          // Start opens a new perception, whose ids follow the pose model's order again: with two or more people
+          // seated before the pause, they could swap 15-minute histories. Forget the people then (the room stays);
+          // someone alone keeps theirs, since their id comes back as 1.
+          if (!this.tour && e && was === "paused" && this.seated > 1) { e.resetPeople(true); this.clocked.clear(); this.onBreak.clear(); this.seated = 0; }
           // From pause or stop (or after a refused prompt) reopen camera and mic; before the engine exists start() does.
           if (!this.tour && e && (was !== "running" || (!this.perception && !this.sensorLoading))) void this.openSensors(this.generation);
         } else {

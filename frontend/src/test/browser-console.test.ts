@@ -301,7 +301,7 @@ describe("what the in-browser panels claim", () => {
     render(h("div", null, h(panels.Governance), h(panels.StateVectors)));
     expect(screen.getAllByText(LINE)).toHaveLength(1); // tick 2 only
     expect(screen.getAllByText(/No camera frame or audio block this tick, so nothing to purge/)).toHaveLength(2);
-    expect(screen.getByTestId("governance-note").textContent).toMatch(/decoded = purged by construction/);
+    expect(screen.getByTestId("governance-note").textContent).toMatch(/purged follows decoded by construction; decoded may lead by the one frame being processed/);
     expect(screen.getByTestId("governance-note").textContent).toMatch(/Log lines are 5 s engine ticks;/);
     expect(screen.getByText("n/a (no speech)")).toBeInTheDocument();
     v.setSource("mock");

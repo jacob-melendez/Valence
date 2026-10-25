@@ -395,12 +395,12 @@ export function Governance() {
         {" · "}purge gap: <span className={(g?.purge_gap ?? 0) > 2 ? "text-destructive" : "text-ok"}>{g?.purge_gap ?? "—"}</span>
         {" · "}live raw buffers: <span className="text-ok">{g?.live_raw_buffers ?? "—"}</span>
       </div>
-      {/* What the counters do show: they tick where each step ends, so decoded = purged holds by construction. */}
+      {/* What the counters do show: they tick where each step ends, so purged follows decoded within the frame in flight. */}
       {inBrowser && (
         <p className="mb-2 text-xs text-muted-foreground" data-testid="governance-note">
           {tour ? "Tour: no camera or mic is opened, so nothing is decoded or purged and these counters stay 0."
             : <>Each purge counter ticks where its step ends: a camera frame is closed, an audio chunk zeroed, once its features
-              are taken, so decoded = purged by construction{isMockPerception() ? " (mock perception: synthetic frames)" : ""}.
+              are taken, so purged follows decoded by construction; decoded may lead by the one frame being processed{isMockPerception() ? " (mock perception: synthetic frames)" : ""}.
               They show every step finished; Violations counts raw buffers still open when one ended.</>}
           {" "}{tour ? `Log lines are engine ticks of 5 s tour time each (about ${+(5 / getTourSpeed()).toFixed(2)} s apart at ${getTourSpeed()}× speed)`
             : "Log lines are 5 s engine ticks"}; audit entries are label changes, 30 s checkpoints and operator actions.
