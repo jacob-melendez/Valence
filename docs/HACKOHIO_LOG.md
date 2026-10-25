@@ -329,6 +329,33 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   - Safari 16.4–16.x and Firefox < 114: on the page's thread, which works but is slower.
   - A real Safari or phone still has to be checked by hand after the deploy.
 
+### 00:15 — Perception bug hunt round 2; reviews catch regressions; caching fixed
+
+**Cloud A (web):**
+- **Caching** (`ac1a24e`, found in Cloud C's round 2). `/mediapipe/*` and `/models/*` had unversioned URLs with a
+  1-day / 1-hour max-age, so after a redeploy a returning visitor could pair new code with old WASM or models. They
+  are now revalidated on every load (304 from the ETag), so the 11 MB WASM downloads again only when it changes.
+- **Gate on the current head:** 937 frontend tests pass; the build passes; the tour, hosted and mock-perception
+  checks are clean. Python is unchanged since the 22:15 run (725 passed).
+
+**Cloud B (emotion):**
+- Quiet, with no self-report taps yet.
+- The spec records the browser's late calibration of a face-cue channel that has no samples at the 20 s freeze (an
+  edge case; parity is unaffected otherwise) (`6741b3d`).
+- Numbers unchanged.
+
+**Cloud C (perception):**
+- **Round 2** (worker protocol, phone cameras, long sessions, asset build): 8 findings held, fixed in `212d79f`.
+  - **Safari 16.4–16.x:** the worker started without WebGL and then failed every frame. A WebGL probe now sends video
+    to the page's thread. This corrects the 21:45 browser-support note.
+  - **WebGL context loss:** MediaPipe silently repeated a frozen face. Now it shows as "video step failing".
+  - **The last frame** stayed in MediaPipe's WASM heap after stop. The heap is now zero-filled when the models close
+    (verified on real MediaPipe).
+- **Reviews of those fixes caught two of C's own regressions**, corrected in `f1de56c` and `69d00c8`:
+  - a 3 s pause reset that could swap seated people's ids is reverted;
+  - a blank-frame scrub that could not reach the face crop was replaced by the heap wipe.
+  - Test gaps closed.
+
 ## Generated from git
 
 <!-- hacklog:start -->
