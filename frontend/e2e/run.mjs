@@ -6,7 +6,8 @@
 //
 //   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw|portrait] [--size WxH] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
 //                    [--audio file.wav] [--video file.y4m] [--record out.jsonl [--record-seconds N]] [--python-cadence]
-//                    [--main-thread] [--deny camera|mic] [--no-build] [--headed]
+//                    [--main-thread] [--deny camera|mic] [--cpu-throttle N] [--profile out.cpuprofile] [--no-build]
+//                    [--headed]
 //
 // Run from frontend/. Needs `npm install`, the repo's Python venv (for make_media.py) and Playwright's Chromium
 // (NODE_PATH or /opt/node-tools/node_modules provides `playwright`).
@@ -128,6 +129,12 @@ if (DENY) {
   }, DENY);
 }
 const page = await context.newPage();
+// --cpu-throttle N: slow the page and its workers N-fold (DevTools CPU throttling), roughly a phone.
+const THROTTLE = Number(opt("--cpu-throttle", "1"));
+if (THROTTLE > 1) {
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: THROTTLE });
+}
 const offOrigin = [];
 const consoleCsp = [];
 const pageErrors = [];
@@ -155,6 +162,9 @@ if (SIZE) params.set("size", SIZE);
 const query = params.size ? `?${params}` : "";
 const resp = await page.goto(`${origin}/${query}`, { waitUntil: "load" });
 const startedAt = Date.now();
+// --profile out.cpuprofile: a CPU profile of the page's main thread over the run (after models load), for DevTools.
+const PROFILE = opt("--profile", "");
+let profiler = null;
 let state;
 for (;;) {
   await page.waitForTimeout(500);
@@ -162,8 +172,14 @@ for (;;) {
     const e = window.__e2e;
     return { ready: e.ready, error: e.error, n: e.video.length, a: e.audio.length };
   });
+  if (PROFILE && !profiler && state.n > 0) {
+    profiler = await context.newCDPSession(page);
+    await profiler.send("Profiler.enable");
+    await profiler.send("Profiler.start");
+  }
   if (state.error || Date.now() - startedAt > SECONDS * 1000) break;
 }
+if (profiler) writeFileSync(path.resolve(PROFILE), JSON.stringify((await profiler.send("Profiler.stop")).profile));
 const data = await page.evaluate(() => window.__e2e);
 mkdirSync(OUT, { recursive: true });
 await page.screenshot({ path: path.join(OUT, `screenshot-${TAG}.png`) });

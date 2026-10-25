@@ -104,6 +104,10 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   Chromium after ~25 missed frames) pauses video like a hidden tab, and a muted mic is purged instead of analysed,
   both reported in `status().degraded`. A camera that stalls without being muted repeats its last frame until the
   browser mutes it (Python: `take()` never returns a frame twice).
+- **Main-thread cost.** The page's thread only grabs frames, hands them to the worker and runs YAMNet once a second.
+  The biggest part is `createImageBitmap(video)`: ~5.5 ms per 1280x720 frame in headless Chromium (software GPU),
+  against ~0.1 ms for `new VideoFrame(video)`, which MediaPipe 0.10.35 also accepts. Untested on Safari and Firefox,
+  so not switched yet (`e2e/run.mjs --cpu-throttle 4 --profile` shows it).
 - **Not included.** No compliment keywords, no lux or SPL calibration (the uncalibrated defaults, as on a fresh
   desktop install).
 

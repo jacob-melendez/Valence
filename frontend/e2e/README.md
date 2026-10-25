@@ -17,6 +17,8 @@ node e2e/run.mjs                          # one person, 25 s, CSP from the brief
 node e2e/run.mjs --scenario two           # two people side by side
 node e2e/run.mjs --scenario roll_cw       # portrait rotated 15 degrees clockwise (head roll sign check)
 node e2e/run.mjs --scenario portrait --size 720x1280   # a phone held upright: 720x1280 frames (checks frame size)
+node e2e/run.mjs --cpu-throttle 4 --profile out.cpuprofile   # main thread 4x slower (DevTools throttling; workers run
+                                          # at full speed), with a CPU profile of the page for DevTools
 node e2e/run.mjs --csp deploy             # the CSP the Cloudflare deploy writes (scripts/security-headers.mjs)
 node e2e/run.mjs --delegate GPU           # the GPU delegate (on headless Chromium's software WebGL: < 1 fps, fails)
 node e2e/run.mjs --deny camera            # getUserMedia refuses the camera (NotAllowedError): audio alone (harness only)
