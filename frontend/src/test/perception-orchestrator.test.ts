@@ -705,26 +705,34 @@ describe("loadAudioModels (fake MediaPipe)", () => {
     vi.resetModules();
   });
 
-  it("close() overwrites MediaPipe's reused input buffer with one silent window before closing", async () => {
+  it("close() overwrites MediaPipe's reused input buffer with a silent window, closes, then zero-fills the heap", async () => {
     const calls: string[] = [];
+    const heap = Uint8Array.from([5, 5, 5, 5]);
     vi.resetModules();
     vi.doMock("@mediapipe/tasks-audio", () => ({
       FilesetResolver: { forAudioTasks: async () => ({}) },
       AudioClassifier: {
         createFromOptions: async () => ({
+          g: { closeGraph() {}, h: { HEAPU8: heap } }, // tasks-audio 0.10.35's minified shape
           classify: (s: Float32Array, sr: number) => {
             calls.push(`classify ${s.length} ${sr} ${s.every((x) => x === 0) ? "silent" : "audio"}`);
             return [];
           },
-          close: () => void calls.push("close"),
+          close: () => {
+            calls.push(`close (heap ${heap[0]})`);
+            throw new Error("graph already gone"); // a broken module: the heap is still wiped
+          },
         }),
       },
     }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { loadAudioModels } = await import("@/perception/models");
     const models = await loadAudioModels("/mediapipe/");
     models.classify(Float32Array.from({ length: 15600 }, () => 0.1), 16000);
-    models.close();
-    expect(calls).toEqual(["classify 15600 16000 audio", "classify 15600 16000 silent", "close"]);
+    expect(() => models.close()).not.toThrow();
+    expect(calls).toEqual(["classify 15600 16000 audio", "classify 15600 16000 silent", "close (heap 5)"]);
+    expect([...heap]).toEqual([0, 0, 0, 0]);
+    warn.mockRestore();
   });
 });
 
@@ -780,10 +788,16 @@ describe("loadVisionModels (fake MediaPipe)", () => {
     const task = () => ({
       createFromOptions: async () => {
         const heap = Uint8Array.from([7, 7, 7]);
-        heaps.push(heap);
-        return { g: { closeGraph() {}, i: { HEAPU8: heap } }, close() {} }; // the minified bundle's shape
+        const n = heaps.push(heap);
+        return {
+          g: { closeGraph() {}, i: { HEAPU8: heap } }, // the minified bundle's shape
+          close() {
+            if (n === 2) throw new Error("context lost"); // one task failing to close does not skip the others
+          },
+        };
       },
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.resetModules();
     vi.doMock("@mediapipe/tasks-vision", () => ({
       FilesetResolver: { forVisionTasks: async () => ({ wasmLoaderPath: "/mediapipe/wasm/x.js" }) },
@@ -793,8 +807,10 @@ describe("loadVisionModels (fake MediaPipe)", () => {
     const { loadVisionModels, wasmHeap } = await import("@/perception/models");
     const models = await loadVisionModels("/mediapipe/", { delegate: "CPU" });
     expect(heaps).toHaveLength(4);
-    models.close();
+    expect(() => models.close()).not.toThrow();
     expect(heaps.every((h) => h.every((x) => x === 0))).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
     expect(wasmHeap({ h: { closeGraph() {}, j: { HEAPU8: heaps[0] } } })).toBe(heaps[0]); // tasks-audio's names
     expect(wasmHeap({ g: {} })).toBeNull();
   });

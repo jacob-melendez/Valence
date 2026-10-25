@@ -495,11 +495,25 @@ describe("FaceCueTracker (test_emotion_features.py)", () => {
     expect(out.head_yaw).toBeNaN();
     expect(out.head_pitch).toBeNaN();
     expect(out.brow_down).toBeCloseTo(0, 9); // the channels that had samples froze as usual
-    // ...and the missing ones calibrate on their own 20 s of full-frame faces, then read relative to that neutral
+    // ...and the missing ones calibrate on their own 20 s, counting only frames that carry them: with crop and
+    // full-frame faces alternating, 30 s of face is ~15 s of yaw, still not enough.
+    const turnedBy = (deg: number) => {
+      const r = (deg * Math.PI) / 180;
+      return [Math.cos(r), 0, -Math.sin(r), 0, 0, 1, 0, 0, Math.sin(r), 0, Math.cos(r), 0, 0, 0, -50, 1];
+    };
+    const yaws = [20, 30, 40, 30];
     let late: FaceCues | undefined;
-    for (let i = 310; i < 520; i++) late = browser.update(rawCues(bs, turned), i * 100);
-    expect(late!.head_yaw).toBeCloseTo(0, 6);
-    expect(browser.baseline().yaw).toBeCloseTo(30, 6);
+    let k = 0;
+    const step = (i: number) => {
+      late = browser.update(i % 2 ? rawCues(bs, null) : rawCues(bs, turnedBy(yaws[k++ % 4]!)), i * 100);
+    };
+    for (let i = 310; i < 610; i++) step(i);
+    expect(browser.baseline().yaw).toBeNaN();
+    for (let i = 610; i < 740; i++) step(i);
+    expect(browser.baseline().yaw).toBeCloseTo(30, 6); // the median of the late samples, not the last one
+    browser.update(rawCues(bs, turnedBy(40)), 74_000);
+    late = browser.update(rawCues(bs, turnedBy(40)), 74_100);
+    expect(late!.head_yaw).toBeCloseTo(10, 6);
   });
 
   it("calibrates a baseline and counts blinks", () => {

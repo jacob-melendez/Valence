@@ -93,8 +93,9 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
   hands video to the page's thread, and a lost WebGL context fails every later step ("video step failing") instead of
   repeating MediaPipe's last results.
 - **Pauses.** While nothing is processed (tab hidden, camera muted) nobody is seen leaving, so people reattach to their
-  seats afterwards with their ids and baselines. A pause as long as the engine's break (`break_absent_min`, 10 min)
-  restarts the per-person baselines, since someone else may be sitting there; the display ids stay.
+  seats afterwards with their ids and baselines. A pause as long as the engine's break (`break_absent_min`, 10 min,
+  on wall time like the engine's clock, so a computer's sleep counts) restarts the per-person baselines, since someone
+  else may be sitting there; the display ids stay.
 - **Frame shape.** Display-id reuse distances use the real frame aspect (Python: 16:9, the edge's capture size), so
   portrait phone frames measure vertical distance correctly. A face-cue channel with no samples at the 20 s freeze
   stays missing (Python: 0) until it has 20 s of its own, then freezes: only the browser's head-crop retry, which gives

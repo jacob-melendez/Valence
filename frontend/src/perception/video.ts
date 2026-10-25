@@ -126,6 +126,7 @@ export class VisionPipeline {
   private readonly faceEveryFrame: boolean;
   private iter = 0;
   private lastProcessT: number | null = null;
+  private lastProcessWall = 0;
   private readonly lastTs = { pose: -1, faces: -1, gestures: -1 };
   private lastLuxT = -Infinity;
   private lastFacePassT: number | null = null;
@@ -149,12 +150,15 @@ export class VisionPipeline {
     // A pause in processing (tab hidden, camera muted) is missing data, not an absence: tracks reattach to their
     // seats by tracker id or by position (ids.ts) and keep their baselines. Only a pause as long as the engine's break
     // (break_absent_min) restarts the per-person baselines, since whoever sits there now may be someone else; the
-    // display ids stay where they are.
-    if (this.lastProcessT !== null && t - this.lastProcessT >= BREAK_GAP_S) {
+    // display ids stay where they are. Wall time counts too: the engine's break clock runs on it, and the monotonic clock
+    // stops while the computer sleeps.
+    if (this.lastProcessT !== null
+      && Math.max(t - this.lastProcessT, wall - this.lastProcessWall) >= BREAK_GAP_S) {
       for (const did of this.people.keys()) this.fists.drop(did);
       this.people.clear();
     }
     this.lastProcessT = t;
+    this.lastProcessWall = wall;
     if (w > 0 && h > 0) this.ids.aspect = h / w;
 
     const allDets = this.track(frame, w, h, t);

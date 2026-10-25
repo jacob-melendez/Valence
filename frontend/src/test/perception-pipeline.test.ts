@@ -355,6 +355,13 @@ describe("VisionPipeline (mocked MediaPipe)", () => {
     const b = run(pipe, 5, 100 + 40 + BREAK_GAP_S).map((o) => o.persons[0]!);
     expect(b[0]!.track_id).toBe(a.track_id);
     expect(b.every((q) => Number.isNaN(q.face_valence) || Math.abs(q.face_valence) < 0.1)).toBe(true); // own neutral
+    // The same on wall time alone: the monotonic clock stops while the computer sleeps, the engine's break clock does not.
+    smile = 0.6;
+    const pipe2 = new VisionPipeline(models, fakePixels().pixels, { faceEveryFrame: true });
+    for (let i = 0; i < 400; i++) pipe2.process(FRAME, 100 + i * 0.1, 1.7e9 + i * 0.1, i, i + 1);
+    smile = 0.05;
+    const slept = pipe2.process(FRAME, 100 + 42, 1.7e9 + 40 + BREAK_GAP_S, 400, 401).persons[0]!;
+    expect(Number.isNaN(slept.face_valence) || Math.abs(slept.face_valence) < 0.1).toBe(true);
   });
 
   it("measures display-id reuse distances in real frame widths, whatever the aspect (a phone sends portrait)", () => {
