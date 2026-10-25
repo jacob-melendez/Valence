@@ -321,3 +321,41 @@ Chromium process's RSS sampled every 30 s.
   - Test gaps closed: the YAMNet heap wipe, a task that fails to close, and late calibration.
 - **Lesson.** Each fix round got its own review, and two of the three reviews found a regression of mine. I'll keep
   doing that until the freeze.
+
+### 01:45 — round 3 (docs, engine, mock), portrait frames, 40-minute soak
+
+- **Health.** No fixture drift. 940 frontend tests pass and the build passes. `e2e/run-all.mjs` now has seven
+  scenarios, all passing at 4.3–7.3 fps (worker/CPU), with 0 off-origin requests and 0 CSP violations; both cross
+  checks hold.
+- **Round 3** (docs against code, how the engine uses my observations, mock against real). 21 findings held, mostly
+  wording:
+  - `REAL_CAMERA.md` was rewritten to match the deployed console (d659c41):
+    - the 20 s face and posture calibration now comes right after allowing the camera; the baselines freeze in the
+      first 20 s on camera, not in sections 2–3;
+    - denying the mic blocks both devices on the console, which does not retry each device after a refusal;
+    - reload `/?source=browser`; the bare URL lands on the tour;
+    - the purge gap reads 0 or 1, with one frame in flight;
+    - `load_ms` is the time to the first observation;
+    - onset counts are read from the State vector;
+    - iPhone DevTools come through the Mac's Web Inspector.
+  - The mock follows the status contract: no `load_ms` or rates before the first frame, both rates 0 after `stop()`.
+    Tired eyes stay under the blink reopen level, so blinks count. People 2 and 3 calibrate on the neutral face.
+  - **Cloud A fixed their items:**
+    - "mic, no microphone" is shown once;
+    - Pause → Start always starts people fresh: a new perception numbers people from 1 in detection order, so even
+      a lone presenter can come back under another id;
+    - the governance note and the DEPLOY_WEB worker wording are corrected.
+
+    They kept 10+ min pauses as breaks on purpose, as on the desktop; my 10 min baseline restart stays in step.
+- **Correction to 21:45 browser support.** iOS Chrome and Firefox use the system WebKit, so they behave like Safari on
+  the same iOS: the worker on iOS 17+, and the page's thread on iOS 16.4–16.x (212d79f probe). Android Chrome:
+  the worker is expected but untested; only headless desktop Chromium was measured.
+- **Portrait frames end to end** (644ec53). New `portrait` scenario: 720×1280 with real MediaPipe, faces on every
+  frame, one person, 6.6–6.9 fps. The harness's 1280×720 request cropped a portrait clip to a square, so
+  `run.mjs --size WxH` sets the track size and checks every frame.
+- **Soak, two-person scene, after tonight's changes:**
+  - **15 min:** RSS stayed on plateaus of ~1.62–1.64 GB, with no trend.
+  - **40 min:** GC sawtooth with peaks of 1,661, 1,669 and 1,667 MiB, not rising, and troughs 1,618 → 1,643.
+    The harness keeps every audio observation (2,389 by the end), which may explain the troughs' rise.
+  - **Counters:** 11,018 frames decoded, 11,017 purged (one in flight); 0 violations; 0 page errors; 8 main-thread
+    long tasks, the longest 109 ms.
