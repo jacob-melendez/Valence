@@ -4,18 +4,20 @@ Owner: Cloud C. Scope: `frontend/src/perception/**`, `frontend/src/test/percepti
 `frontend/e2e/**`, `scripts/export_perception_fixtures.py`, the MediaPipe dependencies. Times are America/New_York.
 Newest entry last.
 
-## Read first (state at 03:45, Oct 25)
+## Read first (state at the 08:00 freeze, Oct 25)
 
 - **What works.** The browser perception (MediaPipe Tasks Web 0.10.35, self-hosted) produces the Python edge's
-  VideoObs and AudioObs with parity-tested ports. It runs in a Web Worker on the CPU delegate and feeds the console
-  end to end. Nothing leaves the origin, and it runs under the strict CSP. Frames and audio are purged and counted.
-- **Gates (03:45).**
+  VideoObs and AudioObs with parity-tested ports. The video models run in a Web Worker on the CPU delegate; YAMNet
+  runs on the page's thread. It feeds the console end to end. Nothing leaves the origin, and it runs under the strict
+  CSP. Frames and audio are purged and counted.
+- **Gates at the freeze.**
   - 944 frontend tests pass.
   - `e2e/run-all.mjs` passes seven scenarios (one, two, roll ±15°, portrait 720×1280, camera denied, mic denied).
   - A 40-minute soak showed no leak.
   - A fresh clone builds and passes the deploy check.
 - **Robustness covered.** Missing, denied, muted or ended camera or mic; a hidden tab; iOS audio interruptions; a
-  lost WebGL context; Safari before 17 (the page's thread); slow devices.
+  lost WebGL context; Safari before 17 (the page's thread, with a rest between steps); slow devices. Every change
+  tonight had its own adversarial review, and the regressions they found are fixed (log 21:45–03:45).
 - **Needs a real camera** (`frontend/e2e/REAL_CAMERA.md`, ~15 min after deploy):
   - fps on a real Mac and phone;
   - slump and keyboard-gaze with BlazePose;
@@ -25,7 +27,9 @@ Newest entry last.
   - The first 20 s on camera are the face and posture calibration: sit neutral.
   - Blink counts undercount below ~15 Hz.
   - A camera that stalls without being muted repeats its last frame until the browser mutes it.
-  - On the page's thread (Safari before 17), video is slower and the UI is heavier.
+  - On the page's thread (Safari before 17), video is slower.
+  - Each frame grab costs ~5.5 ms on the page's thread (headless); `VideoFrame` would cut it to ~0.1 ms but is
+    untested on Safari and Firefox.
 
 ## Decisions
 
