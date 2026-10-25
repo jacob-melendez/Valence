@@ -76,6 +76,10 @@ Resting faces and camera placements differ, so the cues are **relative to the pe
   its finite samples (0 before any sample).
 - At 20 s of visible face the baseline is frozen (per channel, the median at that moment) and never changes again for
   that display id (a new display id starts a new calibrator).
+- *Browser variant* (`frontend/src/perception/faceCues.ts`, `f1de56c`): a channel with **no** samples at the freeze
+  (only the browser's head-crop retry, which gives no pose, can cause it) is not frozen at 0 as in the Python
+  reference (which would make that person's yaw/pitch absolute); it stays missing until it has 20 s of visible
+  samples of its own, then freezes. Every other case is identical; the golden frames do not exercise this one.
 - A frame with no face (or `face_valence` NaN) never enters the baseline.
 - Order within a frame (as in `FaceCueTracker.update`): accrue visible time → append the sample (or freeze) →
   read the baseline → blink detector and relative values. While calibrating, the baseline used for a frame
