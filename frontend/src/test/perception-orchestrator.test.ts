@@ -574,6 +574,31 @@ describe("createPerception orchestration", () => {
     warn.mockRestore();
   });
 
+  it("video stopped on a lost WebGL context while the audio still loads is not reported live when start() finishes", async () => {
+    const { deps, state } = harness();
+    let loaded: (() => void) | null = null;
+    const models = deps.audioModels!;
+    deps.audioModels = (b) => new Promise((r) => (loaded = () => r(models(b))));
+    const ok = await deps.visionBackend!({} as never);
+    deps.visionBackend = async () => ({
+      ...ok,
+      process: async (bitmap) => {
+        bitmap.close();
+        throw new Error("WebGL context lost: restart the camera");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const p = createPerception({ fps: 20 }, deps);
+    const started = p.start(stream(track("video"), track("audio")));
+    await vi.waitFor(() => expect(state.backendClosed).toBe(1)); // video stopped while YAMNet still loads
+    loaded!();
+    await started;
+    expect(p.status()).toMatchObject({ phase: "running", camera: false, mic: true });
+    expect(p.status().degraded).toContain("video stopped: WebGL context lost (restart the camera)");
+    p.stop();
+    warn.mockRestore();
+  });
+
   it("fps counts observations: a backend failing on every frame decays toward 0 instead of reading the step rate", async () => {
     const { deps } = harness();
     let failing = false;

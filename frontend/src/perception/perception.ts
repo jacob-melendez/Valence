@@ -163,8 +163,10 @@ class BrowserPerception implements Perception {
     const failures: string[] = [];
     if (video.status === "rejected") failures.push(`camera: ${message(video.reason)}`);
     if (audio.status === "rejected") failures.push(`microphone: ${message(audio.reason)}`);
-    // A track can end while the other side still loads (its loop has already reported it): don't call it live.
-    const camera = video.status === "fulfilled" && video.value && vTrack?.readyState === "live";
+    // A track can end, or video stop on a lost WebGL context, while the other side still loads (its loop has already
+    // reported it): don't call it live.
+    const camera = video.status === "fulfilled" && video.value && vTrack?.readyState === "live"
+      && !this.st.degraded.includes(CONTEXT_LOST);
     const mic = audio.status === "fulfilled" && audio.value && aTrack?.readyState === "live";
     if (!camera && !mic) {
       this.teardown();
