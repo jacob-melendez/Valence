@@ -101,11 +101,17 @@ export class VideoFrames {
     // Not awaited: play() settles only once a frame has arrived, so a camera that never sends one would hang here
     // instead of reaching the deadline below.
     void video.play().catch(() => undefined);
-    const deadline = performance.now() + timeoutMs;
+    // Only visible time counts: a phone sends no frames to a page in the background, and a page frozen there comes
+    // back with its clock far ahead (each wait counts at most 250 ms).
+    let waited = 0;
+    let last = performance.now();
     while (video.readyState < 2 || !video.videoWidth) {
       if (this.video !== video) throw new Error("the camera was closed");
-      if (performance.now() > deadline) throw new Error("the camera delivered no frames");
       if (this.track.readyState === "ended") throw new Error("the camera track ended");
+      const now = performance.now();
+      if (!(typeof document !== "undefined" && document.hidden)) waited += Math.min(now - last, 250);
+      last = now;
+      if (waited > timeoutMs) throw new Error("the camera delivered no frames");
       await new Promise((r) => setTimeout(r, 50));
     }
   }

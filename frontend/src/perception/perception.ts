@@ -67,6 +67,18 @@ const CAMERA_MUTED = "camera muted: video paused";
 const VIDEO_FAILING = "video step failing";
 const MIC_MUTED = "microphone muted";
 const AUDIO_SUSPENDED = "audio waits for a click on the page";
+const AUDIO_FAILING = "audio step failing";
+
+/** Runs each release; one that throws (a broken WASM module) must not skip the others or what follows. */
+function release(...fns: (() => void)[]): void {
+  for (const fn of fns) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn("[perception] cleanup failed", e);
+    }
+  }
+}
 
 class BrowserPerception implements Perception {
   private readonly obsHub = new Hub<Obs>();
@@ -224,8 +236,7 @@ class BrowserPerception implements Perception {
     try {
       await frames.open();
     } catch (e) {
-      closeFrames(); // no frames: release the camera element and the models now, not at stop()
-      closeBackend();
+      release(closeFrames, closeBackend); // no frames: release the camera element and the models now, not at stop()
       throw e;
     }
     if (gen !== this.gen) return false; // stopped while the camera opened (teardown released both)
@@ -254,8 +265,7 @@ class BrowserPerception implements Perception {
         // Ended (with or without its event, e.g. stopped by the page): report it and release the camera element and
         // the models now, not at stop(). No step is in flight here, so the worker can close.
         onEnded();
-        closeFrames();
-        closeBackend();
+        release(closeFrames, closeBackend);
         return;
       }
       // A muted camera delivers no new frames (Chromium after ~25 missed frames, Safari when another tab or app takes
@@ -344,44 +354,48 @@ class BrowserPerception implements Perception {
     }
     const closeModels = this.onTeardown(() => models.close());
     const pipeline = new AudioPipeline(models, { splOffsetDb: this.opts.splOffsetDb ?? 94 });
+    let suspended = false;
     const onState = (state: string) => {
       if (gen !== this.gen || state === "closed") return;
-      const running = state === "running";
-      if (!running) this.dropBlock(); // the next chunks come after a gap: don't join them to audio from before it
-      this.degrade(AUDIO_SUSPENDED, !running);
+      suspended = state !== "running";
+      if (suspended) this.dropBlock(); // the next chunks come after a gap: don't join them to audio from before it
+      this.degrade(AUDIO_SUSPENDED, suspended);
+    };
+    // While suspended no chunk is produced, but one posted just before the suspension can still arrive after it:
+    // purge it rather than start a block. A chunk from a running context means it resumed.
+    const paused = () => {
+      if (suspended && tap.state === "running") onState("running");
+      return suspended;
     };
     const tap = this.deps.micTap(track, join(base, "pcm-tap.worklet.js"),
-      (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen, cnt, track, () => onEnded()), onState);
+      (chunk, sr) => this.onChunk(chunk, sr, pipeline, gen, cnt, track, () => onEnded(), paused), onState);
     const closeTap = this.onTeardown(() => tap.close());
     let ended = false;
     const onEnded = () => {
-      // An ended track still feeds the worklet (silence): close the tap, release YAMNet and drop the partial block
-      // rather than report a silent room.
+      // An ended track still feeds the worklet (silence): drop the partial block rather than report a silent room,
+      // then close the tap and release YAMNet.
       if (ended) return;
       ended = true;
-      closeTap();
-      closeModels();
       this.dropBlock();
-      for (const reason of [AUDIO_SUSPENDED, MIC_MUTED]) this.degrade(reason, false);
+      for (const reason of [AUDIO_SUSPENDED, MIC_MUTED, AUDIO_FAILING]) this.degrade(reason, false);
       this.degrade("microphone stopped", true);
       this.setStatus({ mic: false });
+      release(closeTap, closeModels);
     };
     try {
       await tap.open();
     } catch (e) {
-      closeTap(); // release the AudioContext and YAMNet now, not at stop()
-      closeModels();
+      release(closeTap, closeModels); // release the AudioContext and YAMNet now, not at stop()
       throw e;
     }
     if (gen !== this.gen) return false; // stopped while the tap opened (teardown closed it)
     if (track.readyState !== "live") {
       // Ended while the models or the tap were loading (its event came before anyone listened), as the camera's
       // open() reports it.
-      closeTap();
-      closeModels();
+      release(closeTap, closeModels);
       throw new Error("the microphone track ended");
     }
-    if (tap.state === "suspended") this.degrade(AUDIO_SUSPENDED, true);
+    if (tap.state === "suspended") onState("suspended");
     track.addEventListener("ended", onEnded);
     this.cleanups.push(() => track.removeEventListener("ended", onEnded));
     return true;
@@ -390,7 +404,7 @@ class BrowserPerception implements Perception {
   /** One ~100 ms raw chunk: copy into the 1 s block, zero-fill it; a full block is analysed and zero-filled too. */
   private onChunk(
     chunk: Float32Array, sampleRate: number, pipeline: AudioPipeline, gen: number, cnt: PerceptionCounters,
-    track: MediaStreamTrack, onEnded: () => void,
+    track: MediaStreamTrack, onEnded: () => void, paused: () => boolean,
   ): void {
     cnt.live_raw_buffers += 1;
     try {
@@ -403,11 +417,10 @@ class BrowserPerception implements Perception {
       // silent room, and start the next block afresh once it unmutes.
       const muted = track.muted === true;
       this.degrade(MIC_MUTED, muted);
-      if (muted) {
+      if (muted || paused()) {
         this.dropBlock();
         return;
       }
-      this.degrade(AUDIO_SUSPENDED, false);
       if (!this.block || this.block.length !== sampleRate) {
         this.block?.fill(0);
         this.block = new Float32Array(sampleRate);
@@ -442,10 +455,10 @@ class BrowserPerception implements Perception {
     try {
       obs = pipeline.process(at16k, t, wall, this.audioSeq);
       this.audioSeq += 1;
-      this.degrade("audio step failing", false);
+      this.degrade(AUDIO_FAILING, false);
     } catch (e) {
       console.error("[perception] audio step failed", e);
-      this.degrade("audio step failing", true);
+      this.degrade(AUDIO_FAILING, true);
     } finally {
       at16k.fill(0);
       cnt.derived_purged += 1;

@@ -33,6 +33,7 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
   };
   let onChunk: ((chunk: Float32Array, sr: number) => void) | null = null;
   let onState: ((s: string) => void) | null = null;
+  let tapState: AudioContextState | "interrupted" = "running";
   const backend: VisionBackend = {
     where: "main", delegate: "CPU",
     async process(bitmap, t, wall, seq, decoded) {
@@ -68,7 +69,13 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
     micTap: (_t, _url, cb, st) => {
       onChunk = cb;
       onState = st;
-      return { open: async () => {}, close: () => void state.tapClosed++, state: "running" as const };
+      return {
+        open: async () => {},
+        close: () => void state.tapClosed++,
+        get state() {
+          return tapState as AudioContextState;
+        },
+      };
     },
     hidden: () => state.hidden,
   };
@@ -80,7 +87,10 @@ function harness(opts: { visionFails?: boolean; audioFails?: boolean } = {}) {
       return chunk;
     });
   /** The AudioContext changes state after open() (an iOS interruption, a resume). */
-  const audioState = (s: string) => onState!(s);
+  const audioState = (s: AudioContextState | "interrupted") => {
+    tapState = s;
+    onState!(s);
+  };
   return { deps, state, pushAudio, audioState };
 }
 
@@ -386,6 +396,9 @@ describe("createPerception orchestration", () => {
     pushAudio(5);
     audioState("interrupted");
     expect(p.status().degraded).toContain("audio waits for a click on the page");
+    const stale = pushAudio(1); // posted just before the interruption, delivered after it
+    expect(stale[0]!.every((x) => x === 0)).toBe(true);
+    expect(p.status().degraded).toContain("audio waits for a click on the page");
     audioState("running");
     expect(p.status().degraded).not.toContain("audio waits for a click on the page");
     pushAudio(9);
@@ -417,6 +430,34 @@ describe("createPerception orchestration", () => {
     expect([state.tapClosed, state.modelsClosed]).toEqual([1, 1]);
     p.stop();
     expect([state.backendClosed, state.tapClosed, state.modelsClosed]).toEqual([1, 1, 1]); // once each
+  });
+
+  it("a mic that ends is reported and its partial block wiped even when releasing YAMNet throws", async () => {
+    const { deps, pushAudio } = harness();
+    deps.audioModels = async () => ({
+      classify: () => {
+        throw new Error("wasm abort");
+      },
+      close: () => {
+        throw new Error("wasm abort");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const a = track("audio");
+    const p = createPerception({}, deps);
+    await p.start(stream(a));
+    pushAudio(10); // one block: YAMNet throws
+    expect(p.status().degraded).toContain("audio step failing");
+    pushAudio(5);
+    expect(() => a.end()).not.toThrow();
+    expect(p.status()).toMatchObject({ mic: false });
+    expect(p.status().degraded).toContain("microphone stopped");
+    expect(p.status().degraded).not.toContain("audio step failing");
+    p.stop();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
   });
 
   it("a mic that ends while YAMNet loads is reported when loading finishes (its 'ended' event came too early)", async () => {
@@ -497,6 +538,18 @@ describe("VideoFrames (fake <video>)", () => {
   it("a camera that never sends a frame fails after the timeout instead of hanging on play()", async () => {
     fakeMedia();
     await expect(new VideoFrames(cam()).open(200)).rejects.toThrow("the camera delivered no frames");
+  });
+
+  it("time in the background does not count toward the timeout (a phone sends no frames there)", async () => {
+    fakeMedia();
+    let hidden = true;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    let failed: unknown = null;
+    void new VideoFrames(cam()).open(200).catch((e) => (failed = e));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(failed).toBeNull();
+    hidden = false;
+    await vi.waitFor(() => expect(String(failed)).toMatch(/the camera delivered no frames/), { timeout: 2000 });
   });
 
   it("close() while waiting for the first frame ends the wait at once", async () => {
@@ -618,6 +671,35 @@ describe("MicTap (fake Web Audio)", () => {
     tap.close();
     expect(ctx.onstatechange).toBeNull();
     expect(states).toEqual(["interrupted", "running"]); // closing is not reported
+  });
+});
+
+describe("loadAudioModels (fake MediaPipe)", () => {
+  afterEach(() => {
+    vi.doUnmock("@mediapipe/tasks-audio");
+    vi.resetModules();
+  });
+
+  it("close() overwrites MediaPipe's reused input buffer with one silent window before closing", async () => {
+    const calls: string[] = [];
+    vi.resetModules();
+    vi.doMock("@mediapipe/tasks-audio", () => ({
+      FilesetResolver: { forAudioTasks: async () => ({}) },
+      AudioClassifier: {
+        createFromOptions: async () => ({
+          classify: (s: Float32Array, sr: number) => {
+            calls.push(`classify ${s.length} ${sr} ${s.every((x) => x === 0) ? "silent" : "audio"}`);
+            return [];
+          },
+          close: () => void calls.push("close"),
+        }),
+      },
+    }));
+    const { loadAudioModels } = await import("@/perception/models");
+    const models = await loadAudioModels("/mediapipe/");
+    models.classify(Float32Array.from({ length: 15600 }, () => 0.1), 16000);
+    models.close();
+    expect(calls).toEqual(["classify 15600 16000 audio", "classify 15600 16000 silent", "close"]);
   });
 });
 
