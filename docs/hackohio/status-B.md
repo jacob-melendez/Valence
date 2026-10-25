@@ -202,3 +202,12 @@ Next:
 Next:
 - Check-ins at 02:50, 04:20, 05:50 and 07:20.
 - Final entry after the 08:00 freeze.
+
+### 03:29 ET — Full suite green on the current head; still no taps
+
+- `pytest` on `e276b25`: 706 passed, 41 skipped (the skips are Mac-only perception and narrator dependencies).
+- No self-report taps or new recordings. Perception changes since 01:21 (start/stop, lost WebGL context, main-thread
+  pacing) leave the emotion contract untouched.
+- Model and artifacts unchanged (`emotion-v1@006a8d7d`).
+
+Next: check-ins at 04:55, 06:25 and 07:40, then the final entry after the 08:00 freeze.
