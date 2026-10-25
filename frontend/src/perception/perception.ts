@@ -296,6 +296,7 @@ class BrowserPerception implements Perception {
         paused = false;
         nextT = performance.now(); // resume on the beat, not with a step to catch up
       }
+      const stepStart = performance.now();
       let bitmap: ImageBitmap | null = null;
       try {
         bitmap = await frames.grab();
@@ -316,6 +317,15 @@ class BrowserPerception implements Perception {
       if (delay < 0) {
         nextT = performance.now(); // behind: don't accumulate debt
         delay = 0;
+      }
+      // On the page's thread (no worker) a step blocks the UI for its whole duration: leave it at least half as long
+      // again, so a slow device stays usable at a lower rate (measured at 4x CPU throttling: busy 52 of 60 s without).
+      if (backend.where === "main") {
+        const rest = (performance.now() - stepStart) / 2;
+        if (delay < rest) {
+          delay = rest;
+          nextT = performance.now() + rest;
+        }
       }
       schedule(delay);
     };

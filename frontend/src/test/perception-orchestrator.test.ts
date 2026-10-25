@@ -599,6 +599,31 @@ describe("createPerception orchestration", () => {
     warn.mockRestore();
   });
 
+  it("on the page's thread a slow step leaves the UI at least half as long again; a worker is not held back", async () => {
+    const gaps = async (where: "main" | "worker") => {
+      const { deps } = harness();
+      const starts: number[] = [];
+      const ok = await deps.visionBackend!({} as never);
+      deps.visionBackend = async () => ({
+        ...ok, where,
+        process: async (bitmap, ...rest) => {
+          starts.push(performance.now());
+          const until = performance.now() + 40; // a 40 ms step that blocks this thread (MediaPipe inline)
+          while (performance.now() < until) { /* busy */ }
+          return ok.process(bitmap, ...rest);
+        },
+      });
+      const p = createPerception({ fps: 20 }, deps); // 50 ms period
+      await p.start(stream(track("video")));
+      await vi.waitFor(() => expect(starts.length).toBeGreaterThanOrEqual(6), { timeout: 3000 });
+      p.stop();
+      const d = starts.slice(1).map((x, i) => x - starts[i]!);
+      return d.slice(1).reduce((a, b) => a + b, 0) / (d.length - 1); // mean interval after the first
+    };
+    expect(await gaps("main")).toBeGreaterThanOrEqual(58); // 40 ms step + >= 20 ms rest
+    expect(await gaps("worker")).toBeLessThan(58); // the fixed 50 ms period
+  });
+
   it("fps counts observations: a backend failing on every frame decays toward 0 instead of reading the step rate", async () => {
     const { deps } = harness();
     let failing = false;

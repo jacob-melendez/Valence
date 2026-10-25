@@ -107,7 +107,9 @@ getUserMedia ─┬─ video track ─ <video> ─ ImageBitmap per step (10 Hz, 
 - **Main-thread cost.** The page's thread only grabs frames, hands them to the worker and runs YAMNet once a second.
   The biggest part is `createImageBitmap(video)`: ~5.5 ms per 1280x720 frame in headless Chromium (software GPU),
   against ~0.1 ms for `new VideoFrame(video)`, which MediaPipe 0.10.35 also accepts. Untested on Safari and Firefox,
-  so not switched yet (`e2e/run.mjs --cpu-throttle 4 --profile` shows it).
+  so not switched yet (`e2e/run.mjs --cpu-throttle 4 --profile` shows it). Without a worker (Safari before 17), each
+  step blocks the page for its whole duration, so the loop rests at least half a step after each one: at 4x CPU
+  throttling the page was busy 52 of 60 s at 1.6 fps, and 37.5 of 60 s at 1.1 fps with the rest.
 - **Not included.** No compliment keywords, no lux or SPL calibration (the uncalibrated defaults, as on a fresh
   desktop install).
 
