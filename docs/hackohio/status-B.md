@@ -159,3 +159,21 @@ Next:
 
 Blockers:
 - Real labeled data needs a person, or allowed hosts for a public dataset.
+
+### 21:12 ET — Self-report path ready end to end
+
+Done:
+- **One command from taps to model card** (`474628f`): `python -m valence.eval.self_report <taps.jsonl>` writes
+  `artifacts/emotion/self_report.json` and `figs/self_report.png`, then re-renders model card §9.6. This matches
+  the user's finish-line checklist (`docs/HACKOHIO_FINISH.md` step 6). The card no longer needs the training
+  corpus (its corpus-derived stats are saved per model id in `card_stats.json`). It labels fewer than 20 taps "a
+  smoke test, not an evaluation". Tested end to end on a 6-tap file in the console's format, then reverted.
+- **Spec wording fix from Cloud A** (`b0c10c5`): taps stay in the tab until Clear or the tab is closed (Download
+  keeps them), and the console prompts only after warm-up.
+
+No new data in the repo. Numbers unchanged (`emotion-v1@006a8d7d`).
+
+Next: run the evaluator on any taps committed under `data/self_report/`. Otherwise status only until the 08:00
+freeze.
+
+Blockers: none on this side. Real data needs a person.
