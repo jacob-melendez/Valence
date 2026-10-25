@@ -4,6 +4,29 @@ Owner: Cloud C. Scope: `frontend/src/perception/**`, `frontend/src/test/percepti
 `frontend/e2e/**`, `scripts/export_perception_fixtures.py`, the MediaPipe dependencies. Times are America/New_York.
 Newest entry last.
 
+## Read first (state at 03:45, Oct 25)
+
+- **What works.** The browser perception (MediaPipe Tasks Web 0.10.35, self-hosted) produces the Python edge's
+  VideoObs and AudioObs with parity-tested ports. It runs in a Web Worker on the CPU delegate and feeds the console
+  end to end. Nothing leaves the origin, and it runs under the strict CSP. Frames and audio are purged and counted.
+- **Gates (03:45).**
+  - 944 frontend tests pass.
+  - `e2e/run-all.mjs` passes seven scenarios (one, two, roll ±15°, portrait 720×1280, camera denied, mic denied).
+  - A 40-minute soak showed no leak.
+  - A fresh clone builds and passes the deploy check.
+- **Robustness covered.** Missing, denied, muted or ended camera or mic; a hidden tab; iOS audio interruptions; a
+  lost WebGL context; Safari before 17 (the page's thread); slow devices.
+- **Needs a real camera** (`frontend/e2e/REAL_CAMERA.md`, ~15 min after deploy):
+  - fps on a real Mac and phone;
+  - slump and keyboard-gaze with BlazePose;
+  - GPU against CPU;
+  - Safari's camera hand-off between tabs.
+- **Known limits.**
+  - The first 20 s on camera are the face and posture calibration: sit neutral.
+  - Blink counts undercount below ~15 Hz.
+  - A camera that stalls without being muted repeats its last frame until the browser mutes it.
+  - On the page's thread (Safari before 17), video is slower and the UI is heavier.
+
 ## Decisions
 
 | Decision | Why |
