@@ -30,6 +30,11 @@ From a laptop instead: `cd frontend && npm install && npm run build && npx wrang
 - **`index.html`:** the prerendered SPA shell. `vite.config.ts` uses SPA mode with `nitro: false`.
 - **`assets/`:** the hashed JS and CSS.
 - **`fonts/`:** self-hosted font files (see `public/fonts/README.md`).
+- **`models/`:** the engine's model files, copied from `artifacts/` by `scripts/model-files.mjs` at the end of the
+  build: the served M2/M0 models for 4 states (`core/`) and 6 states (`all/`), and the emotion-v1 models and the tour
+  (`emotion/`).
+- **`mediapipe/`:** MediaPipe's WASM and models, self-hosted. The `prebuild` step (`scripts/mediapipe-assets.mjs`)
+  writes them to `public/mediapipe/`, which is gitignored.
 - **`_headers`:** written by `scripts/security-headers.mjs` at the end of the build, and applied by Cloudflare to
   every response:
 
@@ -40,6 +45,7 @@ From a laptop instead: `cd frontend && npm install && npm run build && npx wrang
   | `Referrer-Policy` | `no-referrer` |
   | `X-Content-Type-Options` | `nosniff` |
   | `Cross-Origin-Opener-Policy` | `same-origin` |
+  | `Cache-Control` | `/assets/*`: `public, max-age=31536000, immutable`; `/mediapipe/*` and `/models/*`: `no-cache` (revalidated on each load) |
 
 ## Checking a build the way Cloudflare serves it
 
@@ -53,8 +59,10 @@ node scripts/check-static.mjs --hostname valence-web.example --path "/?utm_sourc
 The check serves `dist/client` with the `_headers` rules applied and opens the page in headless Chromium. It fails on:
 
 - any request to another origin;
-- any CSP violation;
-- any page error.
+- any CSP violation (in the page, a Worker or a worklet), or a CSP that was not applied;
+- any page error, or the console's red error box (`--allow-errors` accepts it);
+- an `--expect` text missing from the page;
+- with `--forbid-media`, any camera or microphone request (a `getUserMedia` call).
 
 To exercise the in-browser source with a fake camera and microphone:
 `node scripts/check-static.mjs --fake-media --path "/?source=browser"`.

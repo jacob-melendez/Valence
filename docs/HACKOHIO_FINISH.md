@@ -17,11 +17,12 @@ tag push. Do them in this order, and stop wherever time runs out: each step stan
 
 Follow [`docs/DEPLOY_WEB.md`](DEPLOY_WEB.md):
 
-1. Cloudflare dashboard → Workers & Pages → Import a repository → `jacob-melendez/Valence`.
+1. Cloudflare dashboard → Workers & Pages → Create → Import a repository → `jacob-melendez/Valence`.
 2. Use these settings:
 
    | Setting | Value |
    |---|---|
+   | Project name | `valence-web` (must match `name` in `frontend/wrangler.jsonc`) |
    | Production branch | `claude/happy-ride-7w3ng3` |
    | Root directory | `frontend` |
    | Build | `npm install && npm run build` |
@@ -62,13 +63,26 @@ The pitch's numbers are re-checked against the final log at 08:00 ET.
 
 ## 5. Push the final tag (1 min, from the Mac, before 10:00 ET)
 
+Cloud A fills the log's per-commit table (`make hacklog`) at the 08:00 freeze and again at 09:40 ET. If a commit lands
+after that, or no cloud session is running, refresh it yourself first, from the repo root:
+
+```
+git pull origin claude/happy-ride-7w3ng3
+make hacklog START=2026-10-24T10:00-04:00 END=2026-10-25T10:00-04:00
+git add docs/HACKOHIO_LOG.md && git commit -m "[docs] Log: generated table at the end of the event"
+git push origin claude/happy-ride-7w3ng3
+```
+
+(`make hacklog` uses `.venv/bin/python`; add `PY=python3` if you have no venv.) Then tag:
+
 ```
 git fetch origin claude/happy-ride-7w3ng3
 git tag hackohio-2026-final origin/claude/happy-ride-7w3ng3
 git push origin hackohio-2026-final
 ```
 
-`git diff hackohio-2026-baseline..hackohio-2026-final` then shows exactly the event's work.
+`git diff hackohio-2026-baseline..hackohio-2026-final` then shows the event's work, plus one small pre-event commit
+(`aff901d`, Oct 23) that pins the baseline hash in the log tooling.
 
 ## 6. Optional: a self-report session (10 min)
 

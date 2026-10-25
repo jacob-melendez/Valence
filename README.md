@@ -29,7 +29,7 @@ At the event, the whole engine moved into the browser.
   features and probabilities within 1–2 ulp.
 - **A new 10-state emotion map** on a valence–arousal plane, with a self-report capture for real-data evaluation.
 - **A sealed static site.** The Content-Security-Policy allows `connect-src 'self'` only, so the page cannot send
-  camera or microphone data anywhere.
+  camera or microphone data to any other origin.
 
 All model scores come from simulated data.
 

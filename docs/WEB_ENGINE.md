@@ -13,7 +13,7 @@ Valence Web runs the whole Valence pipeline in a web page:
 9. the emotion-v1 map.
 
 Frames and audio are processed in memory and dropped, and the deployed page's CSP (`connect-src 'self'`) forbids
-sending data anywhere. Built during Hack OHI/O 2026. The work log is `docs/HACKOHIO_LOG.md`.
+the page from sending data to any other origin. Built during Hack OHI/O 2026. The work log is `docs/HACKOHIO_LOG.md`.
 
 | Link | What it does |
 |---|---|
@@ -38,15 +38,17 @@ getUserMedia (camera 16:9, raw mic)                    lib/browser-source.ts   (
 
 - **Python is the reference.** Every engine module is a port of the Python module it names in its JSDoc. Golden
   fixtures exported from the Python engine check the ports in vitest.
-- **Messages.** The console's panels are unchanged: the in-browser source emits the same messages the desktop
-  backend sends over its WebSocket (`docs/API.md` §3).
+- **Messages.** The in-browser source emits the messages the desktop backend sends over its WebSocket
+  (`docs/API.md` §3), so the console's panels read the same data. Browser mode adds a few `status` fields (face rate,
+  video backend, CSP seal, loading, audit chain) and some browser-only panel content: the welcome card, the audit-chain
+  line with **Download audit log**, a governance note, and no Transcripts tile.
 - **Models.** The model files are served at `/models/` straight from `artifacts/` (`scripts/model-files.mjs`).
   MediaPipe's WASM and models are self-hosted at `/mediapipe/` (Cloud C's prebuild).
 
 ## Parity with the Python engine
 
 The figures below are the largest absolute error against Python, from the vitest suite (12 engine test files, about
-400 tests; 860 frontend tests in total).
+400 tests; 944 frontend tests in total).
 
 | Quantity | Max abs error | Notes |
 |---|---|---|
@@ -109,4 +111,4 @@ Checked on a 40-tick export from the TypeScript engine:
 - **No speech recognition.** The browser has no speech recognizer, so the compliments count stays 0. The narration
   is always the template; the LLM narrator stays desktop-only.
 - **Simulated training data.** The models are trained on simulated sessions. Real-camera checks are listed in
-  `frontend/e2e/README.md` (Cloud C).
+  `frontend/e2e/REAL_CAMERA.md` (Cloud C).

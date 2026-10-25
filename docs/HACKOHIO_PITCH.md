@@ -6,8 +6,9 @@ Every model number is **on simulated data**, so say so whenever one is shown.
 
 ## One line
 
-**Valence Web:** context-aware emotion understanding that runs entirely in your browser. It reads the room, the body
-and the face over 15 minutes, explains every call, and is not allowed to send a single byte off your device.
+**Valence Web:** context-aware emotion signals, computed entirely in your browser. It reads the room, the body and the
+face over 15 minutes and explains every call. It uploads nothing, and its CSP forbids it from connecting anywhere but its
+own origin.
 
 ## Continuation disclosure (put this first in the submission)
 
@@ -64,7 +65,7 @@ anything, and without trusting us with their camera.
 **What it does.**
 - Valence Web runs the whole pipeline in a browser tab:
   1. camera and microphone;
-  2. MediaPipe face, pose, hand and sound models in a Web Worker;
+  2. MediaPipe face, pose and hand models in a Web Worker, and its YAMNet sound model on the page's thread;
   3. a 15-minute rolling window of room, body and face features;
   4. LightGBM models with TreeSHAP explanations;
   5. a face-only shadow model whose call context can overrule (the "mask override");
@@ -93,7 +94,8 @@ self-hosted.
 - **A telemetry-free MediaPipe.** Every MediaPipe Tasks Web 1.x build posts usage logs to Google, so we pinned
   0.10.35, which has no external URLs.
 - **BlazePose jitter.** Compared side by side with the desktop's YOLO pose on identical frames, BlazePose read about
-  7 times more motion on a still scene. We added a One Euro filter and compute motion from the shoulders only.
+  18 times more motion on a still scene (0.46 against 0.026 shoulder-widths/s). We added a One Euro filter and compute
+  motion from the shoulders only.
 
 **Accomplishments.**
 - **Parity with Python:**
