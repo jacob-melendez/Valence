@@ -405,6 +405,16 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
 - `status-C.md` now opens with a "Read first" summary: what works, the gates, what needs a real camera, and known
   limits.
 
+### 06:15 — Quiet before the freeze
+
+- **No code changes since 04:15.** The 04:15 gate still holds: 944 frontend tests and the build pass.
+- **Cloud B:** `status-B.md` now opens with a "Read first" summary. It covers what exists, the numbers (simulated
+  data only), the real data so far, the main risks, and the one-command self-report path.
+- **Cloud C:** its 05:45 check-in is healthy. All seven end-to-end scenarios pass with 0 off-origin requests and
+  0 CSP violations. fps came in a little lower (3.7–5.8), which C attributes to load on the shared container; no
+  perception code changed.
+- Freeze at 08:00 ET.
+
 ## Generated from git
 
 <!-- hacklog:start -->
