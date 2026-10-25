@@ -257,3 +257,39 @@ Chromium process's RSS sampled every 30 s.
 - **Now.** A bug hunt over the module, with one adversarial verifier per finding, across six areas: lifecycle,
   privacy and purge counts, the audio path at non-48 kHz rates, video parity, Safari/Firefox compatibility, and the
   contract and its use in the console. Fixes for confirmed findings land as separate commits.
+
+### 21:45 — bug hunt fixed, browser support
+
+- **Health.** No fixture drift. 928 frontend tests pass and the build passes. `e2e/run-all.mjs`: all six scenarios
+  pass at 4.3–7.6 fps (worker/CPU), with 0 off-origin requests and 0 CSP violations; both cross checks hold.
+- **Bug hunt.** Six finders covered the module, and each finding then had a verifier try to refute it. 14 of 16
+  findings held, which overlap to 11 issues:
+  - **Fixed in ad7082e:**
+    - a camera that never sends a frame hung `start()`, because `play()` was awaited;
+    - muted tracks: Safari's other-tab capture and Chromium's stall mute gave frozen frames or a "silent room";
+    - tracks ending without a seen event, which left status live and models loaded;
+    - stale video status after the camera ended;
+    - YAMNet's last window lingering in MediaPipe's WASM heap;
+    - iOS audio interruptions never noticed;
+    - the pose cap applied before the height filter, so 3 small bystanders could hide a participant;
+    - the worker dying on iOS Chrome/Firefox (MediaPipe's user-agent check calls `document` in the worker);
+    - fps counting failed steps.
+  - **Measured, kept as is:** the person box reaching BlazePose's predicted legs (Decisions table).
+  - **Cloud A's code:** governance counters went back to 0 after Pause → Start. Cloud A fixed it in e403179.
+- **Review of those fixes** (three lenses, plus verifiers): 5 findings held, which come to 4 issues, all fixed in
+  c34942f:
+  - the 10 s no-frame deadline counted time in the background, so a phone switching apps while the models load lost
+    the camera;
+  - a chunk posted just before an audio suspension cleared the warning;
+  - releases that throw skipped the mic-ended status;
+  - "audio step failing" outlived the mic.
+- **Browser support for camera mode.** Measured on headless Chromium only; the rest comes from the code and the
+  browsers' published support:
+  - **Chrome/Edge desktop and Android:** worker, CPU delegate (tested).
+  - **Safari 17+ on macOS and iOS:** worker. MediaPipe needs WebGL in an OffscreenCanvas there, which Safari has had
+    since 17. AudioWorklet and `wasm-unsafe-eval` are supported.
+  - **iOS Chrome/Firefox (WebKit):** worker since ad7082e; before that they fell back to the main thread.
+  - **Safari 16.4–16.x and Firefox < 114** (no WebGL in a worker, or no module workers): the worker fails and video
+    runs on the page's thread (`video_backend` reads `main/CPU`). It works, but the UI is slower.
+  - **Not testable here:** a real Safari, Firefox or phone. `frontend/e2e/REAL_CAMERA.md` steps 1 and 5.5 cover it
+    after deploy.
