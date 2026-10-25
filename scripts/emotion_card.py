@@ -50,6 +50,20 @@ def sci(c: dict, key: str) -> str:
     return f"{c[key]['point']:+.3f} ({lo:+.3f} to {hi:+.3f})"
 
 
+def cached_corpus_stats(pred: EmotionPredictor) -> dict:
+    """corpus_stats, saved in artifacts/emotion/card_stats.json per model id, so the card renders without the corpus."""
+    path = ART / "card_stats.json"
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if saved.get("model_id") == pred.model_id:
+            return saved["stats"]
+    st = corpus_stats(pred)
+    st = {**st, "pos": {k: list(v) for k, v in st["pos"].items()},
+          "share": {k: float(v) for k, v in st["share"].items()}}
+    path.write_text(json.dumps({"model_id": pred.model_id, "stats": st}, indent=1))
+    return st
+
+
 def corpus_stats(pred: EmotionPredictor) -> dict:
     t = pred.meta["training"]
     X, m = load_corpus(t["sessions"], t["seed"], t["noise_scale"], Path.home() / ".cache" / "valence-emotion")
@@ -85,7 +99,10 @@ def self_report_block(model_id: str) -> list[str]:
         return [f"  **Status:** `self_report.json` was scored with `{r.get('model')}`, not this model: re-run the evaluator."]
     o = r["overall"]
     people = r["per_person"]
-    lines = [f"  **Real taps: {r['n_taps']} from {len(people)} person-session(s)** ({r.get('n_warm_taps', '?')} with ≥ 1 min of",
+    small = r["n_taps"] < 20
+    lines = [f"  **Real taps: {r['n_taps']} from {len(people)} person-session(s)**"
+             + (" — **a smoke test, not an evaluation** (fewer than 20 taps)" if small else "")
+             + f" ({r.get('n_warm_taps', '?')} with ≥ 1 min of",
              "  window; `self_report.json`" + (", `figs/self_report.png`" if (ART / "figs" / "self_report.png").exists() else "")
              + "). Self-reports are one person's own reading of a 2-D grid, not ground truth:", "",
              "  | Predictor | Valence MAE / CCC | Arousal MAE / CCC | Quadrant (n) |", "  |---|---|---|---|"]
@@ -149,7 +166,7 @@ def render() -> str:
     for name, d in (("metrics", met), ("robustness", rob), ("ci", cis), ("real_captures", real), ("golden", golden)):
         got = d.get("model_id", d.get("model"))
         assert got == mid, f"{name}.json is for {got}, meta.json for {mid}: regenerate it"
-    st = corpus_stats(pred)
+    st = cached_corpus_stats(pred)
     tr = meta["training"]
     sz = tr["sizes"]
     full, face, ctx = met["full"], met["face_only"], met["context_only"]

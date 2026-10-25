@@ -222,7 +222,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="*")
     ap.add_argument("--models", default="artifacts/emotion")
-    ap.add_argument("--out")
+    ap.add_argument("--out", help="report path (default for real taps: <models>/self_report.json, which the model "
+                                  "card renders)")
+    ap.add_argument("--no-card", action="store_true", help="do not re-render the model card's emotion section")
     ap.add_argument("--synthetic", type=int, help="write a simulator fixture with this many sessions first")
     ap.add_argument("--write", help="where --synthetic writes its JSONL")
     ap.add_argument("--seed", type=int, default=99)
@@ -236,12 +238,24 @@ def main() -> None:
     predictor = EmotionPredictor(Path(args.models))
     taps, X, problems = load_taps(files, predictor.cols)
     report = {"files": [str(f) for f in files], **evaluate(taps, X, predictor), "problems": problems[:50]}
-    if args.figure and taps:
-        figure(taps, X, predictor, Path(args.figure))
-    text = json.dumps(report, indent=1)
-    if args.out:
-        Path(args.out).write_text(text)
+    real = bool(taps) and not args.synthetic
+    out = Path(args.out) if args.out else (Path(args.models) / "self_report.json" if real else None)
+    fig = Path(args.figure) if args.figure else (Path(args.models) / "figs" / "self_report.png" if real else None)
+    if fig and taps:
+        fig.parent.mkdir(parents=True, exist_ok=True)
+        figure(taps, X, predictor, fig)
+    from valence.models.emotion import clean_json
+
+    text = json.dumps(clean_json(report), indent=1, allow_nan=False)
+    if out:
+        out.write_text(text)
     print(text)
+    card = Path(__file__).resolve().parents[2] / "scripts" / "emotion_card.py"
+    if real and out == Path(args.models) / "self_report.json" and not args.no_card and card.exists():
+        import subprocess
+        import sys
+
+        subprocess.run([sys.executable, str(card)], check=False)  # docs/MODEL_CARD.md section 9.6 shows the taps
 
 
 if __name__ == "__main__":
