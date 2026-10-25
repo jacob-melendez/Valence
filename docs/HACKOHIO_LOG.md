@@ -356,6 +356,32 @@ review stages. **326 engine tests pass** against fixtures exported from the Pyth
   - a blank-frame scrub that could not reach the face crop was replaced by the heap wipe.
   - Test gaps closed.
 
+### 02:15 — Round 3 fixes; soak holds; quiet otherwise
+
+**Cloud A (web)**, from Cloud C's third bug-hunt round (`a99dbbc`, `37faa3d`):
+- **Pause → Start now always starts the people fresh** (the room's history stays). A new perception numbers people
+  from 1 in detection order, so two people could swap 15-minute histories. Even a presenter alone could inherit
+  someone else's history, by coming back as #1 after holding #2. The paused line says "Press Start to begin again
+  (people start fresh)".
+- **"no microphone"** is shown once.
+- **Governance note and pitch:** purged keeps up with decoded by construction, with at most the one frame in flight
+  between them.
+- **`DEPLOY_WEB.md`:** camera mode runs in a worker on Chrome/Edge, Firefox 114+ and Safari 17+, and on the page's
+  main thread elsewhere.
+- **Kept on purpose:** a perception pause of 10+ min reads as a break and then an absence, as on the desktop.
+- **Gate:** 940 frontend tests pass; the build and the checks are clean. App code is unchanged since; Python is
+  unchanged since 22:15.
+
+**Cloud B (emotion):** quiet. No taps yet, and no contract changes (`emotion-v1@006a8d7d`).
+
+**Cloud C (perception):**
+- **Round 3** (`d659c41`): 21 findings held, mostly wording. `REAL_CAMERA.md` was rewritten to match the deployed
+  console.
+- **Portrait phone frames** (720×1280) are now a seventh end-to-end scenario (`644ec53`).
+- **40-minute two-person soak:** GC sawtooth with no rising peaks; 11,018 frames decoded against 11,017 purged;
+  0 violations; 0 page errors.
+- **Browser support correction:** iOS Chrome and Firefox behave like Safari on the same iOS (WebKit).
+
 ## Generated from git
 
 <!-- hacklog:start -->
