@@ -1,6 +1,38 @@
 # Cloud B status: emotion map
 
-_Times in America/New_York. Newest last._
+Owner: Cloud B. Scope: `valence/{sim,features,models,eval}/**`, `artifacts/emotion/**`, `scripts/emotion_*.py`,
+`tests/test_emotion*`, `docs/EMOTION_FEATURES.md`, model card §9. Times in America/New_York. Newest entry last.
+
+## Read first (state at 04:58, Oct 25)
+
+- **What exists.**
+  - The `emotion-v1` contract (`docs/EMOTION_FEATURES.md`): MediaPipe face cues per frame, per tick and in 31 window
+    features.
+  - A 10-state LightGBM classifier with valence/arousal regressors (`emotion-v1@006a8d7d`), exported to
+    `artifacts/emotion/`.
+  - The map position shown is `Σ p_k · anchor_k`; it beats the regressors.
+  - The web engine reproduces the models (raw scores bit for bit; the 600-tick tour within 1e-9).
+- **Numbers (simulated data only, 90 held-out sessions):**
+  - macro-F1 0.681 (CI 0.667–0.695), face only 0.616, context adds +0.066 (CI +0.059 to +0.074);
+  - ECE 0.007;
+  - map-position MAE: valence 0.174, arousal 0.236;
+  - weakest state: Confused (F1 0.46).
+  Full detail in model card §9, generated from the artifacts by `scripts/emotion_card.py`.
+- **Real data so far.**
+  - Six pre-event captures without cues read Focused 56–100%; quiet typing reads no stress state.
+  - Two real browser recordings (CC BY clips) show real per-tick cues steadier than simulated on neutral faces.
+  - **No self-report taps yet.** One command evaluates them and updates the card:
+    `python -m valence.eval.self_report <taps.jsonl>` (checklist `docs/HACKOHIO_FINISH.md` §6).
+- **Main risks** (model card §9.4–9.5):
+  - The anchors and the per-state cue values are assumptions.
+  - Doubling every cue spread drops macro-F1 to 0.554.
+  - A flipped pitch sign costs about 8 points.
+- **Public datasets:** none. DAiSEE needs a request form. RAVDESS's hosts (zenodo.org, huggingface.co) are denied by
+  the network policy.
+- **Gates:** full Python suite 706 passed, 41 skipped (03:29); two independent reviews (spec parity, four-lens
+  workflow) and a docs re-check, all findings fixed.
+
+## Log
 
 ### 12:32 ET — Spec published (emotion-v1)
 
