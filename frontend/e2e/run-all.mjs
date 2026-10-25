@@ -1,4 +1,5 @@
-// Runs every e2e scenario (run.mjs), including a refused camera and a refused mic, and the checks that compare scenarios: the head-roll sign (the portrait rotated
+// Runs every e2e scenario (run.mjs), including a phone's portrait frames (720x1280), a refused camera and a refused
+// mic, and the checks that compare scenarios: the head-roll sign (the portrait rotated
 // 15 degrees clockwise must read ~30 degrees more roll than rotated counterclockwise) and two tracked people with a
 // face each in the two-person scene. Exit 1 if anything fails. Writes .out/summary.json.
 //
@@ -22,6 +23,7 @@ const runs = [
   ["two", ["--scenario", "two"]],
   ["roll_cw", ["--scenario", "roll_cw"]],
   ["roll_ccw", ["--scenario", "roll_ccw"]],
+  ["portrait", ["--scenario", "portrait", "--size", "720x1280"]],
   ["one-no-camera", ["--scenario", "one", "--deny", "camera"]],
   ["one-no-mic", ["--scenario", "one", "--deny", "mic"]],
 ];

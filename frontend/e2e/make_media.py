@@ -9,7 +9,8 @@ Scenes (1280x720, 10 fps, 3 s loops), all built from media/portrait.jpg:
 - one.y4m: the portrait at full frame height in a plain room, drifting a few pixels (some motion);
 - two.y4m: two copies side by side (the right one mirrored), for tracking and face-to-person assignment;
 - roll_cw.y4m / roll_ccw.y4m: the one-person scene rotated 15 degrees clockwise / counterclockwise, to check the sign
-  of head roll.
+  of head roll;
+- portrait.y4m: 720x1280, a phone's front camera held upright, the portrait filling the lower part of the frame.
 Audio: speech.wav (48 kHz mono 16-bit) from media/speech.ogg, decoded with the ffmpeg bundled in imageio-ffmpeg.
 """
 
@@ -27,16 +28,25 @@ HERE = Path(__file__).resolve().parent
 W, H, FPS, SECONDS = 1280, 720, 10, 3
 
 
-def room(rng: np.random.Generator) -> Image.Image:
+def size(kind: str) -> tuple[int, int]:
+    return (H, W) if kind == "portrait" else (W, H)
+
+
+def room(rng: np.random.Generator, w: int = W, h: int = H) -> Image.Image:
     """A plain wall: vertical gradient plus mild sensor-like noise."""
-    y = np.linspace(170, 120, H)[:, None, None]
-    base = np.broadcast_to(y, (H, W, 3)) * np.array([1.0, 0.97, 0.92])
-    noisy = base + rng.normal(0, 3, (H, W, 3))
+    y = np.linspace(170, 120, h)[:, None, None]
+    base = np.broadcast_to(y, (h, w, 3)) * np.array([1.0, 0.97, 0.92])
+    noisy = base + rng.normal(0, 3, (h, w, 3))
     return Image.fromarray(np.clip(noisy, 0, 255).astype(np.uint8))
 
 
 def scene(kind: str, frame: int, portrait: Image.Image, rng: np.random.Generator) -> Image.Image:
-    canvas = room(rng)
+    canvas = room(rng, *size(kind))
+    if kind == "portrait":
+        dx = int(round(6 * math.sin(2 * math.pi * frame / (FPS * SECONDS))))
+        p = portrait.resize((H, H), Image.LANCZOS)  # full width of the 720-wide frame
+        canvas.paste(p, (dx, W - H))  # bottom of the 1280-high frame
+        return canvas
     if kind == "two":
         p = portrait.resize((600, 600), Image.LANCZOS)
         canvas.paste(p, (20, H - 600))
@@ -58,7 +68,8 @@ def rgb_to_i420(img: Image.Image) -> bytes:
     y = 16 + 0.257 * r + 0.504 * g + 0.098 * b
     u = 128 - 0.148 * r - 0.291 * g + 0.439 * b
     v = 128 + 0.439 * r - 0.368 * g - 0.071 * b
-    sub = lambda c: c.reshape(H // 2, 2, W // 2, 2).mean(axis=(1, 3))  # noqa: E731
+    h, w = a.shape[:2]
+    sub = lambda c: c.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))  # noqa: E731
     planes = [y, sub(u), sub(v)]
     return b"".join(np.clip(np.round(p), 0, 255).astype(np.uint8).tobytes() for p in planes)
 
@@ -66,7 +77,8 @@ def rgb_to_i420(img: Image.Image) -> bytes:
 def write_y4m(path: Path, kind: str, portrait: Image.Image) -> None:
     rng = np.random.default_rng(7)
     with path.open("wb") as f:
-        f.write(f"YUV4MPEG2 W{W} H{H} F{FPS}:1 Ip A1:1 C420jpeg\n".encode())
+        w, h = size(kind)
+        f.write(f"YUV4MPEG2 W{w} H{h} F{FPS}:1 Ip A1:1 C420jpeg\n".encode())
         for i in range(FPS * SECONDS):
             f.write(b"FRAME\n" + rgb_to_i420(scene(kind, i, portrait, rng)))
 
@@ -82,7 +94,7 @@ def main() -> None:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / ".media"
     out.mkdir(parents=True, exist_ok=True)
     portrait = Image.open(HERE / "media" / "portrait.jpg").convert("RGB")
-    for kind in ("one", "two", "roll_cw", "roll_ccw"):
+    for kind in ("one", "two", "roll_cw", "roll_ccw", "portrait"):
         write_y4m(out / f"{kind}.y4m", kind, portrait)
         scene(kind, 0, portrait, np.random.default_rng(7)).save(out / f"{kind}.png")  # preview of the first frame
     write_wav(out / "speech.wav")

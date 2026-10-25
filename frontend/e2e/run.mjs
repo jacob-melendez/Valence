@@ -4,7 +4,7 @@
 // nothing violates the CSP and no page error occurs. Writes .out/report-<scenario>.json with fps, model load time and
 // download size.
 //
-//   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
+//   node e2e/run.mjs [--scenario one|two|roll_cw|roll_ccw|portrait] [--size WxH] [--seconds 25] [--delegate GPU|CPU] [--csp task|deploy]
 //                    [--audio file.wav] [--video file.y4m] [--record out.jsonl [--record-seconds N]] [--python-cadence]
 //                    [--main-thread] [--deny camera|mic] [--no-build] [--headed]
 //
@@ -149,6 +149,9 @@ if (DELEGATE) params.set("delegate", DELEGATE);
 if (args.includes("--python-cadence")) params.set("faceEveryFrame", "0");
 if (args.includes("--main-thread")) params.set("worker", "0");
 if (RECORD) params.set("record", "1");
+// --size WxH: the camera track's resolution (the harness asks for 1280x720, which crops a portrait clip to a square).
+const SIZE = opt("--size", "");
+if (SIZE) params.set("size", SIZE);
 const query = params.size ? `?${params}` : "";
 const resp = await page.goto(`${origin}/${query}`, { waitUntil: "load" });
 const startedAt = Date.now();
@@ -187,6 +190,7 @@ const videoChecks = {
   people_tracked: maxPeople >= expectPeople,
   blendshapes_52: faces.some((p) => p.nbs === 52),
   frames_purged: counters.frames_decoded > 0 && counters.frames_decoded - counters.frames_purged <= 1,
+  ...(SIZE ? { frame_size: video.length > 0 && video.every((v) => `${v.w}x${v.h}` === SIZE) } : {}),
 };
 const audioChecks = {
   audio_observations: audio.length >= 3,

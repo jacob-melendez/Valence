@@ -1,8 +1,8 @@
 /**
- * Perception end-to-end harness page: opens the (fake) camera and mic with openMediaStream() (the console uses its own openMedia in
- * src/lib/browser-source.ts), runs the real
- * createPerception(), and exposes compact summaries on window.__e2e for frontend/e2e/run.mjs. Query parameters:
- * delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face cadence), worker=0 (video models on the main thread),
+ * Perception end-to-end harness page: opens the (fake) camera and mic with openMediaStream() (the console uses its own
+ * openMedia in src/lib/browser-source.ts), runs the real createPerception(), and exposes compact summaries on
+ * window.__e2e for frontend/e2e/run.mjs. Query parameters: delegate=GPU|CPU, faceEveryFrame=0 (the Python edge's face
+ * cadence), worker=0 (video models on the main thread), size=WxH (the camera track's resolution, e.g. 720x1280),
  * record=1 (keep every observation as an obs_to_dict line), mock=1 (createMockPerception instead).
  */
 import {
@@ -68,6 +68,9 @@ function summarize(o: Obs): void {
 async function main(): Promise<void> {
   const opened = await openMediaStream();
   e2e.media = { camera: opened.camera, mic: opened.mic, errors: opened.errors };
+  const size = params.get("size")?.split("x").map(Number); // e.g. 720x1280: a phone held upright
+  const camera = opened.stream?.getVideoTracks()[0];
+  if (size && camera) await camera.applyConstraints({ width: { exact: size[0] }, height: { exact: size[1] } });
   const opts: PerceptionOptions = {};
   const delegate = params.get("delegate");
   if (delegate === "GPU" || delegate === "CPU") opts.delegate = delegate;
