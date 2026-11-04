@@ -474,6 +474,15 @@ export function SystemStatus() {
 }
 
 // ---------- Person card ----------
+/**
+ * Minutes of window before the card drops its "building context" badge. The smoother's 60 s warm-up is not the
+ * model's: on the simulated test sessions M2's macro-F1 climbs from 0.65 with no history to 0.79 at 5 min (docs/
+ * MODEL_CARD.md, accuracy vs history), and live it needs longer: the room baseline (90 s), the mask override (blocked
+ * for 120 s) and the 5/15-minute counts only mean something once there is a stretch of ordinary behaviour to compare
+ * against. Live demos read mostly Focused until about 10 minutes in, so the card says so until then.
+ */
+const CONTEXT_FIRM_MIN = 10;
+
 export function PersonCard({ p }: { p: PredictionMsg }) {
   const s = useValence();
   const color = stateColor(p.label);
@@ -485,18 +494,21 @@ export function PersonCard({ p }: { p: PredictionMsg }) {
   const ex = shownExplanation(p, s.llm[p.person_id]);
   // A real camera: the face cues measure against each face's first 20 s visible (perception faceCues / faceValence).
   const camera = s.source === "browser" && getBrowserMode() === "live" && !!s.status?.camera && p.person_id !== 0;
+  const fill = s.vectors[p.person_id]?.window_fill_min;
+  const building = p.warming_up || (typeof fill === "number" && fill < CONTEXT_FIRM_MIN);
   return (
     <div className="panel border-l-8" style={{ borderLeftColor: color }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-xl text-muted-foreground">{p.person_id === 0 ? "Room (aggregate)" : `Person #${p.person_id}`}</div>
         <div className="font-mono text-xs text-muted-foreground" title={`event ${p.event_id}`}>{s.states.length}-state context model · {p.event_id}</div>
       </div>
-      {/* The smoother makes no claim before its window holds warmup_s (60 s): the label is provisional until then. */}
+      {/* The smoother makes no claim before its window holds warmup_s (60 s); the badge stays until CONTEXT_FIRM_MIN. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-3">
         <div className={`text-4xl font-bold ${p.warming_up ? "opacity-50" : ""}`} style={{ color }}>{labelText(p)}</div>
         <div className={`font-mono text-4xl font-bold ${p.warming_up ? "text-muted-foreground" : ""}`}>{pct(p.confidence)}</div>
-        {p.warming_up
-          ? <span data-testid="warmup-badge" className="rounded bg-warn px-2 py-0.5 font-mono text-sm font-bold text-primary-foreground">warming up · provisional for the first minute</span>
+        {building
+          ? <span data-testid="warmup-badge" className="rounded bg-warn px-2 py-0.5 font-mono text-sm font-bold text-primary-foreground">
+              {`building context${typeof fill === "number" ? ` · ${fmt(fill)}/15 min` : ""} · needs about 10 min`}</span>
           : <span data-testid="simulated-cue" className="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">a signal · model trained on simulated data only</span>}
       </div>
       {p.warming_up && camera && (
@@ -1067,7 +1079,7 @@ export function Welcome() {
     // One device running: the other's error says why it is missing.
     : devices ? `Now running on your ${devices}.${!st?.camera && s.edgeError ? ` ${s.edgeError}` : ""}${!st?.mic && s.micError ? ` ${s.micError}` : ""}`
       + `${st?.camera ? " Keep a relaxed, neutral face for the first 20 s: that becomes your face baseline." : ""}`
-      + " Labels are provisional for the first minute, and the models were trained and tested on simulated sessions only: read every number as a signal, not a measurement."
+      + " The model reads the room and your behaviour over a 15-minute window, so expect mostly Focused for the first 10 minutes or so while it builds context. The models were trained and tested on simulated sessions only: read every number as a signal, not a measurement."
     : st ? `Camera and microphone are not running. ${s.micError ?? "Press Start to try again."}` : "Starting…";
   return (
     <section className="mx-6 mt-5 rounded-lg border border-primary/60 bg-primary/5 p-5" data-testid="welcome">

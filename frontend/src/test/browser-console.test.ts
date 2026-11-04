@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement as h } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServerMessage } from "@/lib/valence";
 
 // The console around the in-browser source: boot order and the camera, the store's toggles, and what the panels claim.
 // Each test that boots imports a fresh copy of the store (boot() runs once per page load).
@@ -352,12 +353,21 @@ describe("what the in-browser panels claim", () => {
     expect(screen.getByTestId("model-note").textContent).toBe(
       "This card is the 4-state context model. The emotion map below reads 2 states with its own model (now Focused 84%), so the two can differ.");
     // Warm-up: a provisional label, and the 20 s face baseline asked for on the card and in the Welcome line.
-    expect(screen.getByTestId("warmup-badge").textContent).toBe("warming up · provisional for the first minute");
+    expect(screen.getByTestId("warmup-badge").textContent).toBe("building context · needs about 10 min");
     expect(screen.getByText(/Keep a relaxed, neutral face: its first 20 s on camera/)).toBeInTheDocument();
     expect(screen.getByTestId("welcome-now").textContent).toMatch(/^Now running on your camera and microphone\. Keep a relaxed, neutral face for the first 20 s.*simulated sessions only/);
     act(() => { v.handleMessage(pred(false)); });
-    expect(screen.queryByTestId("warmup-badge")).toBeNull();
     expect(screen.queryByText(/Keep a relaxed, neutral face: its first 20 s/)).toBeNull();
+    // Past the smoother's warm-up the card still says it is building context until 10 min of window.
+    const sv = (min: number) => ({ type: "state_vector", t: 15, person_id: 1, ambient_db: 50, light_lux: 300, hours_since_break: 0,
+      time_of_day: "afternoon", clenched_fists_5m: 0, compliments_15m: 0, laughter_15m: 0, posture_slump: 0, head_in_hands: 0,
+      social_withdrawal: 0, face_visible: true, facial_valence: 0, window_fill_min: min, source: "live", simulated_fields: [] }) as ServerMessage;
+    act(() => { v.handleMessage(sv(2)); });
+    expect(screen.getByTestId("warmup-badge").textContent).toBe("building context · 2.0/15 min · needs about 10 min");
+    act(() => { v.handleMessage(sv(9.9)); });
+    expect(screen.getByTestId("warmup-badge").textContent).toBe("building context · 9.9/15 min · needs about 10 min");
+    act(() => { v.handleMessage(sv(10)); });
+    expect(screen.queryByTestId("warmup-badge")).toBeNull();
     expect(screen.getByTestId("simulated-cue").textContent).toBe("a signal · model trained on simulated data only");
     v.setSource("mock");
   });
