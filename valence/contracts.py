@@ -55,6 +55,28 @@ STATE_LEXICON: dict[str, tuple[str, ...]] = {
 }
 
 
+# Emotion map (Hack OHI/O, docs/EMOTION_FEATURES.md): ten states on the valence-arousal plane. Separate from
+# STATE_SETS on purpose: the served 4- and 6-state models, the narrator and the lexicon are unchanged.
+EXTRA_STATES: tuple[str, ...] = ("Bored", "Confused", "Calm", "Anxious")
+EMOTION_STATES: tuple[str, ...] = ALL_STATES + EXTRA_STATES
+EMOTION_DISPLAY: dict[str, str] = {**STATE_DISPLAY, "Bored": "Bored", "Confused": "Confused", "Calm": "Calm",
+                                   "Anxious": "Anxious"}
+# (valence, arousal) anchors on the circumplex, each in [-1, 1]. ASSUMPTIONS from docs/HACKOHIO_PLAN.md, not
+# measurements; the simulator draws each episode's true valence/arousal around them.
+AFFECT_ANCHORS: dict[str, tuple[float, float]] = {
+    "Focused": (0.1, 0.3),
+    "Frustrated_Masked": (-0.6, 0.6),
+    "Exhausted": (-0.4, -0.7),
+    "Collaborative_Happy": (0.7, 0.5),
+    "Overwhelmed": (-0.6, 0.8),
+    "Tense": (-0.4, 0.5),
+    "Bored": (-0.3, -0.5),
+    "Confused": (-0.2, 0.3),
+    "Calm": (0.4, -0.4),
+    "Anxious": (-0.5, 0.6),
+}
+
+
 def display_label(
     label: str,
     *,
@@ -109,6 +131,15 @@ class PersonObs:
     motion: float = NAN  # EMA of mean keypoint displacement, shoulder-widths/s; NaN when undefined
     face_visible: bool = False
     face_valence: float = NAN  # [-1, 1] relative to the person's neutral baseline; NaN when not visible
+    # Emotion-map face cues (docs/EMOTION_FEATURES.md section 1), relative to the person's neutral; NaN when not
+    # visible. Optional: producers that do not compute them leave the defaults.
+    brow_down: float = NAN  # browDown L/R mean minus neutral
+    eye_open: float = NAN  # neutral eyeBlink L/R mean minus this frame's
+    mouth_frown: float = NAN  # mouthFrown L/R mean minus neutral
+    smile: float = NAN  # mouthSmile L/R mean minus neutral
+    head_yaw: float = NAN  # degrees from the neutral pose; > 0 = nose toward the image's right
+    head_pitch: float = NAN  # degrees from the neutral pose; > 0 = face tilted up
+    blink_onsets: int = 0  # blinks completed on this frame (0 or 1)
 
     def __post_init__(self) -> None:
         if len(self.bbox) != 4:
@@ -238,6 +269,16 @@ class TickRecord:
     # Time Dynamics
     hours_since_break: float = NAN
     tod_h: float = NAN  # local time of day in hours [0, 24)
+    # Emotion-map face cues per tick (docs/EMOTION_FEATURES.md section 2); medians over the tick's face frames,
+    # NaN when the face was never read. The room row keeps the defaults.
+    brow_down: float = NAN
+    eye_open: float = NAN
+    mouth_frown: float = NAN
+    smile: float = NAN
+    head_yaw: float = NAN  # median |yaw|, degrees
+    head_pitch: float = NAN  # median pitch, degrees, + up
+    head_away: float = NAN  # share of face frames with |yaw| > 20 or |pitch| > 20 degrees
+    blink_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {k: _nan_to_none(v) for k, v in asdict(self).items()}
@@ -320,6 +361,27 @@ class StateInfo(_Model):
     tier: str
 
 
+class AffectStateInfo(_Model):
+    """One emotion-map state and its valence-arousal anchor (an assumption; docs/EMOTION_FEATURES.md section 4)."""
+
+    id: str
+    display: str
+    valence: float
+    arousal: float
+
+
+class Affect(_Model):
+    """Emotion-map reading for one person (10-state classifier + valence/arousal regressors)."""
+
+    valence: float  # [-1, 1]
+    arousal: float  # [-1, 1]
+    label: str  # one of EMOTION_STATES
+    label_display: str
+    confidence: float  # temperature-calibrated on simulated data
+    probabilities: dict[str, float]
+    model: str  # e.g. "emotion-v1@<sha8>"
+
+
 class Hello(_Model):
     type: Literal["hello"] = "hello"
     contract_version: str = CONTRACT_VERSION
@@ -330,6 +392,7 @@ class Hello(_Model):
     frame_w: int = 0
     frame_h: int = 0
     mirrored: bool = False
+    affect_states: list[AffectStateInfo] | None = None  # emotion map, when its model is loaded
 
 
 class TrackPerson(_Model):
@@ -417,6 +480,7 @@ class Prediction(_Model):
     explanation: InlineExplanation
     source: str = "live"
     simulated_fields: list[str] = Field(default_factory=list)
+    affect: Affect | None = None  # emotion map (optional; docs/EMOTION_FEATURES.md section 5)
 
 
 class Explanation(_Model):

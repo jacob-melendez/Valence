@@ -1,0 +1,250 @@
+/**
+ * Loads the MediaPipe Tasks models from the site's own origin (`assetBase`, filled by scripts/mediapipe-assets.mjs):
+ * WASM from `<assetBase>wasm/`, models from `<assetBase>models/`. The packages are imported lazily, so the mock and
+ * the console never download them. The caller names the delegate (createPerception: CPU unless GPU is asked for);
+ * a GPU path that fails to start falls back to CPU. Without one, `autoDelegate` picks.
+ *
+ * Model settings follow valence/perception/video.py and audio.py: GestureRecognizer with up to 8 hands and every
+ * canned gesture's score (so Closed_Fist is there even when it is not the top gesture), FaceLandmarker with
+ * blendshapes (+ the transformation matrix for the emotion cues) plus a single-face instance for head crops,
+ * PoseLandmarker lite standing in for YOLO-pose, and YAMNet restricted to the speech and laughter classes.
+ */
+import type {
+  FaceLandmarker, FaceLandmarkerResult, GestureRecognizer, GestureRecognizerResult, PoseLandmarker,
+  PoseLandmarkerResult,
+} from "@mediapipe/tasks-vision";
+import type { AudioClassifier, AudioClassifierResult } from "@mediapipe/tasks-audio";
+import { SR, YAMNET_WINDOW } from "./audio";
+import { YAMNET_ALLOWLIST } from "./audioFeatures";
+
+export type Delegate = "GPU" | "CPU";
+type Source = TexImageSource;
+
+/** What the video pipeline needs from MediaPipe (an interface, so tests can mock it). */
+export interface VisionModels {
+  pose(image: Source, tsMs: number): PoseLandmarkerResult;
+  /** IMAGE mode: `tsMs` is not used by MediaPipe (the pipeline's test fakes record it). */
+  faces(image: Source, tsMs: number): FaceLandmarkerResult;
+  faceCrop(image: Source): FaceLandmarkerResult;
+  gestures(image: Source, tsMs: number): GestureRecognizerResult;
+  delegate: Delegate;
+  close(): void;
+}
+
+export interface AudioModels {
+  classify(samples: Float32Array, sampleRate: number): AudioClassifierResult[];
+  close(): void;
+}
+
+const MODEL = {
+  face: "models/face_landmarker.task",
+  pose: "models/pose_landmarker_lite.task",
+  gesture: "models/gesture_recognizer.task",
+  yamnet: "models/yamnet.tflite",
+};
+
+const join = (base: string, rel: string) => `${base.endsWith("/") ? base : `${base}/`}${rel}`;
+
+/**
+ * "GPU" unless WebGL is software-rendered (SwiftShader, llvmpipe: headless browsers, VMs, GPU blocklists), where
+ * MediaPipe's GPU path runs ~10x slower than its CPU (XNNPACK) path: measured in headless Chromium, pose 660 ms vs
+ * 68 ms per frame. Only consulted when the caller names no delegate; an explicit "GPU" runs on software WebGL too.
+ */
+export function autoDelegate(): Delegate {
+  try {
+    const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as WebGLRenderingContext | null;
+    if (!gl) return "CPU";
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? "");
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return /swiftshader|llvmpipe|software|basic render/i.test(renderer) ? "CPU" : "GPU";
+  } catch {
+    return "GPU";
+  }
+}
+
+export async function loadVisionModels(
+  assetBase: string, opts: { delegate?: Delegate; maxPeople?: number; useModule?: boolean } = {},
+): Promise<VisionModels> {
+  // MediaPipe sends every image through WebGL, on either delegate. In a worker that needs WebGL on an OffscreenCanvas,
+  // which Safari only has from 17: there MediaPipe would start and then fail on every frame, so fail now and let the
+  // page's thread take over (createVisionBackend).
+  const inWorker = typeof document === "undefined";
+  const offscreenGl = typeof OffscreenCanvas !== "undefined" && hasWebGl(new OffscreenCanvas(1, 1));
+  if (inWorker && !offscreenGl) throw new Error("no WebGL in a worker (Safari before 17): video runs on the page");
+  const mp = await import("@mediapipe/tasks-vision");
+  // useModule: the ES-module WASM loader, for module workers (no importScripts there).
+  const fileset = await mp.FilesetResolver.forVisionTasks(join(assetBase, "wasm"), opts.useModule ?? false);
+  // Every task instantiates its own WASM module through a global ModuleFactory that the loader script defines and
+  // the task then clears. importScripts / <script> re-run the loader each time, but an ES-module import runs only
+  // once per URL, so in a module worker the second task found no factory: give each task its own loader URL.
+  let nTask = 0;
+  const filesetFor = () =>
+    opts.useModule ? { ...fileset, wasmLoaderPath: `${fileset.wasmLoaderPath}?task=${nTask++}` } : fileset;
+  // Fetch each model once (the face model serves two landmarkers) and hand MediaPipe the bytes.
+  const [faceBuf, poseBuf, gestureBuf] = await Promise.all(
+    [MODEL.face, MODEL.pose, MODEL.gesture].map((file) => fetchModel(join(assetBase, file))),
+  );
+  const buffers: Record<string, Uint8Array> = { [MODEL.face]: faceBuf!, [MODEL.pose]: poseBuf!, [MODEL.gesture]: gestureBuf! };
+  const build = async (delegate: Delegate): Promise<VisionModels> => {
+    const base = (file: string) => ({ modelAssetBuffer: buffers[file]!, delegate });
+    const created: { close(): void }[] = [];
+    // Each task gets a canvas of ours, chosen by capability as MediaPipe chooses by user agent (its check fails for
+    // Chrome and Firefox on iOS, where it then calls document.createElement inside the worker). After a lost WebGL
+    // context (a GPU reset, a phone reclaiming GPU memory) MediaPipe keeps returning its last results without an
+    // error, a frozen face or a phantom person: watch every canvas and fail the calls instead.
+    let lost = false;
+    const canvas = () => {
+      const c = offscreenGl ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+      c.addEventListener("webglcontextlost", () => (lost = true));
+      return { canvas: c };
+    };
+    const live = () => {
+      if (lost) throw new Error("WebGL context lost: restart the camera");
+    };
+    try {
+      const pose: PoseLandmarker = await mp.PoseLandmarker.createFromOptions(filesetFor(), {
+        ...canvas(), baseOptions: base(MODEL.pose), runningMode: "VIDEO",
+        // More poses than people kept: the pipeline drops short ones and keeps the largest maxPeople, as video.py
+        // does with YOLO's uncapped list. Capped at maxPeople, three small bystanders tracked first would hide a
+        // participant who sits down close to the camera (in VIDEO mode the detector stops while numPoses are tracked).
+        numPoses: Math.max(6, 2 * (opts.maxPeople ?? 3)),
+        // The Python edge's YOLO person threshold (conf=0.4). MediaPipe's default 0.5 found only one of the two
+        // people in the e2e two-person scene; 0.4 finds both.
+        minPoseDetectionConfidence: 0.4, minPosePresenceConfidence: 0.4,
+      });
+      created.push(pose);
+      // IMAGE mode as on the edge: on identical frames VIDEO mode was bit-identical wherever the detector fired (it
+      // runs on every frame either way with fewer than numFaces faces), and only added a stale "ghost" face about once
+      // per 2000 frames.
+      const faces: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
+        ...canvas(), baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 3, outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+      });
+      created.push(faces);
+      const faceCrop: FaceLandmarker = await mp.FaceLandmarker.createFromOptions(filesetFor(), {
+        ...canvas(), baseOptions: base(MODEL.face), runningMode: "IMAGE", numFaces: 1, outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+      });
+      created.push(faceCrop);
+      const gestures: GestureRecognizer = await mp.GestureRecognizer.createFromOptions(filesetFor(), {
+        ...canvas(), baseOptions: base(MODEL.gesture), runningMode: "VIDEO", numHands: 8,
+        cannedGesturesClassifierOptions: { maxResults: 8 },
+      });
+      created.push(gestures);
+      return {
+        delegate,
+        pose: (image, ts) => {
+          live();
+          return pose.detectForVideo(image, ts);
+        },
+        faces: (image) => {
+          live();
+          return faces.detect(image);
+        },
+        faceCrop: (image) => {
+          live();
+          return faceCrop.detect(image);
+        },
+        gestures: (image, ts) => {
+          live();
+          return gestures.recognizeForVideo(image, ts);
+        },
+        close: () => closeAndWipe(created, !inWorker),
+      };
+    } catch (e) {
+      closeAndWipe(created, !inWorker);
+      throw e;
+    }
+  };
+  if ((opts.delegate ?? autoDelegate()) === "CPU") return build("CPU");
+  try {
+    return await build("GPU");
+  } catch (e) {
+    console.warn("[perception] GPU delegate failed, falling back to CPU", e);
+    return build("CPU");
+  }
+}
+
+/**
+ * The Emscripten heap behind a MediaPipe task, found by shape because the bundles are minified (and differently in
+ * tasks-vision and tasks-audio): the task holds a graph runner (the object with closeGraph), which holds the module
+ * (the object with HEAPU8). Null if the shape is not there.
+ */
+export function wasmHeap(task: object): Uint8Array | null {
+  for (const runner of Object.values(task)) {
+    if (!runner || typeof runner !== "object" || typeof (runner as { closeGraph?: unknown }).closeGraph !== "function") {
+      continue;
+    }
+    for (const mod of Object.values(runner)) {
+      const heap = (mod as { HEAPU8?: unknown } | null)?.HEAPU8;
+      if (heap instanceof Uint8Array) return heap;
+    }
+  }
+  return null;
+}
+
+/**
+ * Closes each task (one that throws does not stop the others) and, with `wipe`, zero-fills its WASM heap afterwards.
+ * MediaPipe copies every input (the frame, its face crops, the audio window) into that heap and close() leaves it there;
+ * in a worker the heap dies with the worker, on the page's thread it would outlive the session.
+ */
+function closeAndWipe(tasks: { close(): void }[], wipe: boolean): void {
+  for (const task of tasks) {
+    const heap = wipe ? wasmHeap(task) : null;
+    try {
+      task.close();
+    } catch (e) {
+      console.warn("[perception] closing a MediaPipe task failed", e);
+    }
+    (wipe ? wasmHeap(task) ?? heap : null)?.fill(0);
+  }
+}
+
+function hasWebGl(canvas: OffscreenCanvas): boolean {
+  try {
+    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as WebGLRenderingContext | null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    return gl !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchModel(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+export async function loadAudioModels(assetBase: string): Promise<AudioModels> {
+  const mp = await import("@mediapipe/tasks-audio");
+  const fileset = await mp.FilesetResolver.forAudioTasks(join(assetBase, "wasm"));
+  const classifier: AudioClassifier = await mp.AudioClassifier.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: join(assetBase, MODEL.yamnet) },
+    categoryAllowlist: [...YAMNET_ALLOWLIST], maxResults: YAMNET_ALLOWLIST.length,
+  });
+  return {
+    classify: (samples, sampleRate) => classifier.classify(samples, sampleRate),
+    close: () => {
+      // MediaPipe copies each window into a WASM-heap buffer it reuses and never clears (close() keeps it):
+      // overwrite it with one silent window so the last second of speech does not outlive the session.
+      try {
+        classifier.classify(new Float32Array(YAMNET_WINDOW), SR);
+      } catch {
+        // best effort: the classifier is closed next either way
+      }
+      closeAndWipe([classifier], true);
+    },
+  };
+}
+
+/** Bytes this thread fetched over the network for assets under `assetBase` (0 for HTTP-cache hits; not a worker's). */
+export function assetDownloadBytes(assetBase: string): number {
+  if (typeof performance === "undefined" || !performance.getEntriesByType) return 0;
+  const prefix = new URL(join(assetBase, ""), globalThis.location?.href ?? "http://localhost/").href;
+  return (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter((e) => e.name.startsWith(prefix))
+    .reduce((n, e) => n + (e.transferSize || 0), 0);
+}

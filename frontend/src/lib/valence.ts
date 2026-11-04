@@ -1,11 +1,12 @@
 /**
- * Valence Console data layer: message types, store, mock engine, live transport, commands.
+ * Valence Web console data layer: message types, store, mock engine, live transport, commands.
  * Every component reads through useValence() and writes through sendCommand(); switching
  * mock <-> live changes nothing outside this module.
  * Camera frames never pass through here: the webcam is preview-only in the UI.
  * Message shapes follow contract 1.0 (valence/contracts.py, docs/API.md).
  */
 import { useSyncExternalStore } from "react";
+import { BrowserSource, cspSealed, type BrowserEngine, type PerceptionLike } from "./browser-source";
 
 // ---------- Types ----------
 export type StateKey = "Focused" | "Frustrated_Masked" | "Exhausted" | "Collaborative_Happy";
@@ -25,9 +26,16 @@ export const stateName = (id: string | null | undefined): string =>
   id ? (state.states.find((x) => x.id === id)?.display
     ?? (STATE_DISPLAY as Record<string, string | undefined>)[id] ?? id.replace(/_/g, " ")) : "—";
 
-/** Null-safe number formatting: the backend sends `null` when a sensor had no reading. */
+/** Null-safe number formatting: the backend sends `null` when a sensor had no reading. Never "-0.00". */
 export function fmt(v: number | null | undefined, digits = 1, fallback = "—"): string {
-  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : fallback;
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const s = v.toFixed(digits);
+  return /^-0(\.0*)?$/.test(s) ? s.slice(1) : s;
+}
+/** fmt with a "+" on anything that rounds to zero or above ("+0.00", never "-0.00"). */
+export function fmtSigned(v: number | null | undefined, digits = 2, fallback = "—"): string {
+  const s = fmt(v, digits, fallback);
+  return s === fallback || s.startsWith("-") ? s : `+${s}`;
 }
 
 export interface TrackPerson { id: number; label: string; bbox: [number, number, number, number]; fist_active: boolean; slump: boolean }
@@ -62,6 +70,10 @@ export interface PredictionMsg {
   layers: Layer[]; data_quality: DataQuality;
   explanation: { text: string; source: ExplanationSource; latency_ms?: number };
   source: string; simulated_fields: string[];
+  /** Emotion map (optional, docs/EMOTION_FEATURES.md section 5): present when its models are loaded. */
+  affect?: Affect | null;
+  /** The in-browser tour only: the scripted state and its valence/arousal for this tick (simulated ground truth). */
+  truth?: { state: string; valence: number; arousal: number };
 }
 export interface ExplanationMsg {
   type: "explanation"; event_id: string; person_id: number; text: string;
@@ -73,9 +85,17 @@ export interface StatusMsg {
   degraded: string[]; purge_violation: boolean;
 }
 export interface StateInfo { id: string; display: string; tier: string }
+/** An emotion-map state and its valence-arousal anchor (an assumption; docs/EMOTION_FEATURES.md section 4). */
+export interface AffectStateInfo { id: string; display: string; valence: number; arousal: number }
+/** Emotion-map reading for one person (valence/contracts.py Affect): 10-state classifier + valence/arousal regressors. */
+export interface Affect {
+  valence: number; arousal: number; label: string; label_display: string; confidence: number;
+  probabilities: Record<string, number>; model: string;
+}
 export interface HelloMsg {
   type: "hello"; contract_version: string; mode: "live" | "replay" | "hybrid"; room_only: boolean;
   states: StateInfo[]; feature_version: string; frame_w: number; frame_h: number; mirrored: boolean;
+  affect_states?: AffectStateInfo[] | null;
 }
 export interface HeartbeatMsg { type: "heartbeat"; t: number }
 export type ServerMessage =
@@ -86,8 +106,8 @@ export interface HistoryPoint {
   ambient_db?: number | null; light_lux?: number | null; hours_since_break?: number | null;
   posture_slump?: number | null; facial_valence?: number | null; window_fill_min?: number;
 }
-/** Mock-only placeholder row. */
-export interface EvalMetricRow { model: string; accuracy: number; macro_f1: number; ece: number }
+/** A metrics table row (the mock's placeholders, the in-browser source's held-out scores); `id` is the model id, shown as the row's tooltip. */
+export interface EvalMetricRow { model: string; accuracy: number; macro_f1: number; ece: number; id?: string }
 /** reports/metrics.json as served in GET /api/eval/summary `metrics` (keys defined by valence/eval/evaluate.py). */
 export interface EvalReport {
   states?: string[];
@@ -106,6 +126,8 @@ export interface EvalSummary {
   calibration?: { predicted: number; observed: number }[];
   metrics?: EvalMetricRow[] | EvalReport;
   figures?: string[];
+  /** Where the numbers come from (the in-browser source: held-out scores on simulated sessions). */
+  disclosure?: string;
   [k: string]: unknown;
 }
 export type Scenario = string;
@@ -135,9 +157,11 @@ export interface LlmExplanation {
   event_id: string; label_display: string; text: string; source: ExplanationSource; latency_ms: number;
 }
 
-export type ConnState = "mock" | "connecting" | "open" | "closed";
+export type Source = "mock" | "live" | "browser";
+export type ConnState = "mock" | "connecting" | "open" | "closed" | "browser";
 export interface ValenceState {
-  source: "mock" | "live";
+  /** mock: generated here; live: the desktop backend; browser: the whole engine running in this page (Valence Web). */
+  source: Source;
   conn: ConnState;
   baseUrl: string;
   persons: TrackPerson[];
@@ -168,7 +192,14 @@ export interface ValenceState {
   running: "running" | "paused" | "stopped";
   lastCommand: { text: string; ok: boolean } | null;
   lastMessageAt: number;
+  /** Emotion-map states with their valence-arousal anchors (hello.affect_states); empty without the emotion models. */
+  affectStates: AffectStateInfo[];
+  /** Each person's recent valence-arousal readings (15 minutes), for the affect map's trail. */
+  affectTrail: Record<number, AffectPoint[]>;
+  /** False until boot() (or any setSource) has picked the source: the preview opens no camera before that. */
+  booted: boolean;
 }
+export interface AffectPoint { t: number; valence: number; arousal: number; label: string }
 
 // ---------- Backend URL ----------
 // 127.0.0.1, not localhost: macOS resolves localhost to ::1 first and the API binds IPv4 loopback.
@@ -195,7 +226,7 @@ let state: ValenceState = {
   status: null, retention: null, evalSummary: null,
   states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
   sim: { face_occlusion: false, low_light: false }, running: "running",
-  lastCommand: null, lastMessageAt: 0,
+  lastCommand: null, lastMessageAt: 0, affectStates: [], affectTrail: {}, booted: false,
 };
 const listeners = new Set<() => void>();
 function set(patch: Partial<ValenceState>) {
@@ -240,7 +271,8 @@ export function handleMessage(msg: ServerMessage) {
   switch (msg.type) {
     case "hello": {
       const states = validStates(msg.states);
-      return set({ ...(states ? { states } : {}), roomOnly: !!msg.room_only, lastMessageAt: now });
+      const affectStates = Array.isArray(msg.affect_states) ? msg.affect_states : [];
+      return set({ ...(states ? { states } : {}), roomOnly: !!msg.room_only, affectStates, lastMessageAt: now });
     }
     case "heartbeat":
       return set({ lastMessageAt: now });
@@ -268,10 +300,16 @@ export function handleMessage(msg: ServerMessage) {
       const llm = state.llm[pid];
       let nextLlm = state.llm;
       if (llm && llm.label_display !== label) { nextLlm = { ...state.llm }; delete nextLlm[pid]; } // label changed
+      const a = msg.affect;
+      const trail = a && Number.isFinite(a.valence) && Number.isFinite(a.arousal)
+        ? { ...state.affectTrail, [pid]: [...(state.affectTrail[pid] ?? []).filter((x) => x.t >= msg.t - HISTORY_WINDOW_S),
+          { t: msg.t, valence: a.valence, arousal: a.arousal, label: a.label }] }
+        : state.affectTrail;
       return set({
         predictions: { ...state.predictions, [pid]: msg },
         llm: nextLlm,
         history: pushHistory({ t: msg.t, person_id: pid, label: msg.label, confidence: msg.confidence }),
+        affectTrail: trail,
         lastMessageAt: now,
       });
     }
@@ -331,14 +369,23 @@ export function baselineProgress(b: RoomBaseline | null): number {
   return Math.max(0, Math.min(1, n / b.target_samples));
 }
 
-/** Live sensors without a captured venue baseline: the operator should capture one before judging. */
+/** Desktop live sensors without a captured venue baseline: the operator should capture one before judging. */
 export function baselineWarning(s: Pick<ValenceState, "source" | "conn" | "status" | "baseline">): boolean {
-  return s.source === "live" && s.conn === "open" && s.status?.mode === "live" && s.baseline?.mode !== "captured";
+  // The in-browser engine (tour or camera) runs on the automatic baseline by design, which never turns "captured"
+  // on its own: the Room baseline card shows it filling instead of a warning that would never clear.
+  const sensing = s.source === "live" && s.conn === "open" && s.status?.mode === "live";
+  return sensing && s.baseline?.mode !== "captured";
 }
 
 /** Provenance badges for the header: MOCK, or (when connected) REPLAY / HYBRID / SIMULATED, else LIVE. */
 export function provenanceBadges(s: ValenceState): { label: string; tone: "mock" | "live" | "warn"; title: string }[] {
   if (s.source === "mock") return [{ label: "MOCK", tone: "mock", title: "Generated in the browser, no backend" }];
+  if (s.source === "browser") {
+    const sim = [...new Set([...Object.values(s.predictions), ...Object.values(s.vectors)].flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
+    if (browserMode === "tour") return [{ label: "IN-BROWSER · TOUR (SIMULATED)", tone: "warn", title: "A scripted, simulated walk through the 10 states, replayed through the engine in this page (no camera)" }];
+    return [{ label: "IN-BROWSER · ON-DEVICE", tone: "live", title: "Camera and mic processed in this page; nothing is recorded or sent" },
+      ...(sim.length ? [{ label: `SIMULATED: ${sim.join(", ")}`, tone: "warn" as const, title: "Simulated or operator-set data in the 15-minute window" }] : [])];
+  }
   if (s.conn !== "open") return [];
   const latest = [...Object.values(s.predictions), ...Object.values(s.vectors)];
   const sim = [...new Set(latest.flatMap((m) => (Array.isArray(m.simulated_fields) ? m.simulated_fields : [])))];
@@ -357,13 +404,16 @@ function resetData() {
   set({
     persons: [], mirrored: false, frameW: 0, frameH: 0, govLog: [], gov: null, vectors: {}, predictions: {}, llm: {}, history: [], status: null, retention: null, evalSummary: null,
     states: CORE_STATES, roomOnly: false, baseline: null, edgeError: null, micError: null, scenarios: [], recordings: [],
+    affectStates: [], affectTrail: {},
+    // A new source (a fresh in-browser engine included) starts with no simulation overlay on.
+    sim: { face_occlusion: false, low_light: false },
   });
 }
 
 /** The backend forgot its people (demo reset, mode or source change): drop their cards, boxes and narrator text. */
 function clearPeople(history = false) {
   recentEvents = {};
-  set({ persons: [], vectors: {}, predictions: {}, llm: {}, ...(history ? { history: [] } : {}) });
+  set({ persons: [], vectors: {}, predictions: {}, llm: {}, affectTrail: {}, ...(history ? { history: [] } : {}) });
 }
 
 // ---------- Mock engine ----------
@@ -466,7 +516,7 @@ const mock = {
       ]),
       L("Facial Surface", [
         faceLabel !== null && val !== null
-          ? { feature: "face_last", display: `${val > 0.3 ? "smiling" : val < -0.1 ? "drooping" : "neutral"} expression (valence ${val >= 0 ? "+" : ""}${fmt(val, 2)})`, value: val, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
+          ? { feature: "face_last", display: `${val > 0.3 ? "smiling" : val < -0.1 ? "drooping" : "neutral"} expression (valence ${fmtSigned(val)})`, value: val, unit: "", shap: sign(!mask, mask ? 0.18 : 0.08) }
           : { feature: "face_visible", display: "face not visible — facial layer ignored", value: 0, unit: "", shap: 0 },
       ]),
     ];
@@ -587,6 +637,16 @@ const MOCK_RETENTION = {
     { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "var/audit (mock)", how_long: "deleted at session end; TTL 86400 s after a crash" },
   ],
   never_kept: ["video frames (zeroed and released each frame)", "audio blocks (zeroed each block)", "transcripts (Vosk grammar: only lexicon hits exist)", "pose keypoints (stay inside perception)", "face images or embeddings"],
+};
+// What the in-browser source keeps (same shape as GET /api/retention): numbers in this tab's memory only.
+const BROWSER_RETENTION = {
+  raw_media_stored: 0,
+  held: [
+    { what: "rolling state vector (numbers only: noise, light, posture, face valence…)", where: "this tab's memory", how_long: "15 minutes" },
+    { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "this tab's memory (hash-chained)", how_long: "until the tab closes" },
+    { what: "self-report taps (camera mode, only if you tap): each tap and the model's numeric inputs at that moment", where: "this tab's memory", how_long: "until Clear in the Self-report panel or the tab closes (Download keeps them)" },
+  ],
+  never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (nothing is uploaded; the deployed CSP allows connect-src 'self' only)"],
 };
 const MOCK_BASELINE: RoomBaseline = { mode: "captured", complete: true, target_samples: 90, db_samples: 90, lux_samples: 90, db_median: 57.2, db_iqr: 2.3, lux_median: 410 };
 const MOCK_SCENARIOS: ScenarioInfo[] = ["full_demo", "focused", "frustrated_masked", "exhausted", "collaborative_happy"].map((name) => ({ name }));
@@ -710,12 +770,136 @@ function stopLive() {
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
 }
 
+// ---------- In-browser source (Valence Web) ----------
+// The engine glue and the perception module are loaded lazily (and only if present), so the console bundle
+// stays small for the mock and live sources.
+const engineGlue = import.meta.glob<{ createBrowserEngine: (opts?: { tour?: boolean }) => Promise<BrowserEngine> }>("../engine/browser-engine.ts");
+const perceptionModule = import.meta.glob<{ createPerception?: () => PerceptionLike | Promise<PerceptionLike>; createMockPerception?: () => PerceptionLike | Promise<PerceptionLike> }>("../perception/index.ts");
+/** Shown when a lazy chunk of an older build is gone (every push redeploys): a reload fetches the new one. */
+export const STALE_BUILD = "Valence Web was updated — reload the page";
+/** A failed dynamic import of a hashed chunk (Chromium, WebKit, Firefox wording, Vite's preload) reads as STALE_BUILD. */
+export function loadError(e: unknown): unknown {
+  return /dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS/i.test(String(e))
+    ? new Error(STALE_BUILD) : e;
+}
+const loadOptional = async <T,>(mods: Record<string, () => Promise<T>>, what: string): Promise<T> => {
+  const load = Object.values(mods)[0];
+  if (!load) throw new Error(`${what} is not built yet`);
+  try { return await load(); } catch (e) { throw loadError(e); }
+};
+/** `?perception=mock` uses the mock perception (no camera, no mic); the default is the real MediaPipe module. */
+export const isMockPerception = () => { try { return new URLSearchParams(window.location.search).get("perception") === "mock"; } catch { return false; } };
+/** `?speed=N` (1..60) replays the tour N times faster than real time; 10 by default. */
+export const getTourSpeed = (): number => tourSpeed();
+const tourSpeed = (): number => {
+  try {
+    const v = Number(new URLSearchParams(window.location.search).get("speed"));
+    return Number.isFinite(v) && v >= 1 && v <= 60 ? v : 10;
+  } catch { return 10; }
+};
+let browser: BrowserSource | null = null;
+/** The in-browser source's input: live camera + mic, or the scripted emotion tour (no camera; ?demo=tour). */
+let browserMode: "live" | "tour" = "live";
+/** Start the in-browser source in a mode (the Source panel's buttons). */
+export function startBrowserSource(mode: "live" | "tour") { browserMode = mode; setSource("browser"); }
+export const getBrowserMode = () => browserMode;
+function startBrowser() {
+  const mode = browserMode, mockPerception = isMockPerception();
+  // Callbacks count only while this instance is the current source (a stopped one may still settle a prompt).
+  const current = () => state.source === "browser" && browser === src;
+  const src: BrowserSource = new BrowserSource({
+    mode, tourSpeed: tourSpeed(), needsMedia: !mockPerception, cspSealed: () => cspSealed(),
+    createEngine: async () => (await loadOptional(engineGlue, "The in-browser engine")).createBrowserEngine({ tour: mode === "tour" }),
+    createPerception: async () => {
+      const m = await loadOptional(perceptionModule, "The browser perception module");
+      const make = mockPerception ? m.createMockPerception : m.createPerception ?? m.createMockPerception;
+      if (!make) throw new Error("perception module has no factory");
+      return make();
+    },
+    emit: (m) => { if (current()) handleMessage(m); },
+    onBaseline: (b) => { if (current()) set({ baseline: b }); },
+    onEval: (ev) => { if (current()) set({ evalSummary: ev }); },
+    onError: (what, detail) => {
+      if (!current()) return;
+      if (detail.includes(STALE_BUILD)) set({ edgeError: STALE_BUILD });
+      else if (what === "mic") set({ micError: detail });
+      else set({ edgeError: what === "engine" ? `engine: ${detail}` : detail }); // camera texts say what failed
+    },
+    // A new open (Start after a refused prompt or a failed perception) clears the last attempt's camera and mic
+    // errors; it reports its own. Engine errors are not about the sensors and stay.
+    onOpenSensors: () => { if (current()) set({ micError: null, ...(state.edgeError?.startsWith("engine: ") ? {} : { edgeError: null }) }); },
+  });
+  browser = src;
+  // Self-report taps record the emotion model's current input for the tapped person.
+  setFeatureProvider((pid) => browser?.latestInputs(pid) ?? null);
+  void src.start();
+}
+function stopBrowser() { browser?.stop(); browser = null; setFeatureProvider(null); }
+
+// ---------- Audit log download (in-browser source) ----------
+/**
+ * Save the in-browser audit chain as the desktop backend's JSONL file. It holds labels, confidences, layer sums and
+ * operator actions (never media); `python scripts/audit_verify.py FILE --head <head>` verifies it offline.
+ */
+export function downloadAuditLog(): boolean {
+  const text = browser?.auditJsonl();
+  if (!text) return false;
+  const url = URL.createObjectURL(new Blob([text], { type: "application/x-ndjson" }));
+  const el = document.createElement("a");
+  el.href = url;
+  el.download = `valence-audit-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jsonl`;
+  el.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+// ---------- Self-report capture (real-data evaluation of the emotion map) ----------
+// docs/EMOTION_FEATURES.md section 6: one JSON line per tap with the tapped valence/arousal and the emotion model's
+// input vector at that moment. Kept in this tab's memory until Clear or the tab closes (Download keeps them); never
+// media, never a transcript. Listed in BROWSER_RETENTION.
+export interface SelfReportTap {
+  t: number; session_id: string; person_id: number; valence: number; arousal: number; feature_version: string;
+  features: Record<string, number | null>; label?: string;
+}
+type FeatureProvider = (personId: number) => { feature_version: string; features: Record<string, number | null> } | null;
+let featureProvider: FeatureProvider | null = null;
+const selfReports: SelfReportTap[] = [];
+const selfReportListeners = new Set<() => void>();
+let selfReportSession = "";
+/** The in-browser engine registers how to read a person's current model inputs. */
+export function setFeatureProvider(p: FeatureProvider | null) { featureProvider = p; }
+export const getSelfReports = (): readonly SelfReportTap[] => selfReports;
+export function onSelfReports(l: () => void): () => void { selfReportListeners.add(l); return () => { selfReportListeners.delete(l); }; }
+function newSessionId(now: Date) {
+  const day = now.toISOString().slice(0, 10);
+  const rnd = Math.random().toString(36).slice(2, 6);
+  return `sr-${day}-${rnd}`;
+}
+/** Record one tap; returns false when no feature vector is available for that person yet. */
+export function recordSelfReport(personId: number, valence: number, arousal: number, label?: string): boolean {
+  const f = featureProvider?.(personId);
+  if (!f) return false;
+  const now = Date.now();
+  if (!selfReportSession) selfReportSession = newSessionId(new Date(now));
+  const clip = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 1000) / 1000;
+  selfReports.push({ t: now / 1000, session_id: selfReportSession, person_id: personId, valence: clip(valence), arousal: clip(arousal),
+    feature_version: f.feature_version, features: f.features, ...(label ? { label } : {}) });
+  selfReportListeners.forEach((l) => l());
+  return true;
+}
+/** The taps as JSONL (what valence/eval/self_report.py reads). */
+export const selfReportsJsonl = () => selfReports.map((r) => JSON.stringify(r)).join("\n") + (selfReports.length ? "\n" : "");
+export function clearSelfReports() { selfReports.length = 0; selfReportSession = ""; selfReportListeners.forEach((l) => l()); }
+
 // ---------- Public API ----------
-export function setSource(source: "mock" | "live", baseUrl = state.baseUrl) {
+export function setSource(source: Source, baseUrl = state.baseUrl) {
   const base = cleanBase(baseUrl) || state.baseUrl;
-  stopLive(); mock.stop(); resetData();
-  set({ source, baseUrl: base, running: "running" });
-  if (source === "mock") {
+  stopLive(); mock.stop(); stopBrowser(); resetData();
+  set({ source, baseUrl: base, running: "running", booted: true });
+  if (source === "browser") {
+    set({ conn: "browser", retention: BROWSER_RETENTION, evalSummary: null, scenarios: [], recordings: [] });
+    startBrowser();
+  } else if (source === "mock") {
     set({ conn: "mock", retention: MOCK_RETENTION, evalSummary: MOCK_EVAL, baseline: { ...MOCK_BASELINE }, scenarios: MOCK_SCENARIOS, recordings: MOCK_RECORDINGS });
     mock.backfill(); mock.start();
   } else {
@@ -730,8 +914,47 @@ export function hasApiParam(): boolean {
   if (typeof window === "undefined") return false;
   try { return !!validBase(new URLSearchParams(window.location.search).get("api")); } catch { return false; }
 }
-/** Mock by default; opened with `?api=`, connect to that backend right away. */
-export function boot() { if (!booted) { booted = true; setSource(hasApiParam() ? "live" : "mock", resolveBaseUrl()); } }
+/** True when the page was opened with `?source=browser` or `?demo=tour` (the hosted Valence Web links). */
+export function hasBrowserParam(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("demo") === "tour") browserMode = "tour";
+    return q.get("source") === "browser" || q.get("demo") === "tour";
+  } catch { return false; }
+}
+/** The console's own URL parameters: only these opt a hosted visit out of the tour (utm_*, fbclid, ref do not). */
+const CONSOLE_PARAMS = ["source", "demo", "api", "perception"];
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/;
+/**
+ * Served from this machine or the LAN, the only place the desktop backend (the header's MOCK / LIVE / Connect) can
+ * run; false on the hosted site whatever its query (its CSP is connect-src 'self').
+ */
+export function isLocalHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return !h || LOCAL_HOST.test(h);
+}
+/**
+ * The hosted Valence Web site (any origin other than localhost / 127.0.0.1 / a LAN address): a first-time visitor
+ * without the console's own parameters gets the camera-free tour instead of the operator's mock stream.
+ */
+export function isHostedSite(): boolean {
+  if (typeof window === "undefined") return false;
+  let own = false;
+  try { const q = new URLSearchParams(window.location.search); own = CONSOLE_PARAMS.some((k) => q.has(k)); } catch { /* ignore */ }
+  return !isLocalHost() && !own;
+}
+/**
+ * Mock by default; `?source=browser` runs the engine in this page; `?demo=tour` replays the scripted tour through
+ * it; `?api=` connects to that backend right away. On the hosted site a bare visit starts the tour.
+ */
+export function boot() {
+  if (booted) return;
+  booted = true;
+  if (!hasBrowserParam() && !hasApiParam() && isHostedSite()) { startBrowserSource("tour"); return; }
+  setSource(hasBrowserParam() ? "browser" : hasApiParam() ? "live" : "mock", resolveBaseUrl());
+}
 
 /** The preview box's aspect ratio (`aspect-video`). */
 export const VIEW_ASPECT = 16 / 9;
@@ -808,6 +1031,11 @@ export async function sendCommand(c: Command) {
   if (state.source === "mock") {
     mock.command(c);
     return set({ lastCommand: { text: `POST ${path} (mock)`, ok: true } });
+  }
+  if (state.source === "browser") {
+    const r = browser?.command(c) ?? { ok: false, text: "in-browser engine not running" };
+    if (r.ok) applyCommandResult(c, {});
+    return set({ lastCommand: { text: r.text, ok: r.ok } });
   }
   try {
     const init: RequestInit = { method: "POST" };

@@ -8,10 +8,11 @@ import {
   Scripts,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { boot } from "../lib/valence";
 
 function NotFoundComponent() {
   return (
@@ -78,19 +79,30 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Valence Console" },
-      { name: "description", content: "Privacy-preserving emotional state console." },
+      // The page's only title, description and social preview (the index route sets none): they are prerendered
+      // into dist/client/index.html, so link unfurls show them. Keep to the pitch's wording: signals, simulated data,
+      // both within the description's first ~150 characters (what search results show; test/head-meta.test.ts).
+      { title: "Valence Web — emotion signals, entirely in your browser" },
+      {
+        name: "description",
+        content:
+          "Valence Web: emotion signals from the room, the body and the face, computed entirely in your browser on models trained on simulated data. Opens on a scripted, simulated tour; nothing is uploaded.",
+      },
+      { property: "og:title", content: "Valence Web" },
+      {
+        property: "og:description",
+        content:
+          "Emotion signals from the room, the body and the face, computed entirely in your browser. Opens on a scripted, simulated tour; models trained on simulated data.",
+      },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:card", content: "summary" },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" },
+      // Fonts are self-hosted (styles.css @font-face, public/fonts) so the page makes no third-party requests.
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
@@ -116,11 +128,17 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  // The static build prerenders only this shell (vite.config.ts, SPA mode), with an empty outlet. Rendering the
+  // page after hydration keeps the first client render identical to the shell (no hydration mismatch); the
+  // console boots client-side anyway (camera, store, engine). boot() runs first so the console's first render (and
+  // the camera preview's effect) already sees the chosen source: the tour never asks for the camera.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { boot(); setHydrated(true); }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      {hydrated ? <Outlet /> : null}
     </QueryClientProvider>
   );
 }

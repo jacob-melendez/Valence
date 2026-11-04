@@ -1,0 +1,10 @@
+// Valence Web on Cloudflare: a static-assets-only Worker (no server code). Build with `npm run build`
+// (writes dist/client with index.html and _headers), deploy with `npx wrangler deploy` from frontend/.
+{
+  "name": "valence-web",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application"
+  }
+}

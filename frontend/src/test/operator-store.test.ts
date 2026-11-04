@@ -89,6 +89,8 @@ describe("room baseline", () => {
     expect(baselineWarning({ ...live, baseline: baseline({ mode: "captured", complete: true }) })).toBe(false);
     expect(baselineWarning({ ...live, status: status("replay"), baseline: baseline() })).toBe(false);
     expect(baselineWarning({ ...live, source: "mock", conn: "mock", baseline: baseline() })).toBe(false);
+    // The in-browser camera runs on the automatic baseline, which never reads "captured": no warning that never clears.
+    expect(baselineWarning({ source: "browser", conn: "browser", status: status("live"), baseline: baseline({ complete: true }) })).toBe(false);
   });
 
   it("takes the baseline and edge errors from /api/health", () => {
