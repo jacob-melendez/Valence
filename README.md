@@ -12,9 +12,7 @@ state from it, and every prediction comes with a plain-English explanation of th
 Built for **TrojanHacks @ USC 2026, AI Data Governance track**. This is a **build in progress**; see
 [Status](#status).
 
-## Valence Web (Hack OHI/O 2026)
-
-Valence is a continuation project at Hack OHI/O 2026. The event baseline is the tag `hackohio-2026-baseline`
+Valence is also a continuation project at Hack OHI/O 2026. The event baseline is the tag `hackohio-2026-baseline`
 (commit `cc28be9`), and [`docs/HACKOHIO_LOG.md`](docs/HACKOHIO_LOG.md) logs every change since.
 
 At the event, the whole engine moved into the browser.
