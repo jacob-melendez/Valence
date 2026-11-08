@@ -11,7 +11,7 @@ import { RollingWindow } from "@/engine/window";
 
 import { artifactBytes } from "./engine-fixtures";
 
-// End-to-end parity on Cloud B's emotion tour (artifacts/emotion/tour.json.gz): 600 ticks of TickRecords through
+// End-to-end parity on the emotion tour (artifacts/emotion/tour.json.gz): 600 ticks of TickRecords through
 // the TypeScript window -> 123 + 31 features -> emotion model, against Python's per-tick outputs.
 const tour = parseTour(JSON.parse(gunzipSync(artifactBytes("emotion/tour.json.gz")).toString("utf8")));
 const fetchArtifact: FetchLike = async (url) => {

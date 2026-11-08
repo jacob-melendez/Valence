@@ -53,7 +53,7 @@ export interface PostureTrackerOptions {
   /**
    * Browser-only (no Python counterpart): the keypoints motion is measured on. Default BODY_POINTS (COCO 5-12), as
    * in Python. The browser passes the shoulders only: BlazePose elbows and wrists jitter at 0.5-1 sw/s on a still
-   * scene (docs/hackohio/status-C.md, YOLO vs BlazePose side by side).
+   * scene (frontend/src/perception/README.md, "Measured against the Python edge", YOLO vs BlazePose side by side).
    */
   motionPoints?: readonly number[];
   motionJump?: number;

@@ -3,7 +3,7 @@
 //
 //   /models/core/{m2.txt, m0.txt, model_meta.json, clip_bounds.json}     4-state served models (artifacts/)
 //   /models/all/{...same}                                                6-state models (artifacts/all/)
-//   /models/emotion/{classifier,valence,arousal}.{txt,json}.gz, meta.json   emotion map (artifacts/emotion/, Cloud B)
+//   /models/emotion/{classifier,valence,arousal}.{txt,json}.gz, meta.json   emotion map (artifacts/emotion/)
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";

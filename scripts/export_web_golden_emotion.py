@@ -4,15 +4,15 @@
     .venv/bin/python -B scripts/export_web_golden_emotion.py --check-only
 
 The Python emotion map is the reference: ``valence/features/emotion.py`` (the 31 emotion-v1 window features) and
-``valence/models/emotion.py`` ``EmotionPredictor`` (Cloud B's exported models in artifacts/emotion/). The vitest
+``valence/models/emotion.py`` ``EmotionPredictor`` (the exported models in artifacts/emotion/). The vitest
 parity test (frontend/src/test/engine-emotion.test.ts) replays this file through frontend/src/engine/
-emotion-features.ts and emotion-model.ts. artifacts/emotion/golden.json (Cloud B's own golden data) is tested
+emotion-features.ts and emotion-model.ts. artifacts/emotion/golden.json (the exporter's own golden data) is tested
 next to it and is not touched here.
 
 Data
 ----
 Simulator sessions with the ten-state set (``simulate_session(sid, default_rng(seed), state_set="emotion")``,
-the generator Cloud B trains on; the face cues come from the session's own ``crc32(sid + "/face-cues")``
+the generator the emotion models train on; the face cues come from the session's own ``crc32(sid + "/face-cues")``
 stream). SESSIONS picks seed 4 (three people, all ten states), seed 2 (one person, a third of the ticks
 without a readable face) and seed 7 (two people, all ten states, a third of the ticks without a face). Rows become TickRecords exactly as the replay source does (``TickRecord(**row)``
 over TICK_FIELDS); each person's window is their own rows, oldest first, the last <= 180 (RollingWindow), and

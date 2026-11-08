@@ -1,7 +1,7 @@
-# Hack OHI/O 2026: pitch, demo script and Devpost draft (Valence Web)
+# Valence Web: pitch, demo script and project write-up
 
-Draft written during the event by Cloud A. Numbers come from `docs/HACKOHIO_LOG.md`, `docs/WEB_ENGINE.md`,
-`docs/hackohio/status-{B,C}.md` and `docs/MODEL_CARD.md`. Re-check them against the final log before submitting.
+Numbers come from `docs/WEB_ENGINE.md`, `docs/MODEL_CARD.md` and `frontend/src/perception/README.md`. Re-check
+them before presenting.
 Every model number is **on simulated data**, so say so whenever one is shown.
 
 ## One line
@@ -9,31 +9,6 @@ Every model number is **on simulated data**, so say so whenever one is shown.
 **Valence Web:** context-aware emotion signals, computed entirely in your browser. It reads the room, the body and the
 face over 15 minutes and explains every call. It uploads nothing, and its CSP forbids it from connecting anywhere but its
 own origin.
-
-## Continuation disclosure (put this first in the submission)
-
-Valence is a continuation of our TrojanHacks @ USC 2026 project (AI Data Governance track winner). Hack OHI/O allows
-continued projects with a precise log of the work done at the event:
-
-- **Baseline:** commit `cc28be9`, tagged `hackohio-2026-baseline`, made before the event. Everything after it is
-  event work. `git diff cc28be9..hackohio-2026-final` shows all of it.
-- **Log:** `docs/HACKOHIO_LOG.md` has a narrative entry every ~2 h, plus a table generated from git (every commit,
-  time, track, files) that flags anything outside 10:00 ET Oct 24 → 10:00 ET Oct 25.
-- **Before the event, Valence was a desktop Python engine:**
-  - laptop camera and mic;
-  - 4 or 6 states;
-  - a FastAPI backend and a React console;
-  - governance: purge gate, audit log, no-network sandbox.
-- **Built during the event:**
-  1. **Valence Web.** The whole engine, ported to TypeScript and running in the page:
-     - perception with MediaPipe in a Web Worker;
-     - the aggregator and the 123 features;
-     - LightGBM with TreeSHAP;
-     - the smoother and the mask override;
-     - explanations and the audit chain.
-     It is checked against the Python engine on golden data and deployed as a static site with a strict CSP.
-  2. **The emotion map.** A valence–arousal core with 10 states (4 new ones: Bored, Confused, Calm, Anxious) and 31
-     new face-cue features, plus a self-report capture for real-data evaluation.
 
 ## Demo script (about 3 minutes; a recorded video or live)
 
@@ -55,7 +30,7 @@ Optional 20 s for a governance-minded judge: in the governance panel press **Dow
 `python scripts/audit_verify.py <file> --head <head>` from the repo. The desktop's verifier accepts the browser's
 chain ("chain intact"), and editing any line makes it fail at that line.
 
-## Devpost draft
+## Project write-up (Devpost style)
 
 **Inspiration.** Emotion AI usually reads one face in one frame, and faces mask. A stressed person can smile. Our
 first version (TrojanHacks, AI Data Governance winner) showed that context over time beats the face snapshot on one
@@ -76,7 +51,7 @@ anything, and without trusting us with their camera.
 - The page's Content-Security-Policy forbids connecting anywhere except its own origin, so the privacy claim is
   something you can check, not just trust.
 
-**How we built it.** Three parallel coding sessions, each with its own files:
+**How we built it.** Three workstreams, each with its own files:
 - **The engine:** a TypeScript port of the Python engine.
 - **The emotion map:** simulator, features and models, in Python.
 - **Browser perception:** MediaPipe Tasks Web.

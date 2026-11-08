@@ -12,12 +12,9 @@ state from it, and every prediction comes with a plain-English explanation of th
 Built for **TrojanHacks @ USC 2026, AI Data Governance track**. This is a **build in progress**; see
 [Status](#status).
 
-## Valence Web (Hack OHI/O 2026)
+## Valence Web
 
-Valence is a continuation project at Hack OHI/O 2026. The event baseline is the tag `hackohio-2026-baseline`
-(commit `cc28be9`), and [`docs/HACKOHIO_LOG.md`](docs/HACKOHIO_LOG.md) logs every change since.
-
-At the event, the whole engine moved into the browser.
+The whole engine also runs in the browser, as Valence Web.
 
 - **Everything runs in the page:**
   - perception (MediaPipe in a Web Worker);
@@ -40,12 +37,12 @@ session and needs no camera. Press **Use my camera (on-device)** for your own.
 |---|---|
 | [`docs/WEB_ENGINE.md`](docs/WEB_ENGINE.md) | Architecture and the parity table |
 | [`docs/DEPLOY_WEB.md`](docs/DEPLOY_WEB.md) | Cloudflare deploy and the security headers |
-| [`docs/HACKOHIO_PITCH.md`](docs/HACKOHIO_PITCH.md) | Demo script |
+| [`docs/PITCH_WEB.md`](docs/PITCH_WEB.md) | Pitch and demo script |
 | [`docs/media/valence-web-tour.mp4`](docs/media/valence-web-tour.mp4) | 75 s recording of the tour |
 
 ## Contents
 
-- [Valence Web (Hack OHI/O 2026)](#valence-web-hack-ohio-2026)
+- [Valence Web](#valence-web)
 - [What Valence is](#what-valence-is)
 - [Status](#status)
 - [Quickstart](#quickstart)

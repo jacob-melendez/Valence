@@ -55,13 +55,13 @@ STATE_LEXICON: dict[str, tuple[str, ...]] = {
 }
 
 
-# Emotion map (Hack OHI/O, docs/EMOTION_FEATURES.md): ten states on the valence-arousal plane. Separate from
+# Emotion map (docs/EMOTION_FEATURES.md): ten states on the valence-arousal plane. Separate from
 # STATE_SETS on purpose: the served 4- and 6-state models, the narrator and the lexicon are unchanged.
 EXTRA_STATES: tuple[str, ...] = ("Bored", "Confused", "Calm", "Anxious")
 EMOTION_STATES: tuple[str, ...] = ALL_STATES + EXTRA_STATES
 EMOTION_DISPLAY: dict[str, str] = {**STATE_DISPLAY, "Bored": "Bored", "Confused": "Confused", "Calm": "Calm",
                                    "Anxious": "Anxious"}
-# (valence, arousal) anchors on the circumplex, each in [-1, 1]. ASSUMPTIONS from docs/HACKOHIO_PLAN.md, not
+# (valence, arousal) anchors on the circumplex, each in [-1, 1]. ASSUMPTIONS (docs/EMOTION_FEATURES.md), not
 # measurements; the simulator draws each episode's true valence/arousal around them.
 AFFECT_ANCHORS: dict[str, tuple[float, float]] = {
     "Focused": (0.1, 0.3),

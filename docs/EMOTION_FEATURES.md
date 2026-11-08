@@ -1,7 +1,6 @@
 # Emotion map: face cues, tick fields, window features and states (feature version `emotion-v1`)
 
-The contract Cloud C (browser perception), Cloud A (web engine) and Cloud B (emotion map models) build against
-during Hack OHI/O. Everything here is **additive**: the existing 123 features (`valence/features/compute.py`),
+The contract the browser perception, the web engine and the emotion map models build against. Everything here is **additive**: the existing 123 features (`valence/features/compute.py`),
 the existing `TickRecord` fields and the served models are frozen and unchanged. The new values travel in new
 optional fields (`valence/contracts.py`, defaults NaN / 0), so old recordings and old producers keep working.
 

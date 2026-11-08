@@ -7,7 +7,7 @@
  * PostureTracker's motion reads 0.46 sw/s against 0.026. A One Euro filter per keypoint (min cutoff 0.2 Hz, beta 8
  * per shoulder width/s, derivative cutoff 0.5 Hz), with motion on the shoulders only, brought motion to 1.3x YOLO on
  * still and drifting scenes while keeping 0.93x of real 0.1-0.3 sw/s motion, and left slump onsets within 0.1 s
- * (side-by-side run of both models through the real Python PostureTracker; docs/hackohio/status-C.md).
+ * (side-by-side run of both models through the real Python PostureTracker; frontend/src/perception/README.md, "Measured against the Python edge").
  *
  * The cutoff rises with the keypoint's smoothed speed in shoulder widths per second (the raw shoulder distance,
  * EMA 0.3), so beta does not depend on the distance to the camera. The first sample passes through; a keypoint that

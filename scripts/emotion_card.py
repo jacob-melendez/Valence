@@ -26,7 +26,7 @@ from valence.models.train_ladder import split_sessions  # noqa: E402
 
 ART = ROOT / "artifacts" / "emotion"
 CARD = ROOT / "docs" / "MODEL_CARD.md"
-HEADER = "## 9. Emotion map (Hack OHI/O)"
+HEADER = "## 9. Emotion map"
 SHORT = {"Focused": "Foc", "Frustrated_Masked": "Fru", "Exhausted": "Exh", "Collaborative_Happy": "Col",
          "Overwhelmed": "Ovw", "Tense": "Ten", "Bored": "Bor", "Confused": "Cnf", "Calm": "Clm", "Anxious": "Anx"}
 NICE = {"Frustrated_Masked": "Frustrated", "Collaborative_Happy": "Collaborative"}
@@ -130,7 +130,7 @@ def browser_block() -> list[str]:
     if not path.exists():
         return []
     b = json.loads(path.read_text())
-    lines = ["- **Real browser cues** (`data/browser/*.jsonl` from Cloud C: the real in-browser perception on two CC BY 4.0",
+    lines = ["- **Real browser cues** (`data/browser/*.jsonl`: the real in-browser perception on two CC BY 4.0",
              "  clips of standing people turning and nodding with a mostly neutral expression, about 6.9 face passes/s;",
              "  `browser_captures.json`). Per-tick cue medians against simulated Focused (p10–p90; median tick-to-tick step):",
              "", "  | Cue | " + " | ".join(b["recordings"]) + " | Simulated Focused |", "  |---|" + "---|" * (len(b["recordings"]) + 1)]
@@ -180,7 +180,7 @@ def render() -> str:
 
     out = [HEADER, ""]
     out += [
-        "> Added during Hack OHI/O (Oct 24–25, 2026). **Every number in this section comes from simulated data**, generated",
+        "> Added in October 2026. **Every number in this section comes from simulated data**, generated",
         "> under the assumptions in [EMOTION_FEATURES.md](EMOTION_FEATURES.md) §7 and [DATASET.md](DATASET.md). The",
         "> valence–arousal anchors are assumptions, not measurements. No real labeled data has been evaluated yet (§9.6).",
         "> The served desktop models above (M2/M0, `artifacts/`, `artifacts/all/`) are unchanged.",
@@ -203,7 +203,7 @@ def render() -> str:
         f"| Training data | Simulator, state set `emotion`: {tr['sessions']} sessions (seed {tr['seed']}), {tr['windows']:,} windows (random 1–180 tick history, every 6 ticks); session split 70 / 7.5 / 7.5 / 15 (train / early stop / calibration / test = {sw['train']:,} / {sw['early']:,} / {sw['calib']:,} / {sw['test']:,} windows; {n_test_sessions} test sessions) |",
         "| Modality dropout | as M2: +30% training copies with the whole face block hidden, +20% degraded (face valence ± 0.25, cues ± 0.08, pose ± 6°, blink rate × U(0.5, 1.5), visible share × U(0.3, 0.8)) |",
         f"| Size | `classifier.json.gz` {sz['classifier']['json_gz_bytes'] / 1e6:.2f} MB, `valence.json.gz` {sz['valence']['json_gz_bytes'] / 1e6:.2f} MB, `arousal.json.gz` {sz['arousal']['json_gz_bytes'] / 1e6:.2f} MB (gzipped `dump_model()` JSON); the `.txt.gz` files are the same models in LightGBM's text format, which Python loads and the web engine reads first (the JSON dumps are its fallback) |",
-        f"| Parity | `golden.json`: {len(golden['vectors'])} input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; {len(golden['windows'])} feature windows (3 of them missing-data edge cases); {len(golden['frames'])} face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (Cloud A, `frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |",
+        f"| Parity | `golden.json`: {len(golden['vectors'])} input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; {len(golden['windows'])} feature windows (3 of them missing-data edge cases); {len(golden['frames'])} face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (`frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |",
         "",
         "**States and anchors** (class order; anchors from the plan's circumplex, **assumptions**):",
         "",
@@ -396,7 +396,7 @@ def render() -> str:
         "  CCC and quadrant agreement for the map position, the regressors, a constant (0, 0) guess and the leave-one-out",
         "  mean tap, per person and for taps with a warm window; duplicate taps from repeated downloads are skipped.",
     ] + self_report_block(mid) + [
-        "- **Existing real captures** (one person, one desk, recorded before the event, so **without the new face cues**:",
+        "- **Existing real captures** (one person, one desk, recorded on Oct 17–18 before the face cues existed, so **without them**:",
         "  the 31 cue features are NaN, blink rates included, and the model runs on context + face valence;",
         f"  `python -m valence.eval.emotion_capture`, `real_captures.json`). Time of day is fixed at 12:00: recordings carry",
         "  no time zone, and the time features are model inputs, so another hour would move these readings somewhat.",
@@ -424,7 +424,7 @@ def render() -> str:
         "  this is in-sample for the simulator's refit and says nothing about the four new states or the cues themselves.",
     ] + browser_block() + [
         "- **Public dataset** (stretch): **none evaluated.** DAiSEE releases its clips only after a request form (and its host",
-        "  is not reachable from the event's cloud sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,",
+        "  is not reachable from the cloud build sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,",
         "  CC BY-NC-SA 4.0, no form) would test the direction of the face cues per emotion, but its hosts (zenodo.org,",
         "  huggingface.co) are denied by the cloud environment's network policy. Either would need in-memory processing:",
         "  this track does not write raw video to disk.",

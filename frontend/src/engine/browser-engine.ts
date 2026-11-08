@@ -26,7 +26,7 @@ export interface BrowserEngineOptions {
   /** Time zone for the time of day (undefined = the device's local time, as the desktop edge uses). */
   tz?: string;
   /**
-   * Replay Cloud B's emotion tour (a simulated 50-minute walk through the 10 states) instead of live sensors:
+   * Replay the emotion tour (a simulated 50-minute walk through the 10 states) instead of live sensors:
    * the camera-free demo. Predictions then carry the scripted truth for the affect map.
    */
   tour?: boolean;
