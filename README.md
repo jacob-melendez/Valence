@@ -38,6 +38,7 @@ session and needs no camera. Press **Use my camera (on-device)** for your own.
 | [`docs/WEB_ENGINE.md`](docs/WEB_ENGINE.md) | Architecture and the parity table |
 | [`docs/DEPLOY_WEB.md`](docs/DEPLOY_WEB.md) | Cloudflare deploy and the security headers |
 | [`docs/PITCH_WEB.md`](docs/PITCH_WEB.md) | Pitch and demo script |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Recording labeled real sessions and benchmarking the models on them |
 | [`docs/media/valence-web-tour.mp4`](docs/media/valence-web-tour.mp4) | 75 s recording of the tour |
 
 ## Contents

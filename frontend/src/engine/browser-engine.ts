@@ -169,6 +169,7 @@ export async function createBrowserEngine(opts: BrowserEngineOptions = {}): Prom
     // The exact text of the desktop's var/audit/<session>.jsonl: scripts/audit_verify.py verifies it offline.
     auditJsonl: () => runtime.audit.toJsonl(),
     evalSummary: () => evalSummaryOf(predictor.meta, emotion),
+    emotionModel: emotion?.modelId ?? null,
     latestInputs(personId: number) {
       const x = inputs.get(personId);
       if (!x || !emotion) return null;

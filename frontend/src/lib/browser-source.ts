@@ -6,6 +6,7 @@
  * this host actually serves it).
  * It emits the same messages the backend WebSocket does (docs/API.md section 3), so every panel works unchanged.
  */
+import type { Marker, Stamp } from "./session-recorder";
 import type { AffectStateInfo, Command, EvalSummary, HelloMsg, RoomBaseline, ServerMessage, StatusMsg } from "./valence";
 
 // ---------- Seams (implemented by frontend/src/engine and frontend/src/perception) ----------
@@ -63,6 +64,16 @@ export interface BrowserEngine {
   auditJsonl?(): string;
   /** The Evaluation panel's numbers from the loaded models' metadata (held-out scores on simulated sessions). */
   evalSummary?(): EvalSummary;
+  /** The emotion map's model id, when its models are loaded (session header). */
+  emotionModel?: string | null;
+}
+
+/** Where a recorded session goes (session-recorder.ts SessionRecorder): what the engine saw, stepped and was told. */
+export interface SessionSink {
+  readonly active: boolean;
+  obs(o: unknown): void;
+  tick(wall: number, mono: number, msgs: readonly ServerMessage[]): void;
+  marker(at: Stamp, m: Marker): void;
 }
 
 export interface BrowserSourceDeps {
@@ -85,6 +96,11 @@ export interface BrowserSourceDeps {
   /** A camera/mic open begins (first start, or Start after pause, stop or a refused prompt): the last attempt's
    *  camera and mic errors no longer apply, and this attempt reports its own. */
   onOpenSensors?: () => void;
+  /** The engine is up and the sensors are about to open (live) or the tour is about to tick: a recording starts here,
+   *  so its first observation is the engine's first. */
+  onReady?: (info: { featureVersion: string; emotionModel: string | null }) => void;
+  /** A recorded session (live only): observations the engine took, its ticks, and operator controls. */
+  session?: SessionSink;
 }
 
 /** status() of this source: the backend's StatusMsg plus the browser-only fields the console shows. */
@@ -280,6 +296,7 @@ export class BrowserSource {
     if (this.roomOnly) engine.setRoomOnly(true);
     for (const w of ["face_occlusion", "low_light"] as const) if (this.overlays[w]) engine.setOverlay(w, true);
     this.deps.emit(this.hello());
+    this.deps.onReady?.({ featureVersion: engine.featureVersion, emotionModel: engine.emotionModel ?? null });
     // Paused or stopped while the engine loaded: Start opens the sensors later.
     if (!this.tour && this.running === "running") await this.openSensors(gen);
     if (gen !== this.generation) return;
@@ -389,6 +406,7 @@ export class BrowserSource {
     // The engine's push_obs publishes the participants' boxes (valence/runtime/engine.py: >= 0.55x the tallest,
     // at most every 0.1 s).
     const tracks = this.engine.push(o);
+    if (!this.tour) this.deps.session?.obs(o);
     if (tracks) this.deps.emit(tracks);
     if (isVideo(o)) {
       this.lastVideoAt = this.now();
@@ -421,6 +439,7 @@ export class BrowserSource {
       : [this.now() / 1000, this.mono() / 1000];
     this.tourTicks += 1;
     try { msgs = this.engine.tick(wall, mono, counters); } catch (e) { this.deps.onError("engine", String(e)); }
+    if (!this.tour) this.deps.session?.tick(wall, mono, msgs);
     this.loopLatency = this.mono() - t0;
     // Live only: the tour's records carry scripted break clocks and compliments.
     msgs = msgs.map((m) => {
@@ -435,6 +454,12 @@ export class BrowserSource {
     msgs.forEach((m) => this.deps.emit(m));
     this.deps.onBaseline(this.engine.baseline());
   }
+
+  /** A control marker in a recorded session: the benchmark mirrors start/pause/stop and flags the rest. */
+  private note(action: string) { if (!this.tour) this.deps.session?.marker(this.stamp(), { kind: "control", action }); }
+
+  /** This source's clocks in seconds (the wall and mono its observations and ticks use), for session markers. */
+  stamp(): Stamp { return { wall: this.now() / 1000, mono: this.mono() / 1000 }; }
 
   hello(): HelloMsg {
     const affect = this.engine?.affectStates ?? [];
@@ -507,24 +532,26 @@ export class BrowserSource {
           if (c.action === "stop") { e?.resetPeople(false); this.clocked.clear(); this.onBreak.clear(); }
         }
         e?.audit?.(`control_${c.action}`);
+        this.note(c.action);
         this.emitStatus();
         return { ok: true, text: `control ${c.action} (in-browser)` };
       }
       // The engine restarts the clocks it has (everyone seen so far); people who appear later start theirs on arrival.
-      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); this.onBreak = new Set(this.clocked); return { ok: true, text: "break logged (in-browser)" };
+      case "break": if (!e) return loading; e.logBreak(this.now() / 1000); this.onBreak = new Set(this.clocked); this.note("break"); return { ok: true, text: "break logged (in-browser)" };
       // Only the cards go (runtime.setRoomOnly clears `latest`); windows and break clocks stay, as in app.py set_mode.
-      case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); return { ok: true, text: `room-only ${c.room_only}` };
-      case "sim": this.overlays[c.which] = c.enabled; e?.setOverlay(c.which, c.enabled); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
+      case "mode": this.roomOnly = c.room_only; e?.setRoomOnly(c.room_only); this.note(`room_only_${c.room_only ? "on" : "off"}`); return { ok: true, text: `room-only ${c.room_only}` };
+      case "sim": this.overlays[c.which] = c.enabled; e?.setOverlay(c.which, c.enabled); this.note(`sim_${c.which}_${c.enabled ? "on" : "off"}`); return { ok: true, text: `sim ${c.which} ${c.enabled}` };
       case "baseline":
       case "baseline_reset":
         // The tour's records never pass the aggregator, so a capture would never fill.
         if (this.tour) return { ok: false, text: "the tour carries its own room baseline: capture needs the live camera and mic" };
         if (!e) return loading;
         if (c.kind === "baseline") e.startBaseline(c.seconds, "capturing"); else e.startBaseline(null, "auto");
+        this.note(c.kind === "baseline" ? `baseline_${c.seconds ?? "default"}` : "baseline_reset");
         this.deps.onBaseline(e.baseline());
         return { ok: true, text: c.kind === "baseline" ? `baseline ${c.seconds} s (in-browser)` : "baseline reset (in-browser)" };
       // Forgotten people get fresh break clocks (aggregator resetPeople): time on camera again.
-      case "demo_reset": if (!e) return loading; e.resetPeople(); this.clocked.clear(); this.onBreak.clear(); return { ok: true, text: "people reset (in-browser)" };
+      case "demo_reset": if (!e) return loading; e.resetPeople(); this.clocked.clear(); this.onBreak.clear(); this.note("demo_reset"); return { ok: true, text: "people reset (in-browser)" };
       case "live": return { ok: true, text: "already live (in-browser)" };
       case "replay":
       case "replay_recording":

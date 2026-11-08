@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   LAYERS, REPLAY_SPEEDS, STALE_BUILD, baselineProgress, baselineWarning, coverBox, figureUrl, fmt, fmtSigned, getState, isLocalHost, isMockPerception, provenanceBadges, sendCommand, setSource,
   shownExplanation, stateName, useValence, clearSelfReports, downloadAuditLog, getTourSpeed, getBrowserMode, startBrowserSource, getSelfReports, onSelfReports, recordSelfReport, selfReportsJsonl,
+  abortProtocol, clearSession, downloadSession, getProtocolRun, getSessionStats, onSessionChange, startRecordedSession, stopRecording,
   type EvalSummary, type GovernanceMsg, type PredictionMsg, type StateKey, type StateVectorMsg,
 } from "@/lib/valence";
 import { getBrowserStream, onBrowserStream, type BrowserStatus } from "@/lib/browser-source";
@@ -1053,6 +1054,79 @@ export function SelfReport() {
         <button onClick={() => { clearSelfReports(); setLast(null); }} disabled={!taps} className="rounded border px-2 py-1 hover:bg-accent disabled:opacity-40">Clear</button>
       </div>
       {note && <p className="mt-1 text-xs text-warn">{note}</p>}
+    </div>
+  );
+}
+
+// ---------- Session recording (real-data protocol, docs/PROTOCOL.md) ----------
+const mmss = (ms: number) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+/** Camera mode: record a labeled session (the protocol's timed blocks) for valence/eval/benchmark.py. */
+export function SessionPanel() {
+  const s = useValence();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const un = onSessionChange(() => setTick((n) => n + 1));
+    const t = setInterval(() => setTick((n) => n + 1), 1000); // countdown and size
+    return () => { un(); clearInterval(t); };
+  }, []);
+  if (s.source !== "browser" || getBrowserMode() !== "live") return null;
+  const st = getSessionStats();
+  const run = getProtocolRun();
+  const running = run?.status === "running";
+  const block = running ? run.protocol.blocks[run.index] : undefined;
+  const next = running ? run.protocol.blocks[run.index + 1] : undefined;
+  const elapsed = st.started_wall ? Math.max(0, Date.now() / 1000 - st.started_wall) * 1000 : 0;
+  const size = `${mmss(elapsed)} · ${(st.bytes / 1e6).toFixed(1)} MB · ${st.observations.toLocaleString()} observations`;
+  return (
+    <div className="panel" data-testid="session-panel">
+      <div className="panel-title">Session recording</div>
+      {block && run ? (
+        <div data-testid="protocol-block">
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="text-sm text-muted-foreground">Block {run.index + 1} of {run.protocol.blocks.length}</div>
+            <div className="font-mono text-3xl font-bold" data-testid="protocol-countdown">{mmss(run.blockStartedAt + block.minutes * 60_000 - Date.now())}</div>
+          </div>
+          <div className="text-2xl font-bold">{block.label}</div>
+          <p className="mt-1">{block.instruction}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{next ? `Next: ${next.label}` : "Last block"} · ● recording {size}</p>
+          <p className="mt-1 text-xs text-warn">Don't press Pause or Stop: they end the protocol. Keep tapping the self-report when it asks.</p>
+          <div className="mt-3"><Btn small tone="danger" onClick={() => abortProtocol("operator abort")}>Abort protocol</Btn></div>
+        </div>
+      ) : st.active ? (
+        <div data-testid="recording">
+          <p className="font-mono text-sm">● Recording · {size}</p>
+          <div className="mt-3"><Btn small onClick={() => stopRecording()}>Stop recording</Btn></div>
+        </div>
+      ) : (
+        <div data-testid="recording-idle">
+          <p className="mb-2 text-sm text-muted-foreground">
+            Record a labeled session for the real-data benchmark (docs/PROTOCOL.md). Recording restarts the camera session,
+            so the file holds the engine's whole history. It keeps features only (counts, levels, flags, boxes, face-cue
+            numbers, model outputs), never images or audio, in this tab until you download or clear it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Btn small tone="primary" onClick={() => startRecordedSession({ protocol: true })}>▶ Start protocol (24 min)</Btn>
+            <Btn small onClick={() => startRecordedSession({ protocol: false })}>● Record without protocol</Btn>
+          </div>
+        </div>
+      )}
+      {!st.active && st.lines > 0 && (
+        <div className="mt-3 border-t pt-3" data-testid="recording-done">
+          <p className="text-sm">
+            {run?.status === "done" ? "Protocol complete. " : run?.status === "aborted" ? `Protocol aborted (${run.reason}). ` : ""}
+            Recorded {size} · {st.ticks} ticks · {st.taps} tap{st.taps === 1 ? "" : "s"}.
+          </p>
+          {st.full && <p className="text-xs text-warn">The recording stopped itself at its size limit.</p>}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Btn small tone="primary" onClick={() => { downloadSession(); }}>Download session (features only)</Btn>
+            <Btn small onClick={() => clearSession()}>Clear</Btn>
+          </div>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">python -m valence.eval.benchmark {"<file>"} --out reports/benchmark</p>
+        </div>
+      )}
     </div>
   );
 }

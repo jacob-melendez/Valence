@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { boot, getBrowserMode, useValence } from "@/lib/valence";
 import {
-  AffectMap, CameraView, Welcome, Controls, Evaluation, Governance, Header, PersonCard, Retention, RoomBaselineCard, SelfReport, SourceControls,
+  AffectMap, CameraView, Welcome, Controls, Evaluation, Governance, Header, PersonCard, Retention, RoomBaselineCard, SelfReport, SessionPanel, SourceControls,
   StateVectors, SystemStatus, Timeline,
 } from "@/components/console/panels";
 import { PanelBoundary } from "@/components/console/PanelBoundary";
@@ -41,6 +41,7 @@ function Index() {
           <PanelBoundary name="Timeline"><Timeline /></PanelBoundary>
         </div>
         <aside className="space-y-5">
+          <PanelBoundary name="Session recording"><SessionPanel /></PanelBoundary>
           <PanelBoundary name="Self-report"><SelfReport /></PanelBoundary>
           <PanelBoundary name="Governance"><Governance /></PanelBoundary>
           <PanelBoundary name="System status"><SystemStatus /></PanelBoundary>

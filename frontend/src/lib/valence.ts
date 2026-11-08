@@ -7,6 +7,8 @@
  */
 import { useSyncExternalStore } from "react";
 import { BrowserSource, cspSealed, type BrowserEngine, type PerceptionLike } from "./browser-source";
+import { PROTOCOL_V1, type Protocol, type ProtocolBlock } from "./protocol";
+import { SessionRecorder, newSessionId as newRecordingId, type Marker, type Stamp } from "./session-recorder";
 
 // ---------- Types ----------
 export type StateKey = "Focused" | "Frustrated_Masked" | "Exhausted" | "Collaborative_Happy";
@@ -645,6 +647,7 @@ const BROWSER_RETENTION = {
     { what: "rolling state vector (numbers only: noise, light, posture, face valence…)", where: "this tab's memory", how_long: "15 minutes" },
     { what: "audit log: labels, confidences, SHAP layer sums, operator actions", where: "this tab's memory (hash-chained)", how_long: "until the tab closes" },
     { what: "self-report taps (camera mode, only if you tap): each tap and the model's numeric inputs at that moment", where: "this tab's memory", how_long: "until Clear in the Self-report panel or the tab closes (Download keeps them)" },
+    { what: "session recording (only if you start one): per-frame features (counts, levels, flags, boxes, face-cue numbers), model outputs, protocol markers, taps", where: "this tab's memory", how_long: "until Clear in the Session panel or the tab closes (Download keeps it)" },
   ],
   never_kept: ["video frames (processed in memory and dropped)", "audio (reduced to levels and laughter scores, then dropped)", "transcripts (no speech recognition in the browser)", "face images, landmarks or embeddings", "anything sent off the device (nothing is uploaded; the deployed CSP allows connect-src 'self' only)"],
 };
@@ -828,13 +831,29 @@ function startBrowser() {
     // A new open (Start after a refused prompt or a failed perception) clears the last attempt's camera and mic
     // errors; it reports its own. Engine errors are not about the sensors and stay.
     onOpenSensors: () => { if (current()) set({ micError: null, ...(state.edgeError?.startsWith("engine: ") ? {} : { edgeError: null }) }); },
+    session,
+    // A recorded session starts with the engine, before the first observation (startRecordedSession).
+    onReady: (info) => {
+      if (!current() || !pendingSession || mode !== "live") return;
+      const { protocol } = pendingSession;
+      pendingSession = null;
+      session.start({ session_id: newRecordingId(new Date()), started_wall: Date.now() / 1000, tz: browserTimeZone(),
+        feature_version: info.featureVersion, emotion_model: info.emotionModel, protocol: protocol ? PROTOCOL_V1.id : null });
+      if (protocol) beginProtocol(PROTOCOL_V1);
+      notifySession();
+    },
   });
   browser = src;
   // Self-report taps record the emotion model's current input for the tapped person.
   setFeatureProvider((pid) => browser?.latestInputs(pid) ?? null);
   void src.start();
 }
-function stopBrowser() { browser?.stop(); browser = null; setFeatureProvider(null); }
+function stopBrowser() {
+  // A recording belongs to one engine run: leaving it ends the protocol and the recording (the data stays).
+  if (protocolRun?.status === "running") abortProtocol("source stopped");
+  if (session.active) { session.stop(); notifySession(); }
+  browser?.stop(); browser = null; setFeatureProvider(null);
+}
 
 // ---------- Audit log download (in-browser source) ----------
 /**
@@ -882,14 +901,120 @@ export function recordSelfReport(personId: number, valence: number, arousal: num
   const now = Date.now();
   if (!selfReportSession) selfReportSession = newSessionId(new Date(now));
   const clip = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 1000) / 1000;
-  selfReports.push({ t: now / 1000, session_id: selfReportSession, person_id: personId, valence: clip(valence), arousal: clip(arousal),
-    feature_version: f.feature_version, features: f.features, ...(label ? { label } : {}) });
+  const tap: SelfReportTap = { t: now / 1000, session_id: selfReportSession, person_id: personId, valence: clip(valence), arousal: clip(arousal),
+    feature_version: f.feature_version, features: f.features, ...(label ? { label } : {}) };
+  selfReports.push(tap);
+  if (session.active) { session.tap(stamp(), tap); notifySession(); }
   selfReportListeners.forEach((l) => l());
   return true;
 }
 /** The taps as JSONL (what valence/eval/self_report.py reads). */
 export const selfReportsJsonl = () => selfReports.map((r) => JSON.stringify(r)).join("\n") + (selfReports.length ? "\n" : "");
 export function clearSelfReports() { selfReports.length = 0; selfReportSession = ""; selfReportListeners.forEach((l) => l()); }
+
+// ---------- Session recording and the real-data protocol (docs/PROTOCOL.md) ----------
+// A recording holds what the engine took (features only), its ticks, protocol markers and taps, in this tab's memory
+// until Clear or the tab closes; valence/eval/benchmark.py replays and scores it. Listed in BROWSER_RETENTION.
+const session = new SessionRecorder();
+let pendingSession: { protocol: boolean } | null = null;
+const sessionListeners = new Set<() => void>();
+function notifySession() { sessionListeners.forEach((l) => l()); }
+export function onSessionChange(l: () => void): () => void { sessionListeners.add(l); return () => { sessionListeners.delete(l); }; }
+export const getSessionStats = () => session.stats();
+/** The recording as JSONL (what downloadSession saves). */
+export const sessionJsonl = () => session.jsonl();
+function browserTimeZone(): string | null {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { return null; }
+}
+/** The source's clocks, which its observations and ticks use (the page's when no source runs). */
+function stamp(): Stamp { return browser?.stamp() ?? { wall: Date.now() / 1000, mono: performance.now() / 1000 }; }
+
+export interface ProtocolRun {
+  protocol: Protocol; index: number; blockStartedAt: number; status: "running" | "done" | "aborted"; reason?: string;
+}
+let protocolRun: ProtocolRun | null = null;
+let protocolTimer: ReturnType<typeof setInterval> | null = null;
+export const getProtocolRun = (): Readonly<ProtocolRun> | null => protocolRun;
+
+/**
+ * Restart the camera session with a recording (and the protocol): the engine starts empty, so the file holds its
+ * whole history and a replay steps through exactly what the browser did. Camera mode only.
+ */
+export function startRecordedSession(opts: { protocol: boolean }): boolean {
+  if (state.source !== "browser" || browserMode !== "live") return false;
+  pendingSession = { protocol: opts.protocol };
+  protocolRun = null;
+  notifySession();
+  startBrowserSource("live");
+  return true;
+}
+export function stopRecording() {
+  if (protocolRun?.status === "running") abortProtocol("recording stopped");
+  session.stop();
+  notifySession();
+}
+export function clearSession() {
+  if (protocolRun?.status === "running") abortProtocol("recording cleared");
+  session.clear();
+  protocolRun = null;
+  notifySession();
+}
+/** Save the recording as a JSONL file (features only; docs/PROTOCOL.md section 3). */
+export function downloadSession(): boolean {
+  const text = session.jsonl();
+  if (!text) return false;
+  const url = URL.createObjectURL(new Blob([text], { type: "application/x-ndjson" }));
+  const el = document.createElement("a");
+  el.href = url;
+  el.download = session.fileName();
+  el.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+const blockMarker = (kind: "block_start" | "block_end", b: ProtocolBlock): Marker => ({
+  kind, block_id: b.id, label: b.label, scored: b.scored, calm: b.calm, expect: { card: [...b.expect.card], map: [...b.expect.map] },
+});
+function beginProtocol(p: Protocol) {
+  const first = p.blocks[0];
+  if (!first) return;
+  protocolRun = { protocol: p, index: 0, blockStartedAt: Date.now(), status: "running" };
+  session.marker(stamp(), { kind: "protocol_start", label: p.id });
+  session.marker(stamp(), blockMarker("block_start", first));
+  if (protocolTimer) clearInterval(protocolTimer);
+  protocolTimer = setInterval(protocolStep, 1000);
+}
+/** Advance when a block's time is up; block starts follow the schedule, not the timer's jitter. */
+function protocolStep() {
+  const run = protocolRun;
+  const block = run?.status === "running" ? run.protocol.blocks[run.index] : undefined;
+  if (!run || !block) return;
+  const ends = run.blockStartedAt + block.minutes * 60_000;
+  if (Date.now() < ends) return;
+  session.marker(stamp(), blockMarker("block_end", block));
+  const next = run.protocol.blocks[run.index + 1];
+  if (!next) {
+    session.marker(stamp(), { kind: "protocol_end", label: run.protocol.id });
+    session.stop();
+    finishProtocol("done");
+    return;
+  }
+  protocolRun = { ...run, index: run.index + 1, blockStartedAt: ends };
+  session.marker(stamp(), blockMarker("block_start", next));
+  notifySession();
+}
+/** End the protocol early: the recording stops and keeps what it has, with the reason. */
+export function abortProtocol(reason = "aborted") {
+  if (protocolRun?.status !== "running") return;
+  session.marker(stamp(), { kind: "protocol_abort", reason });
+  session.stop();
+  finishProtocol("aborted", reason);
+}
+function finishProtocol(status: "done" | "aborted", reason?: string) {
+  if (protocolTimer) clearInterval(protocolTimer);
+  protocolTimer = null;
+  if (protocolRun) protocolRun = { ...protocolRun, status, ...(reason ? { reason } : {}) };
+  notifySession();
+}
 
 // ---------- Public API ----------
 export function setSource(source: Source, baseUrl = state.baseUrl) {
@@ -1035,6 +1160,7 @@ export async function sendCommand(c: Command) {
   if (state.source === "browser") {
     const r = browser?.command(c) ?? { ok: false, text: "in-browser engine not running" };
     if (r.ok) applyCommandResult(c, {});
+    if (r.ok && c.kind === "control" && c.action !== "start" && protocolRun?.status === "running") abortProtocol(`operator ${c.action}`);
     return set({ lastCommand: { text: r.text, ok: r.ok } });
   }
   try {
