@@ -1,0 +1,1126 @@
+{
+ "session_id": "legacy-slump",
+ "file": "data/real/capture_slump.jsonl",
+ "kind": "legacy",
+ "note": "Run 2, 3 min of cued 20 s slumps with upright gaps (slump duty 45%, face visible 55%): the protocol's tired block, expected Exhausted. Intermittent cued slumping in a fresh 3-minute window is a weak version of exhaustion (no break-clock pressure), and a held slump reads restless live (MODEL_CARD section 7), so expect a low hit rate.",
+ "header": null,
+ "started_utc": "2026-10-18 15:02:07",
+ "replay": {
+  "served_model": "m2_lgbm@8a78efc7",
+  "emotion_model": "emotion-v1@006a8d7d",
+  "order": "mono",
+  "time_of_day": "fixed at 12:00",
+  "ticks": "synthesized every 5 s from the first observation",
+  "controls": []
+ },
+ "scoring": {
+  "person": 1,
+  "grace_s": 60.0,
+  "map": "no emotion-v1 face cues in this recording: the map was not read"
+ },
+ "counts": {
+  "observations": 1981,
+  "ticks": 36,
+  "markers": 2,
+  "taps": 0,
+  "late_observations": 0,
+  "duration_s": 180.0
+ },
+ "warnings": [],
+ "blocks": [
+  {
+   "id": "slump",
+   "label": "Cued slumps",
+   "scored": true,
+   "calm": false,
+   "expect": {
+    "card": [
+     "Exhausted"
+    ],
+    "map": [
+     "Exhausted",
+     "Bored"
+    ]
+   },
+   "start_mono": 358573.692,
+   "end_mono": 358753.692,
+   "start_wall": 1792335727.187,
+   "duration_s": 180.0,
+   "ended_by": "block_end",
+   "ticks_in_block": 36,
+   "absent_in_block": 0,
+   "ticks_scored": 25,
+   "absent": 0,
+   "models": {
+    "card": {
+     "ticks": 25,
+     "read": 25,
+     "hits": 0,
+     "hit_rate": 0.0,
+     "first_hit_s": null,
+     "labels": {
+      "Focused": 25
+     },
+     "majority": "Focused",
+     "majority_share": 1.0
+    },
+    "m2": {
+     "ticks": 25,
+     "read": 25,
+     "hits": 0,
+     "hit_rate": 0.0,
+     "first_hit_s": null,
+     "labels": {
+      "Focused": 25
+     },
+     "majority": "Focused",
+     "majority_share": 1.0
+    },
+    "m0": {
+     "ticks": 25,
+     "read": 25,
+     "hits": 11,
+     "hit_rate": 0.44,
+     "first_hit_s": 10.0,
+     "labels": {
+      "Focused": 14,
+      "Exhausted": 11
+     },
+     "majority": "Focused",
+     "majority_share": 0.56
+    },
+    "map": {
+     "ticks": 25,
+     "read": 0,
+     "hits": 0,
+     "hit_rate": null,
+     "first_hit_s": null,
+     "labels": {
+      "none": 25
+     },
+     "majority": null,
+     "majority_share": null
+    }
+   }
+  }
+ ],
+ "session": {
+  "mean_hit_rate": {
+   "card": {
+    "blocks": 1,
+    "mean": 0.0
+   },
+   "m2": {
+    "blocks": 1,
+    "mean": 0.0
+   },
+   "m0": {
+    "blocks": 1,
+    "mean": 0.44
+   },
+   "map": {
+    "blocks": 0,
+    "mean": null
+   }
+  },
+  "calm_false_alarm": {
+   "blocks": [],
+   "card": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "m2": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "m0": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "map": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   }
+  },
+  "self_report": null,
+  "parity": null
+ },
+ "ticks": [
+  {
+   "i": 0,
+   "t": 5.0,
+   "wall": 1792335732.187,
+   "mono": 358578.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.9774,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.9774,
+     "m0": "Focused",
+     "m0_confidence": 0.5538,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 1,
+   "t": 10.0,
+   "wall": 1792335737.187,
+   "mono": 358583.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7551,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7551,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5161,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 2,
+   "t": 15.0,
+   "wall": 1792335742.187,
+   "mono": 358588.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7228,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7228,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4794,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 3,
+   "t": 20.0,
+   "wall": 1792335747.187,
+   "mono": 358593.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7238,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7238,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4735,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 4,
+   "t": 25.0,
+   "wall": 1792335752.187,
+   "mono": 358598.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7256,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7256,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5148,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 5,
+   "t": 30.0,
+   "wall": 1792335757.187,
+   "mono": 358603.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7393,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7393,
+     "m0": "Focused",
+     "m0_confidence": 0.598,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 6,
+   "t": 35.0,
+   "wall": 1792335762.187,
+   "mono": 358608.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7599,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7599,
+     "m0": "Focused",
+     "m0_confidence": 0.5599,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 7,
+   "t": 40.0,
+   "wall": 1792335767.187,
+   "mono": 358613.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7474,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7474,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4981,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 8,
+   "t": 45.0,
+   "wall": 1792335772.187,
+   "mono": 358618.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7414,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7414,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5481,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 9,
+   "t": 50.0,
+   "wall": 1792335777.187,
+   "mono": 358623.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7495,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7495,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5013,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 10,
+   "t": 55.0,
+   "wall": 1792335782.187,
+   "mono": 358628.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7539,
+     "warming_up": true,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7539,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5014,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 11,
+   "t": 60.0,
+   "wall": 1792335787.187,
+   "mono": 358633.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7588,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7588,
+     "m0": "Focused",
+     "m0_confidence": 0.5318,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 12,
+   "t": 65.0,
+   "wall": 1792335792.187,
+   "mono": 358638.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7648,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7648,
+     "m0": "Focused",
+     "m0_confidence": 0.5376,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 13,
+   "t": 70.0,
+   "wall": 1792335797.187,
+   "mono": 358643.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.751,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.751,
+     "m0": "Focused",
+     "m0_confidence": 0.5725,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 14,
+   "t": 75.0,
+   "wall": 1792335802.187,
+   "mono": 358648.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7498,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7498,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5418,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 15,
+   "t": 80.0,
+   "wall": 1792335807.187,
+   "mono": 358653.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7509,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7509,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5372,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 16,
+   "t": 85.0,
+   "wall": 1792335812.187,
+   "mono": 358658.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7607,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7607,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5313,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 17,
+   "t": 90.0,
+   "wall": 1792335817.187,
+   "mono": 358663.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7634,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7634,
+     "m0": "Focused",
+     "m0_confidence": 0.5318,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 18,
+   "t": 95.0,
+   "wall": 1792335822.187,
+   "mono": 358668.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.764,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.764,
+     "m0": "Focused",
+     "m0_confidence": 0.5515,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 19,
+   "t": 100.0,
+   "wall": 1792335827.187,
+   "mono": 358673.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7424,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7424,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4981,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 20,
+   "t": 105.0,
+   "wall": 1792335832.187,
+   "mono": 358678.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.739,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.739,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5144,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 21,
+   "t": 110.0,
+   "wall": 1792335837.187,
+   "mono": 358683.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.764,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.764,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5293,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 22,
+   "t": 115.0,
+   "wall": 1792335842.187,
+   "mono": 358688.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7583,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7583,
+     "m0": "Exhausted",
+     "m0_confidence": 0.52,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 23,
+   "t": 120.0,
+   "wall": 1792335847.187,
+   "mono": 358693.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7561,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7561,
+     "m0": "Focused",
+     "m0_confidence": 0.5814,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 24,
+   "t": 125.0,
+   "wall": 1792335852.187,
+   "mono": 358698.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7382,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7382,
+     "m0": "Focused",
+     "m0_confidence": 0.5599,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 25,
+   "t": 130.0,
+   "wall": 1792335857.187,
+   "mono": 358703.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6918,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6918,
+     "m0": "Focused",
+     "m0_confidence": 0.5725,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 26,
+   "t": 135.0,
+   "wall": 1792335862.187,
+   "mono": 358708.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6567,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6567,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5441,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 27,
+   "t": 140.0,
+   "wall": 1792335867.187,
+   "mono": 358713.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6922,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6922,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4735,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 28,
+   "t": 145.0,
+   "wall": 1792335872.187,
+   "mono": 358718.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7307,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7307,
+     "m0": "Exhausted",
+     "m0_confidence": 0.5184,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 29,
+   "t": 150.0,
+   "wall": 1792335877.187,
+   "mono": 358723.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7303,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7303,
+     "m0": "Focused",
+     "m0_confidence": 0.5814,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 30,
+   "t": 155.0,
+   "wall": 1792335882.187,
+   "mono": 358728.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6883,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6883,
+     "m0": "Focused",
+     "m0_confidence": 0.5538,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 31,
+   "t": 160.0,
+   "wall": 1792335887.187,
+   "mono": 358733.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6248,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6248,
+     "m0": "Focused",
+     "m0_confidence": 0.599,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 32,
+   "t": 165.0,
+   "wall": 1792335892.187,
+   "mono": 358738.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6234,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6234,
+     "m0": "Focused",
+     "m0_confidence": 0.6115,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 33,
+   "t": 170.0,
+   "wall": 1792335897.187,
+   "mono": 358743.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6521,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6521,
+     "m0": "Exhausted",
+     "m0_confidence": 0.4915,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 34,
+   "t": 175.0,
+   "wall": 1792335902.187,
+   "mono": 358748.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.7234,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.7234,
+     "m0": "Focused",
+     "m0_confidence": 0.4763,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  },
+  {
+   "i": 35,
+   "t": 180.0,
+   "wall": 1792335907.187,
+   "mono": 358753.692,
+   "tod_h": 12.0,
+   "block": "slump",
+   "people": [
+    {
+     "person_id": 1,
+     "card": "Focused",
+     "card_display": "Focused",
+     "confidence": 0.6848,
+     "warming_up": false,
+     "mask_override": false,
+     "m2": "Focused",
+     "m2_confidence": 0.6848,
+     "m0": "Focused",
+     "m0_confidence": 0.5725,
+     "map": null,
+     "map_confidence": null,
+     "valence": null,
+     "arousal": null,
+     "cues": false
+    }
+   ]
+  }
+ ]
+}

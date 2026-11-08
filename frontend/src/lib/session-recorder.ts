@@ -15,7 +15,7 @@ export const SESSION_FORMAT = "valence-session/1";
 export const MAX_SESSION_BYTES = 64 * 1024 * 1024;
 
 export interface SessionHeader {
-  session_id: string; started_wall: number; tz: string | null; feature_version: string;
+  session_id: string; started_wall: number; started_mono: number; tz: string | null; feature_version: string;
   emotion_model: string | null; protocol: string | null;
 }
 export interface Stamp { wall: number; mono: number }

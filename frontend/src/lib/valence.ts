@@ -837,7 +837,8 @@ function startBrowser() {
       if (!current() || !pendingSession || mode !== "live") return;
       const { protocol } = pendingSession;
       pendingSession = null;
-      session.start({ session_id: newRecordingId(new Date()), started_wall: Date.now() / 1000, tz: browserTimeZone(),
+      const at = src.stamp();
+      session.start({ session_id: newRecordingId(new Date()), started_wall: at.wall, started_mono: at.mono, tz: browserTimeZone(),
         feature_version: info.featureVersion, emotion_model: info.emotionModel, protocol: protocol ? PROTOCOL_V1.id : null });
       if (protocol) beginProtocol(PROTOCOL_V1);
       notifySession();

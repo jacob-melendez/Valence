@@ -23,8 +23,8 @@ how you feel every 2 minutes (tap honestly; those taps are the second label sour
 Notes:
 - **The order is fixed** so sessions are comparable, and the 8 minutes before the first non-calm block give the
   context model its history (it needs about 10 minutes to read well; that is one of the things this measures).
-- **Do not press Pause or Stop** during the protocol: Start after a pause forgets the people. Use **Abort protocol**
-  instead; the session keeps what was recorded and marks the abort.
+- **Do not press Pause or Stop** during the protocol: either one ends the protocol and the recording (the file keeps
+  what was recorded, with the reason), and Start afterwards forgets the people. To stop early, use **Abort protocol**.
 - **Alone, the card shows Collaborative_Happy as "Upbeat".** The expectation is the state id, not the display text.
 - **Consent.** Record yourself, or people who agreed to it knowing what is kept (section 2). If the recordings become
   research data about other people, check with your institution's review board first.
@@ -40,19 +40,22 @@ connect anywhere but its own origin. Recording is off unless you turn it on (or 
 
 ## 3. File format (`valence-session/1`)
 
-JSON Lines, oldest first. Every line has a `type`. Times: `wall` is Unix seconds (UTC), `mono` is the page's
-monotonic clock in seconds, the clock observation `t` values use. Readers skip line types they do not know.
+JSON Lines, in the order the browser engine took them (oldest first). Every line has a `type`. Times: `wall` is Unix
+seconds (UTC), `mono` is the page's monotonic clock in seconds, the clock observation `t` values use. The benchmark
+skips line types it does not know; `valence/runtime/recording.py iter_obs` (observation replay) skips the four meta
+types below (`session`, `tick`, `marker`, `self_report`) and still rejects anything else.
 
 | `type` | When | Fields |
 |---|---|---|
-| `session` | First line, once | `format` (`"valence-session/1"`), `session_id`, `started_wall`, `tz` (IANA zone of the browser, for the time of day), `feature_version` (served model id), `emotion_model` (id or null), `protocol` (id or null), `app` (`"valence-web"`) |
+| `session` | First line, once | `format` (`"valence-session/1"`), `session_id`, `started_wall` and `started_mono` (the recording's start on both clocks), `tz` (IANA zone of the browser, for the time of day; null if the browser gave none, and the benchmark then fixes the time of day at 12:00 unless `--tz` is passed), `feature_version` (served model id), `emotion_model` (id or null), `protocol` (id or null), `app` (`"valence-web"`) |
 | `video`, `audio` | Each perception observation | Exactly `obs_to_dict` / `obsToDict` (`valence/contracts.py`, `frontend/src/perception/types.ts`) without the optional `raw` debug block. `valence/runtime/recording.py iter_obs` reads these lines and skips the others. |
 | `tick` | Each engine tick (5 s) | `wall`, `mono` (the values the engine stepped with) and `predictions`: one entry per prediction message, `{person_id, label, label_display, confidence, warming_up, mask_override, face_only: {label, confidence}, affect: {label, valence, arousal} or null}` |
-| `marker` | Block boundaries and operator actions | `wall`, `mono`, `kind` (`block_start`, `block_end`, `protocol_start`, `protocol_end`, `protocol_abort`, `control`), and for blocks `block_id`, `label`, `scored` (bool), `calm` (bool), `expect: {card: [...], map: [...]}`; for `control`, `action` (`start`, `pause`, `stop`, `break`, `demo_reset`) |
+| `marker` | Block boundaries and operator actions | `wall`, `mono`, `kind` (`block_start`, `block_end`, `protocol_start`, `protocol_end`, `protocol_abort`, `control`). Blocks add `block_id`, `label`, `scored` (bool), `calm` (bool), `expect: {card: [...], map: [...]}`; `protocol_start`/`protocol_end` add `label` (the protocol id) and `protocol_abort` adds `reason`; `control` adds `action`: `start`, `pause`, `stop`, `break`, `demo_reset`, `room_only_on`/`room_only_off`, `sim_<overlay>_on`/`_off`, `baseline_<seconds>` or `baseline_default`, `baseline_reset` |
 | `self_report` | Each self-report tap | The tap as `selfReportsJsonl` writes it (`t`, `person_id`, `valence`, `arousal`, `feature_version`, `features`, optional `label`) plus `wall` and `mono` |
 
 A legacy recording (`data/real/capture_*.jsonl`: only `video`/`audio` lines) is scored with a manifest that gives the
-whole file one block (`data/real/manifest.json`).
+whole file one block (`data/real/manifest.json`, format `valence-legacy-manifest/1`, a note on each entry); its ticks are
+synthesized every 5 s from the first observation.
 
 ## 4. The benchmark
 
@@ -62,14 +65,21 @@ python -m valence.eval.benchmark --legacy data/real/manifest.json --out reports/
 ```
 
 For each session it replays the observations through the Python runtime (the served model, smoother and mask
-override, exactly what the card shows) at the session's recorded tick times, and computes per block, after a grace
-period (default 60 s) at the block's start:
+override, exactly what the card shows) in file order, stepping at the session's recorded tick times (`--order mono`
+interleaves by the page clock instead, which moves a frame that reached the engine just after a tick into that tick).
+The emotion map is computed beside the runtime from its window, as the browser does. Per block, for the card, the raw
+M2 argmax, the face-only M0 and the emotion map:
 
-- **hit rate**: share of ticks whose label is in the block's `expect` list, for the card, the raw M2 argmax, the
-  face-only M0 and the emotion map;
-- **time to first hit** after the block starts;
-- **label distribution** and majority label;
-- **calm false-alarm rate**: in calm blocks, the share of ticks with a non-Focused card label (non-Calm/Focused map);
-- **self-report agreement** (map valence/arousal against taps) when taps exist;
-- **parity**: the share of ticks where the replayed card label equals the label the browser showed (tick lines),
-  which should be 100% because the browser engine is a parity port.
+- **hit rate**: over the block's ticks after a grace period (default 60 s, `--grace`), the share whose label is in the
+  block's `expect` list. A tick where the person was predicted but that model had no reading (M0 without a face)
+  counts as a miss; ticks where the person was not predicted at all are reported as absent and left out;
+- **time to first hit**: seconds from the block's start to its first expected label, over all of the block's ticks
+  (grace included, so a label carried over from the previous block counts);
+- **label distribution** and majority label (after the grace period);
+- **calm false-alarm rate**: in scored calm blocks, the share of ticks with a reading whose card label is not Focused
+  (map: not Calm or Focused);
+- **self-report agreement**: map valence/arousal MAE against each tap, matched to the latest tick at or before it
+  (the lag is reported), next to a constant (0, 0) guess;
+- **parity**: the share of ticks where the replayed label equals what the browser showed (tick lines), for the card,
+  M0 and the map, with the largest confidence and valence/arousal differences. In file order it should be 100% with
+  differences of 0, because the browser engine is a parity port (verified on a real headless-Chromium recording).

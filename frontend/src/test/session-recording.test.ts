@@ -29,7 +29,7 @@ const prediction = (label = "Focused"): PredictionMsg => ({
   layers: [], data_quality: {} as PredictionMsg["data_quality"], explanation: { text: "", source: "template" }, source: "live",
   simulated_fields: [], affect: { valence: 0.1, arousal: -0.2, label: "Calm", label_display: "Calm", confidence: 0.5, probabilities: {}, model: "emotion-v1@x" },
 });
-const HEADER = { session_id: "vs-2026-11-08-abcd", started_wall: 1_800_000_000, tz: "America/Los_Angeles",
+const HEADER = { session_id: "vs-2026-11-08-abcd", started_wall: 1_800_000_000, started_mono: 12.5, tz: "America/Los_Angeles",
   feature_version: "m2_lgbm@x", emotion_model: "emotion-v1@x", protocol: PROTOCOL_V1.id };
 
 describe("session recorder (valence-session/1)", () => {

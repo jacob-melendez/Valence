@@ -5,6 +5,10 @@ Two ways to use a recording:
   ``speed``): the demo fallback when the camera or mic fails on stage, tagged ``source="replay"``.
 * ``replay_offline`` drives the runtime deterministically without threads (tick boundaries come from
   the observation timestamps): used for the negative-control check and acted-set scoring.
+
+A recorded browser session (``valence-session/1``, docs/PROTOCOL.md) is an observation recording with extra line
+types (header, ticks, markers, self-report taps); ``iter_obs`` skips those, so it replays the same way.
+``valence.eval.benchmark`` reads the extra lines.
 """
 
 from __future__ import annotations
@@ -19,6 +23,9 @@ from typing import Callable, Iterator
 from valence.contracts import Obs, obs_from_dict
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "data" / "real"
+# The non-observation lines of a recorded session (``valence-session/1``, docs/PROTOCOL.md section 3): skipped here,
+# so a session file replays wherever an observation recording does. Any other unknown type still raises.
+SESSION_META_TYPES = frozenset({"session", "tick", "marker", "self_report"})
 
 
 def iter_obs(path: str | Path) -> Iterator[Obs]:
@@ -26,7 +33,10 @@ def iter_obs(path: str | Path) -> Iterator[Obs]:
         for line in f:
             line = line.strip()
             if line:
-                yield obs_from_dict(json.loads(line))
+                d = json.loads(line)
+                if d.get("type") in SESSION_META_TYPES:
+                    continue
+                yield obs_from_dict(d)
 
 
 def list_recordings(directory: Path = RECORDINGS) -> list[dict]:
@@ -93,4 +103,4 @@ def replay_offline(runtime, path: str | Path, tick_s: float = 5.0) -> list[dict]
     return emitted
 
 
-__all__ = ["iter_obs", "list_recordings", "JsonlFeeder", "replay_offline", "restamp", "time"]
+__all__ = ["iter_obs", "list_recordings", "JsonlFeeder", "replay_offline", "restamp", "SESSION_META_TYPES", "time"]

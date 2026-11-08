@@ -1,0 +1,71 @@
+{
+ "format": "valence-legacy-manifest/1",
+ "note": "The Mac captures of Oct 17-18 (one person, one desk; capture_summary_run1.json, _run2.json, _run3_audio.json; docs/MODEL_CARD.md section 5), each scored as one block over the whole file by python -m valence.eval.benchmark --legacy. Which run each file is from follows from its frame and audio-block counts and its first frames_decoded value. They were recorded before the emotion-v1 face cues existed, so the emotion map is not read on them. Expectations use the protocol's card and map lists for the matching behaviour (docs/PROTOCOL.md section 1). Every file is short (15 s to 3 min) against the 10 minutes of history the context model wants, and the room baseline is the file's own first 90 s, so these are a floor, not the protocol benchmark. Paths are relative to this manifest.",
+ "tz": null,
+ "tz_note": "No zone was recorded, so the time of day is fixed at 12:00 (as valence.eval.emotion_capture and MODEL_CARD 9.6). The wall clocks fit America/Los_Angeles (PDT): run 1's captures start 15:59-16:17 local and its summary is stamped 16:21, run 2's 07:58-08:02 against 08:06, run 3's 08:21-08:24 against 08:25. Pass --tz America/Los_Angeles to use it; the time-of-day features are model inputs.",
+ "captures": [
+  {
+   "file": "capture_baseline.jsonl",
+   "id": "baseline",
+   "label": "Baseline (sitting neutral)",
+   "scored": true,
+   "calm": true,
+   "expect": {"card": ["Focused"], "map": ["Focused", "Calm"]},
+   "note": "Run 3, 25 s sitting neutral in a quiet room (face visible 100%, no fists or slump). A calm block: the card should read Focused. It is shorter than the 60 s grace, so it has no scored ticks at the default grace."
+  },
+  {
+   "file": "capture_typing.jsonl",
+   "id": "typing",
+   "label": "Quiet typing",
+   "scored": true,
+   "calm": true,
+   "expect": {"card": ["Focused"], "map": ["Focused", "Calm"]},
+   "note": "Run 1, 3 min of quiet typing (0 fist onsets, 0% slump, face visible 100%): the negative-control capture (valence.eval.negative_control). A calm block, expected Focused. In-sample: the simulator was refit to run 1."
+  },
+  {
+   "file": "capture_keyboard_gaze.jsonl",
+   "id": "keyboard_gaze",
+   "label": "Typing, looking down at the keyboard",
+   "scored": true,
+   "calm": true,
+   "expect": {"card": ["Focused"], "map": ["Focused", "Calm"]},
+   "note": "Run 2, 3 min of typing while looking down at the keyboard (slump 0% under the fixed rule, face visible 100%). Looking down at the keyboard must not read as slumped or Exhausted, so this is a calm block expected Focused; any Exhausted tick is a false alarm. Not in the simulator's refit data."
+  },
+  {
+   "file": "capture_fists.jsonl",
+   "id": "fists",
+   "label": "Cued fist clenches (restless)",
+   "scored": true,
+   "calm": false,
+   "expect": {"card": ["Frustrated_Masked"], "map": ["Frustrated_Masked", "Tense", "Anxious", "Overwhelmed"]},
+   "note": "Run 1, 3 min of cued fist clenches (28 onsets, 9.3/min, recall 1.0) in a quiet room with a fresh break clock, otherwise still with a neutral face: the protocol's restless block, expected Frustrated_Masked. MODEL_CARD section 5 already reports Focused on 24/25 ticks: fists alone are not enough for M2, so expect a low hit rate."
+  },
+  {
+   "file": "capture_slump.jsonl",
+   "id": "slump",
+   "label": "Cued slumps",
+   "scored": true,
+   "calm": false,
+   "expect": {"card": ["Exhausted"], "map": ["Exhausted", "Bored"]},
+   "note": "Run 2, 3 min of cued 20 s slumps with upright gaps (slump duty 45%, face visible 55%): the protocol's tired block, expected Exhausted. Intermittent cued slumping in a fresh 3-minute window is a weak version of exhaustion (no break-clock pressure), and a held slump reads restless live (MODEL_CARD section 7), so expect a low hit rate."
+  },
+  {
+   "file": "capture_covered.jsonl",
+   "id": "covered",
+   "label": "Camera covered",
+   "scored": false,
+   "calm": false,
+   "expect": {"card": [], "map": []},
+   "note": "Run 1, 15 s with the camera covered (lux about 37, no person tracked in any frame). There is no right label to hit: with nobody in frame the runtime makes no person prediction, which the report shows as absent ticks. Unscored; kept as the check that nothing is predicted for a hidden face."
+  },
+  {
+   "file": "capture_audio.jsonl",
+   "id": "audio",
+   "label": "Laughter and compliments",
+   "scored": true,
+   "calm": false,
+   "expect": {"card": ["Collaborative_Happy"], "map": ["Collaborative_Happy"]},
+   "note": "Run 3, 45 s of talking, laughing and complimenting at the desk (2 laughter onsets, 3 compliments, one laugh tick with face valence 0.98): the protocol's upbeat block, expected Collaborative_Happy (shown as Upbeat for one person). Shorter than the 60 s grace, so no scored ticks at the default grace."
+  }
+ ]
+}

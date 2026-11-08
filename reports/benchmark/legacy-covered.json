@@ -1,0 +1,167 @@
+{
+ "session_id": "legacy-covered",
+ "file": "data/real/capture_covered.jsonl",
+ "kind": "legacy",
+ "note": "Run 1, 15 s with the camera covered (lux about 37, no person tracked in any frame). There is no right label to hit: with nobody in frame the runtime makes no person prediction, which the report shows as absent ticks. Unscored; kept as the check that nothing is predicted for a hidden face.",
+ "header": null,
+ "started_utc": "2026-10-17 23:17:14",
+ "replay": {
+  "served_model": "m2_lgbm@8a78efc7",
+  "emotion_model": "emotion-v1@006a8d7d",
+  "order": "mono",
+  "time_of_day": "fixed at 12:00",
+  "ticks": "synthesized every 5 s from the first observation",
+  "controls": []
+ },
+ "scoring": {
+  "person": 1,
+  "grace_s": 60.0,
+  "map": "nobody was predicted, so the map was not read"
+ },
+ "counts": {
+  "observations": 166,
+  "ticks": 3,
+  "markers": 2,
+  "taps": 0,
+  "late_observations": 0,
+  "duration_s": 15.0
+ },
+ "warnings": [],
+ "blocks": [
+  {
+   "id": "covered",
+   "label": "Camera covered",
+   "scored": false,
+   "calm": false,
+   "expect": {
+    "card": [],
+    "map": []
+   },
+   "start_mono": 314563.62,
+   "end_mono": 314578.62,
+   "start_wall": 1792279034.63,
+   "duration_s": 15.0,
+   "ended_by": "block_end",
+   "ticks_in_block": 3,
+   "absent_in_block": 3,
+   "ticks_scored": 0,
+   "absent": 0,
+   "models": {
+    "card": {
+     "ticks": 0,
+     "read": 0,
+     "hits": null,
+     "hit_rate": null,
+     "first_hit_s": null,
+     "labels": {},
+     "majority": null,
+     "majority_share": null
+    },
+    "m2": {
+     "ticks": 0,
+     "read": 0,
+     "hits": null,
+     "hit_rate": null,
+     "first_hit_s": null,
+     "labels": {},
+     "majority": null,
+     "majority_share": null
+    },
+    "m0": {
+     "ticks": 0,
+     "read": 0,
+     "hits": null,
+     "hit_rate": null,
+     "first_hit_s": null,
+     "labels": {},
+     "majority": null,
+     "majority_share": null
+    },
+    "map": {
+     "ticks": 0,
+     "read": 0,
+     "hits": null,
+     "hit_rate": null,
+     "first_hit_s": null,
+     "labels": {},
+     "majority": null,
+     "majority_share": null
+    }
+   }
+  }
+ ],
+ "session": {
+  "mean_hit_rate": {
+   "card": {
+    "blocks": 0,
+    "mean": null
+   },
+   "m2": {
+    "blocks": 0,
+    "mean": null
+   },
+   "m0": {
+    "blocks": 0,
+    "mean": null
+   },
+   "map": {
+    "blocks": 0,
+    "mean": null
+   }
+  },
+  "calm_false_alarm": {
+   "blocks": [],
+   "card": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "m2": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "m0": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   },
+   "map": {
+    "ticks": 0,
+    "alarms": 0,
+    "rate": null
+   }
+  },
+  "self_report": null,
+  "parity": null
+ },
+ "ticks": [
+  {
+   "i": 0,
+   "t": 5.0,
+   "wall": 1792279039.63,
+   "mono": 314568.62,
+   "tod_h": 12.0,
+   "block": "covered",
+   "people": []
+  },
+  {
+   "i": 1,
+   "t": 10.0,
+   "wall": 1792279044.63,
+   "mono": 314573.62,
+   "tod_h": 12.0,
+   "block": "covered",
+   "people": []
+  },
+  {
+   "i": 2,
+   "t": 15.0,
+   "wall": 1792279049.63,
+   "mono": 314578.62,
+   "tod_h": 12.0,
+   "block": "covered",
+   "people": []
+  }
+ ]
+}
