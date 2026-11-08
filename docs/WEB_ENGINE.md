@@ -13,26 +13,26 @@ Valence Web runs the whole Valence pipeline in a web page:
 9. the emotion-v1 map.
 
 Frames and audio are processed in memory and dropped, and the deployed page's CSP (`connect-src 'self'`) forbids
-the page from sending data to any other origin. Built during Hack OHI/O 2026. The work log is `docs/HACKOHIO_LOG.md`.
+the page from sending data to any other origin.
 
 | Link | What it does |
 |---|---|
 | `/?source=browser` | Live: the camera and microphone run through the full engine in the page. |
-| `/?demo=tour` | No camera: Cloud B's scripted, simulated 50-minute walk through the 10 states, replayed through the same engine at 10× speed. |
-| `/?source=browser&perception=mock` | No camera: Cloud C's deterministic mock perception, for testing. |
+| `/?demo=tour` | No camera: a scripted, simulated 50-minute walk through the 10 states, replayed through the same engine at 10× speed. |
+| `/?source=browser&perception=mock` | No camera: a deterministic mock perception, for testing. |
 
 ## How it is put together
 
 ```
 getUserMedia (camera 16:9, raw mic)                    lib/browser-source.ts   (one stream, shared with the preview)
-  -> perception (MediaPipe Tasks Web in a Worker)       perception/**           (Cloud C; PersonObs/VideoObs/AudioObs)
+  -> perception (MediaPipe Tasks Web in a Worker)       perception/**           (PersonObs/VideoObs/AudioObs)
   -> Runtime.pushObs -> Aggregator (5 s TickRecords)    engine/runtime.ts, aggregator.ts
   -> RollingWindow -> 123 features (+ 31 emotion-v1)    engine/window.ts, features.ts, emotion-features.ts
   -> ServedPredictor: clip, M2 + M0, T-softmax, OOD,    engine/served.ts, lgbm.ts, treeshap.ts, smoother.ts
      TreeSHAP layers, mask override, smoother
   -> describe / explainer / template text               engine/describe.ts, explainer.ts, template.ts
   -> audit chain (SHA-256, Python json.dumps)           engine/audit.ts, sha.ts
-  -> emotion map: 10-state model, map position          engine/emotion-model.ts (Cloud B's export)
+  -> emotion map: 10-state model, map position          engine/emotion-model.ts (models from artifacts/emotion)
   -> governance / state_vector / prediction messages    engine/browser-engine.ts -> lib/valence.ts store -> panels
 ```
 
@@ -43,7 +43,7 @@ getUserMedia (camera 16:9, raw mic)                    lib/browser-source.ts   (
   video backend, CSP seal, loading, audit chain) and some browser-only panel content: the welcome card, the audit-chain
   line with **Download audit log**, a governance note, and no Transcripts tile.
 - **Models.** The model files are served at `/models/` straight from `artifacts/` (`scripts/model-files.mjs`).
-  MediaPipe's WASM and models are self-hosted at `/mediapipe/` (Cloud C's prebuild).
+  MediaPipe's WASM and models are self-hosted at `/mediapipe/` (the prebuild step).
 
 ## Parity with the Python engine
 
@@ -63,7 +63,7 @@ The figures below are the largest absolute error against Python, from the vitest
 | Audit chain | 0 | 191 entries: identical JSON blobs and hashes |
 | Runtime messages | 0 | 2,964 messages over 996 ticks |
 | Emotion-v1 features | 0 | 1,454 checkpoints and a 2,196-window fuzz |
-| Emotion model | raw 0, p 1.1e-16 | through both of Cloud B's model formats |
+| Emotion model | raw 0, p 1.1e-16 | through both exported model formats |
 | Emotion tour, end to end | 1e-9 | 600 ticks: labels identical on 600/600 |
 
 **Speed (node, this container).** M2 plus SHAP takes 6.1 ms per vector. A 3-person tick averages 26 ms (p95 43 ms)
@@ -105,10 +105,10 @@ Checked on a 40-tick export from the TypeScript engine:
 
 - **Last-bit math.** V8's `Math.sin/cos/log2/log10/pow/exp` can differ from glibc and from numpy's SIMD kernels in
   the last bit. This is visible only at ulp level and changes no label in any fixture.
-- **Perception is not the Python edge.** Pose comes from BlazePose, not YOLO, so Cloud C smooths the keypoints and
+- **Perception is not the Python edge.** Pose comes from BlazePose, not YOLO, so perception smooths the keypoints and
   computes motion from the shoulders only. Lux comes from the camera's auto-exposed luma. Six served lux features
   depend on absolute lux scale, which an uncalibrated camera does not give.
 - **No speech recognition.** The browser has no speech recognizer, so the compliments count stays 0. The narration
   is always the template; the LLM narrator stays desktop-only.
 - **Simulated training data.** The models are trained on simulated sessions. Real-camera checks are listed in
-  `frontend/e2e/REAL_CAMERA.md` (Cloud C).
+  `frontend/e2e/REAL_CAMERA.md`.

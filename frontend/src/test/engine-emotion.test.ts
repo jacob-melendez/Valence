@@ -1,8 +1,8 @@
 /**
- * emotion-features.ts + emotion-model.ts against Cloud B's Python emotion map.
+ * emotion-features.ts + emotion-model.ts against the Python emotion map.
  *
  * Two sources of golden values:
- * - artifacts/emotion/golden.json (scripts/emotion_export.py, Cloud B): tick-channel windows with the 31
+ * - artifacts/emotion/golden.json (scripts/emotion_export.py): tick-channel windows with the 31
  *   compute_emotion features, and 23 model inputs with LightGBM's raw scores, the temperature softmax, the map
  *   position (valence_mix / arousal_mix) and the regressors.
  * - emotion.json.gz (scripts/export_web_golden_emotion.py): simulator sessions of the ten-state set with
@@ -280,7 +280,7 @@ describe("emotion-v1 window features (emotion-features.ts)", () => {
     expect(meta.input_features).toEqual([...(FEATURE_SETS["m2"] ?? []), ...EMOTION_FEATURE_NAMES]);
   });
 
-  it("golden.json windows (Cloud B)", () => {
+  it("golden.json windows (Python reference)", () => {
     const tol = Math.min(golden.tolerance.features, TARGET);
     expect(golden.windows.length).toBeGreaterThan(0);
     let worst = 0;

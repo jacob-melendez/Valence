@@ -13,7 +13,7 @@
  * One exception, by design (num.ts): when the last 12 brow_down values mix 0.0 and -0.0 and nothing larger,
  * brow_max_1m is +0.0 here while numpy's SIMD fmax may return -0.0. The models cannot tell the two apart
  * (lgbm.ts predictorRow reads both as 0.0).
- * Golden values: artifacts/emotion/golden.json -> windows (Cloud B) and
+ * Golden values: artifacts/emotion/golden.json -> windows (Python reference) and
  * scripts/export_web_golden_emotion.py -> src/test/fixtures/engine/emotion.json.gz.
  */
 import type { TickRecord } from "./contracts";

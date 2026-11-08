@@ -73,8 +73,8 @@ The tour needs a browser with `DecompressionStream` to unpack the gzipped models
 Firefox 113+, Safari 16.4+ (iOS 16.4, March 2023). Camera mode runs MediaPipe in a Web Worker where the browser has module
 workers and WebGL on an OffscreenCanvas (Chrome/Edge, Firefox 114+, Safari 17+). Elsewhere it runs on the page's main
 thread (Safari 16.4–16.x, Firefox < 114: `video_backend` reads `main/CPU`, and the UI is slower). Details are in
-`docs/hackohio/status-C.md`. The cloud tests run Chromium only, so check an
-iPhone by hand after deploying (`docs/HACKOHIO_FINISH.md` step 2).
+`frontend/src/perception/README.md`. The automated tests run Chromium only, so check an iPhone by hand after
+deploying (`frontend/e2e/REAL_CAMERA.md`).
 
 ## Verifying the privacy claim on the live site
 

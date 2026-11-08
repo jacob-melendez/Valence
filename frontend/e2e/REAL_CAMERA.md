@@ -1,7 +1,7 @@
 # Real-camera check after deploy (Mac or phone, ~15 minutes)
 
 The cloud tests use a fake camera playing a portrait. This list checks the browser perception on a real camera and
-microphone. Write down the numbers in **bold** and send them back (or paste them into `docs/hackohio/status-C.md`).
+microphone. Write down the numbers in **bold** and send them back (or add them to `frontend/src/perception/README.md`).
 
 In the browser's DevTools console, `__valencePerception.status()` (fps, time to first observation, where the models
 run, warnings), `__valencePerception.counters()` (governance) and `__valencePerception.last()` (the latest video and

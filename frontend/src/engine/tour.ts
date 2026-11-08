@@ -1,5 +1,5 @@
 /**
- * Cloud B's emotion tour (artifacts/emotion/tour.json.gz): a scripted, simulated 50-minute walk through the ten
+ * The emotion tour (artifacts/emotion/tour.json.gz): a scripted, simulated 50-minute walk through the ten
  * emotion-map states (5 minutes each), as TickRecords per tick plus Python's per-tick outputs and the scripted
  * truth. The console replays it through the engine for a camera-free demo (?demo=tour); the tests use the
  * Python outputs for end-to-end parity.

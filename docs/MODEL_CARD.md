@@ -402,9 +402,9 @@ nothing about the thesis.
    reading any label. `VALENCE_ARTIFACTS_DIR=artifacts/legacy` rolls back to the previous model (`85874e97`), which
    reads absolute levels and drifts toward negative states in a loud hall (§5 venue shift).
 
-## 9. Emotion map (Hack OHI/O)
+## 9. Emotion map
 
-> Added during Hack OHI/O (Oct 24–25, 2026). **Every number in this section comes from simulated data**, generated
+> Added in October 2026. **Every number in this section comes from simulated data**, generated
 > under the assumptions in [EMOTION_FEATURES.md](EMOTION_FEATURES.md) §7 and [DATASET.md](DATASET.md). The
 > valence–arousal anchors are assumptions, not measurements. No real labeled data has been evaluated yet (§9.6).
 > The served desktop models above (M2/M0, `artifacts/`, `artifacts/all/`) are unchanged.
@@ -427,7 +427,7 @@ This section is generated from them by `python scripts/emotion_card.py`. Regener
 | Training data | Simulator, state set `emotion`: 600 sessions (seed 11), 169,171 windows (random 1–180 tick history, every 6 ticks); session split 70 / 7.5 / 7.5 / 15 (train / early stop / calibration / test = 117,672 / 12,206 / 14,745 / 24,548 windows; 90 test sessions) |
 | Modality dropout | as M2: +30% training copies with the whole face block hidden, +20% degraded (face valence ± 0.25, cues ± 0.08, pose ± 6°, blink rate × U(0.5, 1.5), visible share × U(0.3, 0.8)) |
 | Size | `classifier.json.gz` 2.79 MB, `valence.json.gz` 0.57 MB, `arousal.json.gz` 0.63 MB (gzipped `dump_model()` JSON); the `.txt.gz` files are the same models in LightGBM's text format, which Python loads and the web engine reads first (the JSON dumps are its fallback) |
-| Parity | `golden.json`: 23 input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; 11 feature windows (3 of them missing-data edge cases); 387 face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (Cloud A, `frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |
+| Parity | `golden.json`: 23 input vectors with Python's raw scores, probabilities, both V/A outputs and `pred_contrib`; 11 feature windows (3 of them missing-data edge cases); 387 face-cue frames (blink edge cases included). `valence/models/emotion_json.py` reproduces LightGBM's raw scores from the JSON alone, exactly, including NaN, ±inf, huge and near-zero inputs (`tests/test_emotion_models.py`). The web engine's port (`frontend/src/engine/emotion-model.ts`, fixture on this build) reproduces raw scores and regressor outputs bit for bit, probabilities within 3 ulp and the map position within 4e-16, and replays the 600-tick tour end to end within 1e-9 with identical labels |
 
 **States and anchors** (class order; anchors from the plan's circumplex, **assumptions**):
 
@@ -587,7 +587,7 @@ cues are.
   mean tap, per person and for taps with a warm window; duplicate taps from repeated downloads are skipped.
   **Status: no real taps yet**; the evaluator has only run on a synthetic simulator fixture
   (`tests/test_emotion_models.py`), whose numbers say nothing about people.
-- **Existing real captures** (one person, one desk, recorded before the event, so **without the new face cues**:
+- **Existing real captures** (one person, one desk, recorded on Oct 17–18 before the face cues existed, so **without them**:
   the 31 cue features are NaN, blink rates included, and the model runs on context + face valence;
   `python -m valence.eval.emotion_capture`, `real_captures.json`). Time of day is fixed at 12:00: recordings carry
   no time zone, and the time features are model inputs, so another hour would move these readings somewhat.
@@ -604,7 +604,7 @@ cues are.
 
   As a negative control, quiet typing reads a negative, high-arousal state on 0% of ticks (gate ≤ 20%), but
   this is in-sample for the simulator's refit and says nothing about the four new states or the cues themselves.
-- **Real browser cues** (`data/browser/*.jsonl` from Cloud C: the real in-browser perception on two CC BY 4.0
+- **Real browser cues** (`data/browser/*.jsonl`: the real in-browser perception on two CC BY 4.0
   clips of standing people turning and nodding with a mostly neutral expression, about 6.9 face passes/s;
   `browser_captures.json`). Per-tick cue medians against simulated Focused (p10–p90; median tick-to-tick step):
 
@@ -626,7 +626,7 @@ cues are.
   Blinks at this face rate: 22 and 20 in 132 s, about 9–10 per minute (`data/browser/README.md`).
 
 - **Public dataset** (stretch): **none evaluated.** DAiSEE releases its clips only after a request form (and its host
-  is not reachable from the event's cloud sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,
+  is not reachable from the cloud build sessions). RAVDESS (acted calm, happy, sad, angry, fearful… clips,
   CC BY-NC-SA 4.0, no form) would test the direction of the face cues per emotion, but its hosts (zenodo.org,
   huggingface.co) are denied by the cloud environment's network policy. Either would need in-memory processing:
   this track does not write raw video to disk.

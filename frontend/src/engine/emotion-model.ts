@@ -1,5 +1,5 @@
 /**
- * Emotion-map inference for the browser engine: Cloud B's 10-state LightGBM classifier and the valence /
+ * Emotion-map inference for the browser engine: the 10-state LightGBM classifier and the valence /
  * arousal regressors (valence/models/emotion.py EmotionPredictor; spec: docs/EMOTION_FEATURES.md section 5).
  *
  * The models are read from /models/emotion/ (frontend/scripts/model-files.mjs serves artifacts/emotion/
@@ -19,7 +19,7 @@
  * within 3 ulp. Python's `p @ anchors` runs through OpenBLAS and is not even self-consistent (one row vs a
  * batch gives different bits for ~half the values), so the map position (numpy's pairwise order here) has
  * no single bit target; it stays within 4e-16. Tests target <= 1e-9.
- * Golden values: artifacts/emotion/golden.json (Cloud B) and scripts/export_web_golden_emotion.py ->
+ * Golden values: artifacts/emotion/golden.json (Python reference) and scripts/export_web_golden_emotion.py ->
  * src/test/fixtures/engine/emotion.json.gz.
  */
 import type { Affect, TickRecord } from "./contracts";
